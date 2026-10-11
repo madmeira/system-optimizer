@@ -131,9 +131,11 @@ else
 
   gpu_info="None detected"
   if command -v lspci >/dev/null 2>&1; then
-    gpu_info=$(lspci | grep -Ei "vga|3d|display" | sed 's/.*: //' | tr '\n' '; ' | sed 's/; $//')
+    gpu_info=$(lspci 2>/dev/null | grep -Ei "vga|3d|display" | sed 's/.*: //' | tr '\n' '; ' | sed 's/; $//' || true)
+    [[ -z "$gpu_info" ]] && gpu_info="None detected"
   elif command -v fastfetch >/dev/null 2>&1; then
-    gpu_info=$(fastfetch --pipe 2>/dev/null | grep "GPU:" | sed 's/GPU:[ \t]*//' || echo "Unknown GPU")
+    gpu_info=$(fastfetch --pipe 2>/dev/null | grep "GPU:" | sed 's/GPU:[ \t]*//' || true)
+    [[ -z "$gpu_info" ]] && gpu_info="None detected"
   fi
 
   root_device=$(df --output=source / 2>/dev/null | tail -1 || echo "")
@@ -162,7 +164,7 @@ else
 
   os_name="Unknown Linux"
   if [[ -f /etc/os-release ]]; then
-    os_name=$(grep -E "^PRETTY_NAME=" /etc/os-release | cut -d= -f2 | tr -d '"')
+    os_name=$(grep -E "^PRETTY_NAME=" /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "Linux")
   fi
   kernel=$(uname -r)
 fi

@@ -33,3 +33,4 @@ jobs:
           ./scripts/hardware-probe.sh --json
           ./scripts/system-probe.sh --json
           ./scripts/detect-targets.sh --json
+          ./scripts/security-audit.sh --json
