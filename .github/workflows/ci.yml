@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    name: Validate Scripts & Schema
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate Bash Script Syntax
+        shell: bash
+        run: |
+          for script in scripts/*.sh; do
+            echo "Checking syntax: $script"
+            bash -n "$script"
+          done
+
+      - name: Test Hardware & Target Probes (Dry-run / JSON output)
+        shell: bash
+        run: |
+          ./scripts/hardware-probe.sh --json
+          ./scripts/system-probe.sh --json
+          ./scripts/detect-targets.sh --json

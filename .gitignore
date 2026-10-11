@@ -1,0 +1,11 @@
+# .gitignore for system-optimizer skill
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+*.tmp
+*.bak
+*.log
+.vscode/
+.idea/
