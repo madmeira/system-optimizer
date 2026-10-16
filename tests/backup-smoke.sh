@@ -36,7 +36,9 @@ else
   ok "backup store is private (700) and .meta is 600"
 fi
 
-bash "$BACKUP" --list smoke | grep -qF "$bak" || fail "--list does not show the backup"
+# capture first: "cmd | grep -q" can end in SIGPIPE (status 141) under pipefail, e.g. on Git Bash
+list_out="$(bash "$BACKUP" --list smoke)"
+grep -qF -- "$bak" <<< "$list_out" || { printf '%s\n' "$list_out" >&2; fail "--list does not show the backup"; }
 ok "--list shows the backup"
 
 printf 'changed\n' > "$cfg"

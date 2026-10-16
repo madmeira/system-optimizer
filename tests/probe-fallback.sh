@@ -83,7 +83,8 @@ run_probe system-probe.sh --json > "$WORK/sys.json"
 run_probe system-probe.sh > "$WORK/sys.txt"
 if grep -qE 'Windows 11|Balanced|C: \(NTFS\)|Enabled|\(None\)' "$WORK/sys.txt"; then fail "system-probe text still shows invented defaults"; fi
 for label in 'Power Scheme' 'SSD TRIM Status' 'NTFS 8.3 Name Creation' 'Memory Compression' 'Fast Startup'; do
-  grep -F -- "$label" "$WORK/sys.txt" | grep -q 'unknown' || fail "system-probe '$label' is not unknown"
+  line="$(grep -F -- "$label" "$WORK/sys.txt" || true)"
+  grep -q 'unknown' <<< "$line" || fail "system-probe '$label' is not unknown"
 done
 ok "system-probe reports unknown and valid JSON when PowerShell fails"
 
@@ -102,7 +103,8 @@ ok "null Defender/UAC values stay unknown, not true"
 
 run_probe security-audit.sh > "$WORK/sec2.txt"
 grep -q 'Audit mode' "$WORK/sec2.txt" || fail "PUA value 2 is not labelled Audit mode"
-if grep -E 'PUA\) Protection' "$WORK/sec2.txt" | grep -q 'Disabled'; then fail "PUA audit mode is labelled Disabled"; fi
+pua_line="$(grep -E 'PUA\) Protection' "$WORK/sec2.txt" || true)"
+if grep -q 'Disabled' <<< "$pua_line"; then fail "PUA audit mode is labelled Disabled"; fi
 ok "PUA value 2 is labelled Audit mode"
 
 # ---- case 3: several GPUs are joined with "; " and no trailing separator (Linux branch only)
