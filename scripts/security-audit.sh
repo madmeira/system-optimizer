@@ -60,12 +60,20 @@ if is_windows; then
   fi
 
   # Winget Security Check: the policy names in "winget --info" are not translated, so the state is read
-  # from the last word of the line; a missing line or an unknown word is "unknown", never "secure".
+  # from the last word of the line; a missing line or a word that is not recognized is "unknown", never "secure".
   winget_sec_ok="unknown"
   winget_details=""
   if command -v winget >/dev/null 2>&1; then
     winget_info=$(winget --info 2>/dev/null | tr -d '\r' || true)
-    winget_state() { printf '%s\n' "$winget_info" | awk -v k="$1" '$1 == k { print $NF; exit }'; }
+    winget_state() {  # prints Enabled, Disabled or unknown (also for the common translations of the two words)
+      local v
+      v=$(printf '%s\n' "$winget_info" | awk -v k="$1" '$1 == k { print $NF; exit }')
+      case "${v,,}" in
+        enabled|habilitad[oa]|activad[oa]|activé|aktiviert) echo Enabled ;;
+        disabled|desabilitad[oa]|deshabilitad[oa]|desactivad[oa]|désactivé|deaktiviert) echo Disabled ;;
+        *) echo unknown ;;
+      esac
+    }
     hash_state=$(winget_state InstallerHashOverride)
     scan_state=$(winget_state LocalArchiveMalwareScanOverride)
     if [[ "$hash_state" == "Enabled" ]]; then

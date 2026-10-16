@@ -155,9 +155,17 @@ case "$target" in
     if is_windows; then
       echo "Mounted Volumes & Free Space:"
       run_ps 'Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object { "  * Drive $($_.DriveLetter): [$($_.FileSystem)] $([math]::Round($_.SizeRemaining/1GB, 1)) GB free of $([math]::Round($_.Size/1GB, 1)) GB" }' 2>/dev/null || true
-      trim_status=$(fsutil.exe behavior query DisableDeleteNotify 2>&1 | grep -i "NTFS" || echo "unknown")
+      # fsutil prints translated text in the OEM code page (bytes that are not valid UTF-8), so only the
+      # number after "=" is read (LC_ALL=C: "." must match any byte) and the explanation is written here.
+      trim_val=$(fsutil.exe behavior query DisableDeleteNotify 2>&1 | LC_ALL=C grep -a -i "NTFS" | LC_ALL=C sed -nE 's/.*=[[:space:]]*([0-9]+).*/\1/p' | head -n 1 || true)
+      case "$trim_val" in
+        0) trim_status="NTFS DisableDeleteNotify = 0  (TRIM operations are sent to the storage device)" ;;
+        1) trim_status="NTFS DisableDeleteNotify = 1  (TRIM is disabled)" ;;
+        *) trim_status="unknown" ;;
+      esac
       echo "SSD TRIM Status: $trim_status"
-      sn_status=$(fsutil.exe 8dot3name query 2>&1 | head -n 1 || echo "unknown")
+      sn_status=$(run_ps 'switch ((Get-ItemPropertyValue -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name NtfsDisable8dot3NameCreation)) { 0 { "Enabled on all volumes" } 1 { "Disabled on all volumes" } 2 { "Per volume setting (the default)" } 3 { "Disabled, except on the system volume" } default { "unknown" } }' 2>/dev/null || true)
+      sn_status="${sn_status:-unknown}"
       echo "NTFS 8.3 Short Name Creation: $sn_status"
       echo "Triad Checkpoints (Performance, Configuration, Security):"
       echo "  * Performance: NVMe/SSD TRIM enabled (DisableDeleteNotify=0), weekly Optimize-Volume -ReTrim"

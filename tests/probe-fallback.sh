@@ -257,13 +257,33 @@ winget() { printf 'InstallerHashOverride                     Enabled\r\nLocalArc
 export -f winget
 run_probe security-audit.sh > "$WORK/wg3.txt"
 grep -q 'WARNING.*InstallerHashOverride is Enabled' "$WORK/wg3.txt" || fail "an enabled hash override is not a warning"
-winget() { printf 'InstallerHashOverride                     Habilitado\r\nLocalArchiveMalwareScanOverride           Habilitado\r\n'; }
+winget() { printf 'InstallerHashOverride                     Desabilitado\r\nLocalArchiveMalwareScanOverride           Desabilitado\r\n'; }
 export -f winget
 run_probe security-audit.sh > "$WORK/wg4.txt"
-if grep -q 'Integrity Checks: Enforced' "$WORK/wg4.txt"; then fail "untranslatable winget values are reported as Enforced"; fi
+grep -q 'Integrity Checks: Enforced' "$WORK/wg4.txt" || fail "pt-BR 'Desabilitado' on both policies should be Enforced"
+winget() { printf 'InstallerHashOverride                     Habilitado\r\nLocalArchiveMalwareScanOverride           Desabilitado\r\n'; }
+export -f winget
+run_probe security-audit.sh > "$WORK/wg5.txt"
+grep -q 'WARNING.*InstallerHashOverride is Enabled' "$WORK/wg5.txt" || fail "pt-BR 'Habilitado' is not a warning"
+winget() { printf 'InstallerHashOverride                     Zzz\r\nLocalArchiveMalwareScanOverride           Zzz\r\n'; }
+export -f winget
+run_probe security-audit.sh > "$WORK/wg6.txt"
+if grep -q 'Integrity Checks: Enforced' "$WORK/wg6.txt"; then fail "an unrecognized word is reported as Enforced"; fi
 unset -f winget
 unset PS_STUB_OUT
 ok "winget integrity needs both policy lines: missing or unreadable is unknown, enabled is a warning"
+
+# storage on a pt-BR host: fsutil prints OEM code page bytes (not valid UTF-8) and translated words
+fsutil.exe() { printf 'NTFS DisableDeleteNotify = 0  (Permite opera\207\344es TRIM)\r\nReFS DisableDeleteNotify = 0\r\n'; }
+export -f fsutil.exe
+export PS_STUB_OUT=$'Per volume setting (the default)\r\n'
+LC_ALL=C.UTF-8 run_probe target-inspect.sh storage > "$WORK/stor8.txt"
+grep -q '^SSD TRIM Status: NTFS DisableDeleteNotify = 0' "$WORK/stor8.txt" || fail "TRIM status from OEM-encoded fsutil text: $(grep 'SSD TRIM' "$WORK/stor8.txt")"
+if grep -q 'Binary file' "$WORK/stor8.txt"; then fail "fsutil output was taken as a binary file"; fi
+grep -q '^NTFS 8.3 Short Name Creation: Per volume setting' "$WORK/stor8.txt" || fail "8.3 state is not read from the registry"
+unset -f fsutil.exe
+unset PS_STUB_OUT
+ok "storage reads TRIM and 8.3 state without depending on translated or OEM-encoded text"
 
 # python: the Microsoft Store shortcut is not a Python
 jhas() {  # jhas <json-file> <key> <item>
