@@ -59,14 +59,21 @@ if is_windows; then
     done < <(netstat -ano -p tcp 2>/dev/null | grep -i "LISTENING" | awk '{print $2}' | sort -u || true)
   fi
 
-  # Winget Security Check: the policy names in "winget --info" are not translated, so the state is read
-  # from the last word of the line; a missing line or a word that is not recognized is "unknown", never "secure".
+  # Winget Security Check. "winget settings export" prints the administrator settings as JSON
+  # (true/false, never translated); the words in "winget --info" are only a fallback for old winget
+  # versions. A missing or unrecognized value is "unknown", never "secure".
   winget_sec_ok="unknown"
   winget_details=""
   if command -v winget >/dev/null 2>&1; then
+    winget_export=$(winget settings export 2>/dev/null | tr -d '\r' || true)
     winget_info=$(winget --info 2>/dev/null | tr -d '\r' || true)
-    winget_state() {  # prints Enabled, Disabled or unknown (also for the common translations of the two words)
+    winget_state() {  # prints Enabled, Disabled or unknown
       local v
+      v=$(printf '%s\n' "$winget_export" | grep -oE "\"$1\"[[:space:]]*:[[:space:]]*(true|false)" | grep -oE '(true|false)$' | head -n 1 || true)
+      case "$v" in
+        true) echo Enabled; return ;;
+        false) echo Disabled; return ;;
+      esac
       v=$(printf '%s\n' "$winget_info" | awk -v k="$1" '$1 == k { print $NF; exit }')
       case "${v,,}" in
         enabled|habilitad[oa]|activad[oa]|activé|aktiviert) echo Enabled ;;

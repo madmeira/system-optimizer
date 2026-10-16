@@ -269,6 +269,15 @@ winget() { printf 'InstallerHashOverride                     Zzz\r\nLocalArchive
 export -f winget
 run_probe security-audit.sh > "$WORK/wg6.txt"
 if grep -q 'Integrity Checks: Enforced' "$WORK/wg6.txt"; then fail "an unrecognized word is reported as Enforced"; fi
+# the JSON of "winget settings export" is read first: true/false, no words involved
+winget() { if [[ "$1" == settings ]]; then printf '{"adminSettings":{"InstallerHashOverride":true,"LocalArchiveMalwareScanOverride":false}}\r\n'; else printf 'InstallerHashOverride                     Zzz\r\nLocalArchiveMalwareScanOverride           Zzz\r\n'; fi; }
+export -f winget
+run_probe security-audit.sh > "$WORK/wg7.txt"
+grep -q 'WARNING.*InstallerHashOverride is Enabled' "$WORK/wg7.txt" || fail "an enabled override in the settings JSON is not a warning"
+winget() { if [[ "$1" == settings ]]; then printf '{"adminSettings":{"InstallerHashOverride":false,"LocalArchiveMalwareScanOverride":false}}\r\n'; else printf 'InstallerHashOverride                     Zzz\r\n'; fi; }
+export -f winget
+run_probe security-audit.sh > "$WORK/wg8.txt"
+grep -q 'Integrity Checks: Enforced' "$WORK/wg8.txt" || fail "settings JSON with both false should be Enforced"
 unset -f winget
 unset PS_STUB_OUT
 ok "winget integrity needs both policy lines: missing or unreadable is unknown, enabled is a warning"
