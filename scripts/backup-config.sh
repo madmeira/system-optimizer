@@ -79,6 +79,7 @@ verify_checksum() {
   local bak="$1" meta="$2" expected actual
   if [[ ! -f "$meta" ]]; then
     echo "Error: metadata file missing ($meta); cannot verify backup integrity. Refusing to restore." >&2
+    echo "       Only backups in the central store have a .meta. An in-place copy (<file>.bak.<timestamp>) is a plain file: restore it with cp." >&2
     return 1
   fi
   expected=$(grep -E '^SHA256:' "$meta" | head -n 1 | cut -d: -f2- || true)
@@ -126,6 +127,7 @@ Usage:
 
 Restore verifies the saved SHA256, always writes a safety copy of an existing destination first,
 and asks before using sudo (it refuses when the session is not interactive).
+Only central-store backups can be restored here; in-place copies (<file>.bak.<timestamp>) are plain files, restore them with cp.
 
 Examples:
   $0 ~/.gitconfig git "Pre-optimization diff pager tuning"
@@ -277,7 +279,9 @@ target_backup_dir="$BACKUP_ROOT/$target_name"
 mkdir -p "$target_backup_dir"
 
 central_backup=$(unique_path "$target_backup_dir/${base_filename}.$(make_timestamp)" ".bak")
-timestamp="${central_backup##*/${base_filename}.}"
+# the prefix is quoted so a file name with [ ] * ? is matched literally, not as a pattern
+backup_prefix="$target_backup_dir/${base_filename}."
+timestamp="${central_backup#"$backup_prefix"}"
 timestamp="${timestamp%.bak}"
 central_meta="$central_backup.meta"
 

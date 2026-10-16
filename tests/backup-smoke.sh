@@ -90,6 +90,22 @@ fails bash "$BACKUP" --restore "$bak" < /dev/null || fail "restore accepted a .m
 grep -q 'no Original-Path' "$WORK/out" || fail "no clear message for a missing Original-Path"
 ok "missing Original-Path gives a clear error"
 
+# --- a file name with glob characters keeps a real timestamp and still gets its in-place copy
+f="$WORK/w/a[1].conf"; printf 'glob\n' > "$f"
+bak="$(make_backup "$f" glob)"
+grep -Eq '^Timestamp: [0-9]{8}-[0-9]{6}' "$bak.meta" || fail "Timestamp in .meta is wrong for a name with [ ]: $(grep '^Timestamp:' "$bak.meta")"
+[[ -n "$(find "$WORK/w" -maxdepth 1 -name 'a\[1\].conf.bak.*')" ]] || fail "no in-place copy for a name with [ ]"
+ok "file name with glob characters: real timestamp and in-place copy"
+
+# --- the in-place copy is a plain file: restore refuses it and says to use cp
+g="$WORK/w/inplace.conf"; printf 'v1\n' > "$g"; bash "$BACKUP" "$g" inplace "t" > /dev/null
+inplace="$(find "$WORK/w" -maxdepth 1 -name 'inplace.conf.bak.*' | head -n 1)"
+printf 'v2\n' > "$g"
+fails bash "$BACKUP" --restore "$inplace" "$g" < /dev/null || fail "restore accepted an in-place copy"
+grep -q 'restore it with cp' "$WORK/out" || fail "no hint to use cp for in-place copies"
+[[ "$(cat "$g")" == "v2" ]] || fail "destination changed after the refused restore"
+ok "in-place copy is refused with a hint to use cp"
+
 # --- three backups in a row are three distinct backups
 f="$WORK/w/rapid.conf"; printf 'r\n' > "$f"
 for _ in 1 2 3; do bash "$BACKUP" "$f" rapid "r" > /dev/null; done
