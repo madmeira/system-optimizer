@@ -393,6 +393,8 @@ case "$target" in
     winget --info 2>/dev/null | grep -E "InstallerHashOverride|LocalArchiveMalwareScanOverride|BypassCertificatePinning" | while read -r line; do
       echo "  * $line"
     done || true
+    echo "Administrator settings (winget settings export, language-independent):"
+    winget settings export 2>/dev/null | tr -d '\r' | grep -oE '"(BypassCertificatePinningForMicrosoftStore|InstallerHashOverride|LocalArchiveMalwareScanOverride|LocalManifestFiles)"[[:space:]]*:[[:space:]]*(true|false)' | sed -E 's/^"([^"]+)"[[:space:]]*:[[:space:]]*/  * \1: /' || echo "  (not available in this winget version)"
 
     echo "Triad Checkpoints (Performance, Configuration, Security):"
     echo "  * Performance: Set 'source.autoUpdateIntervalInMinutes: 120' to eliminate 5-10s source sync stall on every invocation"
