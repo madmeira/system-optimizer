@@ -19,7 +19,7 @@ if is_windows; then
   # Windows System Probing
   ps_data=$(run_ps '
     $os = Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber, LastBootUpTime
-    $power = try { ((powercfg /getactivescheme 2>$null) -replace "^.*:\s*", "") } catch { "unknown" }
+    $power = try { (powercfg /getactivescheme 2>$null | Out-String).Trim() } catch { $null }
     $trimNtfs = try {
       $out = cmd.exe /c "fsutil behavior query DisableDeleteNotify 2>&1"
       if ($out -match "NTFS DisableDeleteNotify = 0") { "Enabled (TRIM active)" } elseif ($out -match "DisableDeleteNotify") { "Disabled" } else { "unknown" }
@@ -60,6 +60,9 @@ if is_windows; then
       StoppedAutoServices = ($stoppedSvcs -join ", ")
     } | ConvertTo-Json -Compress
   ' 2>/dev/null || true)
+
+  # powercfg prints "<label>: <GUID>  (<plan name>)"; keep only the plan name in the JSON (and so the text)
+  ps_data="$(printf '%s' "$ps_data" | sed -E 's/"PowerScheme":"[^"]*\(([^")]*)\)[[:space:]]*"/"PowerScheme":"\1"/')"
 
   if [[ "$output_json" == true ]]; then
     if [[ -n "$ps_data" ]]; then

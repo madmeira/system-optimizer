@@ -141,6 +141,14 @@ if grep -q '^$' "$WORK/hw5.txt"; then fail "hardware-probe text output has an em
 grep -q 'Power/Governor: Balanced' "$WORK/hw5.txt" || fail "text output does not show the plan name"
 ok "power plan shows only its name; concurrency equals logical cores; no blank line in text output"
 
+# ---- case 6: system-probe shows only the power plan name (JSON and text)
+export PS_STUB_OUT='{"OS":"Windows 11 Pro (10.0, Build 22631)","Uptime":"0d 1h 2m","PowerScheme":"Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)","Volumes":"C: (NTFS, 10 GB free / 20 GB total)","TRIM":"Enabled (TRIM active)","ShortNames8dot3":"Disabled","MemoryCompression":true,"TcpAutoTuning":"normal","FastStartup":true,"StartupAppsCount":0,"StartupApps":"","StoppedAutoServicesCount":0,"StoppedAutoServices":""}'
+run_probe system-probe.sh --json > "$WORK/sys6.json"
+expect "$WORK/sys6.json" PowerScheme '"Balanced"' "system-probe power plan"
+run_probe system-probe.sh > "$WORK/sys6.txt"
+grep -q 'Power Scheme: Balanced' "$WORK/sys6.txt" || fail "system-probe text does not show the plan name only: $(grep 'Power Scheme' "$WORK/sys6.txt")"
+ok "system-probe shows only the power plan name"
+
 # ---- case 4: parent disk names (lsblk is stubbed to fail so the name pattern is what gets tested)
 # shellcheck source=../scripts/lib.sh
 source "$ROOT/scripts/lib.sh"
