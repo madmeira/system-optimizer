@@ -296,7 +296,7 @@ case "$target" in
           echo "  * PasswordAuthentication: $(echo "$sshd_t" | grep -i '^passwordauthentication' | awk '{print $2}')"
         fi
       fi
-      echo "~/.ssh Directory Permissions: $(stat -c '%a' ~/.ssh 2>/dev/null || echo absent)"
+      echo "Permissions of ~/.ssh directory: $(stat -c '%a' "$HOME/.ssh" 2>/dev/null || echo absent)"
     fi
     echo "====================================="
     exit 0

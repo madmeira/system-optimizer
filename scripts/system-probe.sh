@@ -116,7 +116,6 @@ fi
 os_name="Unknown"
 [[ -f /etc/os-release ]] && os_name=$(grep -E "^PRETTY_NAME=" /etc/os-release | cut -d= -f2 | tr -d '"')
 kernel_ver=$(uname -r)
-boot_cmdline=$(cat /proc/cmdline 2>/dev/null || echo "")
 
 governor=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "not available")
 energy_perf="not available"
