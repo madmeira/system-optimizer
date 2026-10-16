@@ -18,7 +18,7 @@ mkdir -p "$WORK/home"
 
 targets="bash bat btop cargo controld defender eza full fzf gh git herdr htop kde-plasma lazydocker lazygit
 mise mpv neovim pacman pi podman powertoys pwsh ripgrep rustdesk security starship storage system topgrade
-windows-terminal winget wsl yay yt-dlp zoxide"
+windows-terminal winget wsl yay yt-dlp zoxide network chrome edge python"
 
 failed=0; count=0
 for t in $targets; do

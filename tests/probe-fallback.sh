@@ -156,6 +156,90 @@ grep -qx 'Active Power Scheme: Balanced' "$WORK/cpu7.txt" || fail "target-inspec
 if grep -q $'\r' "$WORK/cpu7.txt"; then fail "target-inspect cpu output still has a carriage return"; fi
 ok "target-inspect cpu shows only the plan name and no carriage returns"
 
+# ---- case 8: target-inspect on the Windows branch (network, chrome, edge, ssh, wsl) and python detection
+no_cr() { if grep -q $'\r' "$1"; then fail "$2: output has a carriage return"; fi; }
+export PS_STUB_OUT=$'something\r\n'
+
+run_probe target-inspect.sh network > "$WORK/net8.txt"
+grep -q 'Category: System Core / Network' "$WORK/net8.txt" || fail "network has no inspection of its own"
+if grep -q 'Winget package search\|NOT FOUND IN PATH' "$WORK/net8.txt"; then fail "network still falls into the package search"; fi
+no_cr "$WORK/net8.txt" "network"
+ok "network is inspected as a domain, without a package search"
+
+export PS_STUB_OUT=$'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\r\n'
+run_probe target-inspect.sh chrome > "$WORK/chrome8.txt"
+grep -q '^Status: INSTALLED' "$WORK/chrome8.txt" || fail "chrome found by the registry is not reported as installed"
+grep -qF 'Executable: C:\Program Files\Google\Chrome\Application\chrome.exe' "$WORK/chrome8.txt" || fail "chrome executable is not shown"
+if grep -q 'NOT FOUND IN PATH\|Winget package search' "$WORK/chrome8.txt"; then fail "chrome still falls into the package search"; fi
+no_cr "$WORK/chrome8.txt" "chrome"
+run_probe target-inspect.sh edge > "$WORK/edge8.txt"
+grep -q '^Status: INSTALLED' "$WORK/edge8.txt" || fail "edge found by the registry is not reported as installed"
+if grep -q 'NOT FOUND IN PATH\|Winget package search' "$WORK/edge8.txt"; then fail "edge still falls into the package search"; fi
+no_cr "$WORK/edge8.txt" "edge"
+unset PS_STUB_OUT
+run_probe target-inspect.sh chrome > "$WORK/chrome8b.txt"
+grep -q '^Status: NOT INSTALLED' "$WORK/chrome8b.txt" || fail "chrome without a registry entry or data folder is not reported as not installed"
+ok "chrome and edge are inspected from the registry, installed or not"
+
+export PS_STUB_OUT=$'Running\r\n'
+run_probe target-inspect.sh ssh > "$WORK/ssh8.txt"
+if grep -q '/etc/ssh/sshd_config' "$WORK/ssh8.txt"; then fail "ssh on Windows lists the Git Bash /etc/ssh/sshd_config"; fi
+if grep -q 'Permissions: [0-7][0-7][0-7]' "$WORK/ssh8.txt"; then fail "ssh on Windows judges POSIX modes"; fi
+no_cr "$WORK/ssh8.txt" "ssh"
+ok "ssh on Windows lists only the Windows config files"
+
+# wsl.exe prints its help text (UTF-16 with NULs and CRs) when WSL has no distribution
+wsl.exe() { printf 'C\0o\0p\0y\0r\0i\0g\0h\0t\0 (c) Microsoft Corporation.\r\r\n\r\r\nUsage: wsl.exe [Argument]\r\r\n'; }
+export -f wsl.exe
+run_probe target-inspect.sh wsl > "$WORK/wsl8.txt"
+grep -qF '(none: no WSL distribution is installed)' "$WORK/wsl8.txt" || fail "wsl does not say that no distribution is installed"
+if grep -q 'Usage: wsl.exe' "$WORK/wsl8.txt"; then fail "wsl still prints the help text as distributions"; fi
+grep -q '^Version: unknown' "$WORK/wsl8.txt" || fail "wsl version is not unknown: $(grep '^Version' "$WORK/wsl8.txt")"
+no_cr "$WORK/wsl8.txt" "wsl"
+[[ "$(tr -cd '\0' < "$WORK/wsl8.txt" | wc -c)" -eq 0 ]] || fail "wsl output has a NUL byte"
+unset -f wsl.exe
+ok "wsl without a distribution says so, and the output is clean"
+
+# python: the Microsoft Store shortcut is not a Python
+jhas() {  # jhas <json-file> <key> <item>
+  "$PY" - "$1" "$2" "$3" <<'EOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+print("yes" if sys.argv[3] in d.get(sys.argv[2], []) else "no")
+EOF
+}
+python() { echo "Python was not found; run without arguments to install from the Microsoft Store" >&2; return 49; }
+export -f python
+run_probe detect-targets.sh --json > "$WORK/det8a.json"
+[[ "$(jhas "$WORK/det8a.json" package_managers_runtimes python)" == no ]] || fail "the Store shortcut is detected as an installed Python"
+python() { echo "Python 3.12.1"; }
+export -f python
+run_probe detect-targets.sh --json > "$WORK/det8b.json"
+[[ "$(jhas "$WORK/det8b.json" package_managers_runtimes python)" == yes ]] || fail "a real Python is not detected"
+unset -f python
+ok "python is detected only when it really prints a Python version"
+
+# F2: inspecting the Store shortcut says so (needs a real file named python on PATH, so Linux only)
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) echo "SKIP - python Store shortcut inspection (needs a file named python on PATH)" ;;
+  *)
+    mkdir -p "$WORK/fakebin"
+    printf '#!/bin/sh\necho "Python was not found; run without arguments to install from the Microsoft Store" >&2\nexit 49\n' > "$WORK/fakebin/python"
+    chmod +x "$WORK/fakebin/python"
+    PATH="$WORK/fakebin:$PATH" bash "$ROOT/scripts/target-inspect.sh" python > "$WORK/py8.txt"
+    grep -q 'Microsoft Store shortcut' "$WORK/py8.txt" || fail "python Store shortcut is not explained: $(head -3 "$WORK/py8.txt")"
+    if grep -q '^Status: INSTALLED' "$WORK/py8.txt"; then fail "the Store shortcut is reported as installed"; fi
+    ok "inspecting the python Store shortcut says it is only a shortcut"
+    ;;
+esac
+
+# E: the bash startup latency is a number (or n/a), never "unknown"
+bash "$ROOT/scripts/target-inspect.sh" bash > "$WORK/bash8.txt"
+grep -Eq 'Interactive Startup Latency: (~[0-9]+\.[0-9] ms|n/a)' "$WORK/bash8.txt" || fail "bash latency line: $(grep Latency "$WORK/bash8.txt")"
+ok "bash startup latency is a number or n/a"
+
+unset PS_STUB_OUT
+
 # ---- case 4: parent disk names (lsblk is stubbed to fail so the name pattern is what gets tested)
 # shellcheck source=../scripts/lib.sh
 source "$ROOT/scripts/lib.sh"

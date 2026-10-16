@@ -105,6 +105,9 @@ canonical_name() {
 is_target_present() {
   local t="$1"
   if command -v "$t" >/dev/null 2>&1; then
+    case "$t" in
+      python|python3) python_ok "$t" || return 1 ;;
+    esac
     return 0
   fi
   if is_windows; then

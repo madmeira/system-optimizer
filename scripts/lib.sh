@@ -81,3 +81,11 @@ first_line_or() {
   out="${out%%$'\n'*}"
   printf '%s' "${out:-$default}"
 }
+
+# True when "$1 --version" prints "Python <digit>...". The Microsoft Store shortcut in WindowsApps is a
+# stub that only prints a hint, so it is not a Python.
+python_ok() {
+  local out
+  out="$("$1" --version 2>&1 || true)"
+  [[ "$out" =~ ^Python[[:space:]][0-9] ]]
+}

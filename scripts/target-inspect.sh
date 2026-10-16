@@ -20,6 +20,28 @@ fi
 local_app_data="${LOCALAPPDATA:-$HOME/AppData/Local}"
 roaming_app_data="${APPDATA:-$HOME/AppData/Roaming}"
 
+# Report a browser from its executable (empty when not found) and its user data folder.
+browser_report() {
+  local exe="$1" data="$2" policy_key="$3" ver profiles managed
+  if [[ -n "$exe" ]]; then
+    echo "Status: INSTALLED"
+    echo "Executable: $exe"
+    ver=$(SO_EXE="$exe" run_ps '(Get-Item -LiteralPath $env:SO_EXE).VersionInfo.ProductVersion' 2>/dev/null || true)
+    echo "Version: ${ver:-unknown}"
+  elif [[ -d "$data" ]]; then
+    echo "Status: user data found, executable not located"
+  else
+    echo "Status: NOT INSTALLED"
+  fi
+  if [[ -d "$data" ]]; then
+    profiles=$(find "$data" -maxdepth 1 -type d \( -name Default -o -name 'Profile *' \) 2>/dev/null | wc -l || true)
+    echo "User Data: $data"
+    echo "Profiles: $profiles"
+  fi
+  managed=$(SO_KEY="$policy_key" run_ps 'Test-Path -Path $env:SO_KEY' 2>/dev/null || true)
+  echo "Managed Policies: ${managed:-unknown}"
+}
+
 # Dynamic hardware detection
 detected_threads=$(nproc 2>/dev/null || echo "${NUMBER_OF_PROCESSORS:-4}")
 detected_gpu=$(run_ps '(@(Get-CimInstance Win32_VideoController | Where-Object { $_.AdapterRAM -gt 0 -or ($_.Name -notmatch "Virtual|Remote|Basic") }) | Select-Object -First 1 -ExpandProperty Name) 2>$null' 2>/dev/null || echo "")
@@ -268,11 +290,11 @@ case "$target" in
       sshd_svc=$(run_ps '(Get-Service -Name sshd -ErrorAction SilentlyContinue).Status' 2>/dev/null || echo "NotInstalled")
       echo "OpenSSH Server Service: $sshd_svc"
       echo "Config Locations:"
-      for f in "$HOME/.ssh/config" "/c/ProgramData/ssh/sshd_config" "/etc/ssh/sshd_config"; do
+      for f in "$HOME/.ssh/config" "/c/ProgramData/ssh/sshd_config"; do
         [[ -f "$f" ]] && echo "  - [EXISTS] $f"
       done
       echo "Local Key Directory: $HOME/.ssh"
-      [[ -d "$HOME/.ssh" ]] && echo "  - Permissions: $(stat -c '%a' "$HOME/.ssh" 2>/dev/null || echo 'present')"
+      [[ -d "$HOME/.ssh" ]] && echo "  - Permissions: n/a (NTFS ACLs, not POSIX modes)"
     else
       echo "sshd Service: $(systemctl is-active sshd 2>/dev/null || echo inactive) ($(systemctl is-enabled sshd 2>/dev/null || echo disabled))"
       echo "SSH Configs:"
@@ -392,7 +414,10 @@ case "$target" in
     echo "Category: Subsystem & Virtualization / Windows Subsystem for Linux (WSL)"
     wsl_bin=$(which wsl 2>/dev/null || which wsl.exe 2>/dev/null || echo "")
     echo "Binary: ${wsl_bin:-/c/Windows/System32/wsl.exe}"
-    wsl_ver=$(wsl.exe --version 2>/dev/null | tr -d '\0' | head -n 1 || echo "Unknown")
+    wsl_ver=$(wsl.exe --version 2>/dev/null | tr -d '\0\r' | awk 'NF { print; exit }' || true)
+    case "$wsl_ver" in
+      ""|Copyright*|*Usage*) wsl_ver="unknown (WSL is not installed)" ;;
+    esac
     echo "Version: $wsl_ver"
 
     echo "Discovered Configuration Files:"
@@ -414,9 +439,15 @@ case "$target" in
     done
 
     echo "Registered WSL Distributions:"
-    wsl.exe -l -v 2>/dev/null | tr -d '\0' | while IFS= read -r line; do
-      [[ -n "$line" ]] && echo "  * $line"
-    done || true
+    wsl_list=$(wsl.exe -l -v 2>/dev/null | tr -d '\0\r' || true)
+    # without WSL, or without a distribution, wsl.exe prints its help text instead of a list
+    if [[ -z "$wsl_list" || "$wsl_list" == *"Usage: wsl.exe"* || "$wsl_list" == *"no installed distributions"* ]]; then
+      echo "  (none: no WSL distribution is installed)"
+    else
+      while IFS= read -r line; do
+        [[ -n "$line" ]] && echo "  * $line"
+      done <<< "$wsl_list"
+    fi
 
     wsl_conf_file=""
     for candidate in "${wsl_cfg_candidates[@]}"; do
@@ -515,15 +546,15 @@ case "$target" in
     fi
 
     echo "Performance Metrics:"
-    if command -v python3 >/dev/null 2>&1; then
-      startup_ms=$(python3 -c "
-import time, subprocess
-for _ in range(3): subprocess.run(['bash', '-i', '-c', 'exit'], capture_output=True)
-s = time.perf_counter()
-for _ in range(5): subprocess.run(['bash', '-i', '-c', 'exit'], capture_output=True)
-print(f'{(time.perf_counter() - s)/5*1000:.1f}')
-" 2>/dev/null || echo "unknown")
+    if [[ -n "${EPOCHREALTIME:-}" ]]; then
+      for _ in 1 2 3; do bash -i -c exit > /dev/null 2>&1 || true; done
+      lat_start="${EPOCHREALTIME/,/.}"   # some locales print a comma
+      for _ in 1 2 3 4 5; do bash -i -c exit > /dev/null 2>&1 || true; done
+      lat_end="${EPOCHREALTIME/,/.}"
+      startup_ms=$(awk -v s="$lat_start" -v e="$lat_end" 'BEGIN { printf "%.1f", (e - s) / 5 * 1000 }')
       echo "  * Interactive Startup Latency: ~${startup_ms} ms"
+    else
+      echo "  * Interactive Startup Latency: n/a (needs bash 5: EPOCHREALTIME)"
     fi
 
     echo "Security & Hygiene Checks:"
@@ -1441,6 +1472,73 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     echo "====================================="
     exit 0
     ;;
+  network|net)
+    echo "Category: System Core / Network"
+    if is_windows; then
+      echo "Active Adapters:"
+      run_ps 'Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | ForEach-Object { "  * $($_.Name): $($_.InterfaceDescription), $($_.LinkSpeed)" }' 2>/dev/null || echo "  (unknown)"
+      echo "DNS Servers (IPv4):"
+      run_ps 'Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object { $_.ServerAddresses } | ForEach-Object { "  * $($_.InterfaceAlias): $($_.ServerAddresses -join ",")" }' 2>/dev/null || echo "  (unknown)"
+      echo "TCP Receive Window Auto-Tuning: $(run_ps '(netsh interface tcp show global | Select-String "Auto-Tuning Level").ToString().Split(":")[1].Trim()' 2>/dev/null || echo unknown)"
+      echo "Listening TCP Sockets: $(netstat -ano -p tcp 2>/dev/null | grep -ci LISTENING || true)"
+    else
+      echo "Default Route: $(ip route show default 2>/dev/null | head -n 1 || true)"
+      echo "DNS Resolvers: $(grep '^nameserver' /etc/resolv.conf 2>/dev/null | awk '{print $2}' | tr '\n' ' ' || true)"
+      echo "TCP Congestion Control: $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo unknown)"
+      echo "Default Queue Discipline: $(sysctl -n net.core.default_qdisc 2>/dev/null || echo unknown)"
+      echo "Listening TCP Sockets: $(ss -tlnH 2>/dev/null | wc -l || true)"
+    fi
+    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "  * Performance: TCP auto-tuning left at normal; BBR or CUBIC congestion control; no leftover VPN adapters"
+    echo "  * Configuration: Encrypted DNS (DoH/DoT) with a local cache; static addressing only where needed"
+    echo "  * Security: Close listening sockets that nothing uses; firewall limited to the local network"
+    echo "====================================="
+    exit 0
+    ;;
+  chrome|google-chrome|google-chrome-stable)
+    echo "Category: Web Browser / Google Chrome"
+    if is_windows; then
+      chrome_exe=$(run_ps '(Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe" -ErrorAction SilentlyContinue)."(default)"' 2>/dev/null || true)
+      browser_report "$chrome_exe" "$local_app_data/Google/Chrome/User Data" 'HKLM:\SOFTWARE\Policies\Google\Chrome'
+    else
+      chrome_bin=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || true)
+      if [[ -n "$chrome_bin" ]]; then
+        echo "Status: INSTALLED"
+        echo "Executable: $chrome_bin"
+        echo "Version: $("$chrome_bin" --version 2>/dev/null | head -n 1 || echo unknown)"
+      else
+        echo "Status: NOT INSTALLED"
+      fi
+    fi
+    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "  * Performance: Hardware acceleration on; trim startup extensions"
+    echo "  * Configuration: One profile per context; sync only what is needed"
+    echo "  * Security: Safe Browsing on, auto-update on, audit extensions"
+    echo "====================================="
+    exit 0
+    ;;
+  edge|msedge|microsoft-edge)
+    echo "Category: Web Browser / Microsoft Edge"
+    if is_windows; then
+      edge_exe=$(run_ps '(Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe" -ErrorAction SilentlyContinue)."(default)"' 2>/dev/null || true)
+      browser_report "$edge_exe" "$local_app_data/Microsoft/Edge/User Data" 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
+    else
+      edge_bin=$(command -v microsoft-edge-stable || command -v microsoft-edge || true)
+      if [[ -n "$edge_bin" ]]; then
+        echo "Status: INSTALLED"
+        echo "Executable: $edge_bin"
+        echo "Version: $("$edge_bin" --version 2>/dev/null | head -n 1 || echo unknown)"
+      else
+        echo "Status: NOT INSTALLED"
+      fi
+    fi
+    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "  * Performance: Startup boost and background mode only if wanted; hardware acceleration on"
+    echo "  * Configuration: One profile per context; sync only what is needed"
+    echo "  * Security: SmartScreen on, auto-update on, audit extensions"
+    echo "====================================="
+    exit 0
+    ;;
 esac
 
 # 2. Package / Tool Handling
@@ -1493,6 +1591,17 @@ if [[ -z "$bin_path" ]]; then
   echo "====================================="
   exit 0
 fi
+
+case "$target" in
+  python|python3)
+    if ! python_ok "$bin_path"; then
+      echo "Status: NOT INSTALLED (the python command is only the Microsoft Store shortcut)"
+      echo "Binary Path: $bin_path"
+      echo "====================================="
+      exit 0
+    fi
+    ;;
+esac
 
 echo "Status: INSTALLED"
 echo "Binary Path: $bin_path"
