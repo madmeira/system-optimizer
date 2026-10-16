@@ -57,7 +57,7 @@ Script paths below (`scripts/...`, `references/...`) are relative to the skill f
 When invoked **without arguments**:
 
 1. **Probe System & Tools**: Run `scripts/hardware-probe.sh`, `scripts/system-probe.sh`, and `scripts/detect-targets.sh`.
-2. **Present Categorized Numbered Choices** (tailored to detected OS):
+2. **Print the full numbered menu as text, then ask** (tailored to detected OS). Write all nine options below in the reply itself, one per line with its detected scope, before asking which to audit. A choice widget (buttons) can only hold two to four options, so use it at most as a shortcut for the top picks. It never replaces the text menu, and the user can answer with any number from 1 to 9. The options:
    - **Option 1: System Core & OS Performance**:
      - *Windows*: Storage / NVMe SSD TRIM (`fsutil DisableDeleteNotify`), Memory Compression (`Get-MMAgent`), CPU Power Scheme (`powercfg`), Boot & Startup Apps.
      - *Linux*: Kernel sysctl, Storage/SSD mount options, Memory/zram, CPU Governor, Boot speed (`systemd-analyze`).
