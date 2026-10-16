@@ -62,3 +62,7 @@ jobs:
       - name: JSON Escaping Test
         shell: bash
         run: bash tests/json-escape.sh
+
+      - name: All Targets Smoke Test (every target-inspect target runs without errors)
+        shell: bash
+        run: bash tests/inspect-smoke.sh

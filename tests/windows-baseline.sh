@@ -2,7 +2,9 @@
 # windows-baseline.sh - run the 4 probes on Windows (Git Bash) and check their --json output.
 # Usage (from the Proxmox host, QEMU guest agent running in the VM):
 #   ssh root@<host> 'qm guest exec <vmid> --pass-stdin 1 --timeout 600 -- "C:\Program Files\Git\bin\bash.exe" -l -s' < tests/windows-baseline.sh
-# REPO may be a git URL or a local path; REF is an optional branch/tag.
+# REPO (git URL or local path) defaults to the upstream repository and REF (branch or tag) to its default
+# branch, so without them this tests the upstream code, not your branch. To test a branch, set both, e.g.
+#   REPO=https://github.com/<you>/system-optimizer REF=my-branch bash -s < tests/windows-baseline.sh
 # Deliberately no `set -e`/pipefail: keep going so every probe is reported even if one fails.
 set -u
 REPO="${REPO:-https://github.com/madmeira/system-optimizer}"
