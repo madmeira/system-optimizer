@@ -63,6 +63,22 @@ case "$(uname -s)" in
       "$PY" -m json.tool "$WORK/$p.json" > /dev/null || fail "$p JSON is invalid when systemctl prints inactive and fails"
     done
     ok "security-audit and system-probe keep JSON valid when systemctl exits non-zero"
+    # checkupdates exits 2 when there is nothing to update; the count must stay ONE number ("0", not "0 0")
+    pending() { "$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["package_security"]["pending_security_updates"])' "$1"; }
+    arch-audit() { return 1; }
+    export -f arch-audit
+    env -u WINDIR -u OS bash "$ROOT/scripts/security-audit.sh" --json > "$WORK/audit-a.json"
+    [[ "$(pending "$WORK/audit-a.json")" == "0" ]] || fail "arch-audit with no findings gave '$(pending "$WORK/audit-a.json")', expected 0"
+    unset -f arch-audit
+    if command -v arch-audit > /dev/null 2>&1; then
+      echo "SKIP - checkupdates count case (a real arch-audit is installed and takes precedence)"
+    else
+      checkupdates() { return 2; }
+      export -f checkupdates
+      env -u WINDIR -u OS bash "$ROOT/scripts/security-audit.sh" --json > "$WORK/audit-c.json"
+      [[ "$(pending "$WORK/audit-c.json")" == "0 total updates pending" ]] || fail "checkupdates with no updates gave '$(pending "$WORK/audit-c.json")'"
+    fi
+    ok "pending update count is one number when the updater exits non-zero"
     ;;
 esac
 

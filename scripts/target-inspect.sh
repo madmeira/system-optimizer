@@ -220,7 +220,7 @@ case "$target" in
       echo "  * Security: Verify Secure Boot status (Confirm-SecureBootUEFI)"
     else
       echo "Startup Time: $(systemd-analyze 2>/dev/null | head -n 1 || echo unknown)"
-      echo "Failed Units: $(systemctl --failed --no-legend 2>/dev/null | wc -l || echo 0) unit(s)"
+      echo "Failed Units: $(systemctl --failed --no-legend 2>/dev/null | wc -l || true) unit(s)"
       echo "Journal Usage: $(journalctl --disk-usage 2>/dev/null || echo unknown)"
     fi
     echo "====================================="
@@ -556,7 +556,7 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     echo "Performance & Storage Metrics:"
     sessions_dir="$HOME/.pi/agent/sessions"
     if [[ -d "$sessions_dir" ]]; then
-      sess_count=$(find "$sessions_dir" -type f -name "*.jsonl" 2>/dev/null | wc -l || echo 0)
+      sess_count=$(find "$sessions_dir" -type f -name "*.jsonl" 2>/dev/null | wc -l || true)
       sess_size=$(du -sh "$sessions_dir" 2>/dev/null | awk '{print $1}' || echo "0")
       echo "  * Saved Sessions: $sess_count session files ($sess_size disk usage)"
     fi
@@ -801,7 +801,7 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
 
     if [[ -n "$mise_bin" ]]; then
       echo "Mise Runtime & Tool Summary:"
-      tool_count=$("$mise_bin" ls --current 2>/dev/null | wc -l || echo "0")
+      tool_count=$("$mise_bin" ls --current 2>/dev/null | wc -l || true)
       echo "  * Active/Managed Tools: $tool_count installed"
     fi
 
@@ -962,7 +962,7 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     done
 
     if command -v zoxide >/dev/null 2>&1; then
-      db_count=$(zoxide query -l 2>/dev/null | wc -l || echo "0")
+      db_count=$(zoxide query -l 2>/dev/null | wc -l || true)
       echo "Tracked Directories in Database: $db_count entries"
     fi
 
@@ -1189,15 +1189,15 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     echo "  * FZF_DEFAULT_OPTS: ${FZF_DEFAULT_OPTS:-[UNSET]}"
 
     echo "Ripgrep + FZF + Bat Synergy Integration:"
-    if [[ "$FZF_DEFAULT_COMMAND" =~ (rg|ripgrep) ]]; then
+    if [[ "${FZF_DEFAULT_COMMAND:-}" =~ (rg|ripgrep) ]]; then
       echo "  * Search Generator (ripgrep): [CONFIGURED] (rg wired as FZF_DEFAULT_COMMAND backend)"
-    elif [[ "$FZF_DEFAULT_COMMAND" =~ fd ]]; then
+    elif [[ "${FZF_DEFAULT_COMMAND:-}" =~ fd ]]; then
       echo "  * Search Generator (fd): [CONFIGURED] (fd directory walker)"
     else
       echo "  * Search Generator: [DEFAULT/MISSING] (Wire rg: export FZF_DEFAULT_COMMAND=\"rg --files --hidden --glob '!.git/*'\")"
     fi
 
-    if [[ "$FZF_DEFAULT_OPTS" =~ bat ]]; then
+    if [[ "${FZF_DEFAULT_OPTS:-}" =~ bat ]]; then
       echo "  * Syntax Previewer (bat): [CONFIGURED] (bat rendering line-numbered previews)"
     else
       echo "  * Syntax Previewer (bat): [RECOMMENDED] (Configure --preview 'bat --style=numbers --color=always --line-range :500 {}')"
@@ -1398,7 +1398,7 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
 
     echo "Installed GitHub CLI Extensions:"
     if command -v gh >/dev/null 2>&1; then
-      ext_count=$(gh extension list 2>/dev/null | wc -l || echo 0)
+      ext_count=$(gh extension list 2>/dev/null | wc -l || true)
       if [[ "$ext_count" -gt 0 ]]; then
         echo "  * Total Extensions: $ext_count"
         gh extension list 2>/dev/null | while read -r eline; do

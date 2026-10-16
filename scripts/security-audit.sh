@@ -245,9 +245,9 @@ keyring_timer_active=$(first_line_or inactive systemctl is-active archlinux-keyr
 
 pending_sec_updates="unknown"
 if command -v arch-audit >/dev/null 2>&1; then
-  pending_sec_updates=$(arch-audit -u 2>/dev/null | wc -l || echo "0")
+  pending_sec_updates=$(arch-audit -u 2>/dev/null | wc -l || true)
 elif command -v checkupdates >/dev/null 2>&1; then
-  pending_updates=$(checkupdates 2>/dev/null | wc -l || echo "0")
+  pending_updates=$(checkupdates 2>/dev/null | wc -l || true)
   pending_sec_updates="$pending_updates total updates pending"
 fi
 
