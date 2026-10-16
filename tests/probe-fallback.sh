@@ -40,8 +40,11 @@ expect() {  # expect <json-file> <path> <expected-json> <label>
 }
 
 # ---- case 1: PowerShell fails completely
-pwsh() { return 1; }; powershell() { return 1; }; powershell.exe() { return 1; }
-export -f pwsh powershell powershell.exe
+# All three PowerShell entry points are stubbed: GitHub's runners ship a real pwsh, so a missing stub
+# would run the real PowerShell. The stub prints $PS_STUB_OUT, or fails when it is empty.
+ps_stub() { if [[ -n "${PS_STUB_OUT:-}" ]]; then printf '%s' "$PS_STUB_OUT"; else return 1; fi; }
+pwsh() { ps_stub; }; powershell() { ps_stub; }; powershell.exe() { ps_stub; }
+export -f ps_stub pwsh powershell powershell.exe
 
 run_probe hardware-probe.sh --json > "$WORK/hw.json"
 "$PY" -m json.tool "$WORK/hw.json" > /dev/null || fail "hardware-probe JSON is invalid on failure"
@@ -97,11 +100,7 @@ done
 ok "system-probe reports unknown and valid JSON when PowerShell fails"
 
 # ---- case 2: PowerShell answers but Defender/UAC data is missing (null), PUA in audit mode
-unset -f pwsh powershell  # run_ps tries pwsh first; only powershell.exe answers in this case
-powershell.exe() {
-  printf '%s' '{"FirewallAllActive":null,"FirewallSummary":"Domain:Active","RealTimeProtection":null,"AntivirusEnabled":null,"PUAProtection":2,"UACEnabled":null,"ExecutionPolicy":"Restricted","SSHDService":"NotInstalled"}'
-}
-export -f powershell.exe
+export PS_STUB_OUT='{"FirewallAllActive":null,"FirewallSummary":"Domain:Active","RealTimeProtection":null,"AntivirusEnabled":null,"PUAProtection":2,"UACEnabled":null,"ExecutionPolicy":"Restricted","SSHDService":"NotInstalled"}'
 run_probe security-audit.sh --json > "$WORK/sec2.json"
 "$PY" -m json.tool "$WORK/sec2.json" > /dev/null || fail "security-audit JSON is invalid with partial data"
 expect "$WORK/sec2.json" defender.realtime_protection '"unknown"' "partial data"
@@ -131,10 +130,7 @@ else
 fi
 
 # ---- case 5: canned PowerShell hardware data -> clean governor name, concurrency = logical cores, no blank line
-powershell.exe() {
-  printf '%s' '{"CPUModel":"Test CPU","Cores":4,"Threads":8,"Arch":"x86_64","RAMTotalGB":16,"SwapTotalGB":2,"GPU":"Test GPU","StorageType":"SSD","OSName":"Windows 11","Kernel":"10.0","PowerScheme":"Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)","MemoryCompression":true}'
-}
-export -f powershell.exe
+export PS_STUB_OUT='{"CPUModel":"Test CPU","Cores":4,"Threads":8,"Arch":"x86_64","RAMTotalGB":16,"SwapTotalGB":2,"GPU":"Test GPU","StorageType":"SSD","OSName":"Windows 11","Kernel":"10.0","PowerScheme":"Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)","MemoryCompression":true}'
 run_probe hardware-probe.sh --json > "$WORK/hw5.json"
 expect "$WORK/hw5.json" cpu.governor '"Balanced"' "canned hardware data"
 expect "$WORK/hw5.json" cpu.cores 8 "canned hardware data"
