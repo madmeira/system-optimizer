@@ -774,35 +774,36 @@ The integration between Neovim and Mise establishes a unified, reproducible deve
 
 ## 6. Mandatory Pre-Modification Backup & Rollback Protocol
 
-Every file edited or overwritten by `system-optimizer` MUST be backed up using `scripts/backup-config.sh` before any changes are written to disk.
+Every file edited or overwritten by `system-optimizer` MUST be backed up using `scripts/backup-config.sh` before any changes are written to disk. Script paths are relative to the skill folder (for example `~/.claude/skills/system-optimizer/` or `~/.pi/agent/skills/system-optimizer/`).
 
 ### 1. Dual-Location Backup Architecture
 1. **Centralized Vault**: `~/.config/system-optimizer/backups/<target>/<filename>.<timestamp>.bak`
    - Accompanied by `<filename>.<timestamp>.bak.meta` containing:
      - `Original-Path`: Full absolute path of source configuration.
-     - `Timestamp`: Execution timestamp (`YYYYMMDD-HHMMSS`).
+     - `Timestamp`: Execution timestamp (`YYYYMMDD-HHMMSS-NNNNNNNNN`, with a numeric suffix if two backups collide).
      - `SHA256`: Checksum of the pre-modification state.
      - `Size` & `Permissions`: File size in bytes and permissions.
      - `Description`: Rationale for modification.
 2. **In-Place Adjacent Backup**: `<config_path>.bak.<timestamp>`
    - Created in the parent directory when user write permissions allow (e.g. `settings.json.bak.20260905-143000`).
+   - A plain copy with no `.meta`: `--restore` only accepts central-vault backups (it verifies their SHA256), so restore an in-place copy with `cp`.
 
 ### 2. Backup CLI Commands
 - Create backup:
   ```bash
-  ~/.pi/agent/skills/system-optimizer/scripts/backup-config.sh <config-path> <target> "Reason"
+  scripts/backup-config.sh <config-path> <target> "Reason"
   ```
 - List backups:
   ```bash
-  ~/.pi/agent/skills/system-optimizer/scripts/backup-config.sh --list [target]
+  scripts/backup-config.sh --list [target]
   ```
 - Diff backup against current:
   ```bash
-  ~/.pi/agent/skills/system-optimizer/scripts/backup-config.sh --diff <backup-file> [current-file]
+  scripts/backup-config.sh --diff <backup-file> [current-file]
   ```
 - Restore / Rollback:
   ```bash
-  ~/.pi/agent/skills/system-optimizer/scripts/backup-config.sh --restore <backup-file> [dest-file]
+  scripts/backup-config.sh --restore <backup-file> [dest-file]
   ```
 
 ---
@@ -847,7 +848,7 @@ Every file edited or overwritten by `system-optimizer` MUST be backed up using `
 - **SHA256 Checksum**: `<hash>`
 - **Timestamp**: `<YYYYMMDD-HHMMSS>`
 - **In-Place Backup**: `<in_place_bak_path>`
-- **Rollback Command**: `~/.pi/agent/skills/system-optimizer/scripts/backup-config.sh --restore <backup-file>`
+- **Rollback Command**: `scripts/backup-config.sh --restore <backup-file>`
 
 ## 6. Verification & Health Checks
 - Syntax & validation output: `<command_output>`

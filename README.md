@@ -49,13 +49,22 @@ system-optimizer/
 ├── SKILL.md                          # Primary agent skill specification & invocation rules
 ├── README.md                         # Architecture overview & documentation
 ├── .gitignore                        # Git exclusion rules
+├── .github/workflows/ci.yml          # ShellCheck, probe JSON validation and the test scripts
 ├── references/
 │   └── optimization-guide.md         # Reference guides, config templates & triad checklists
-└── scripts/
-    ├── hardware-probe.sh             # Dynamic hardware probe (CPU, RAM, GPU, Disk, OS)
-    ├── system-probe.sh               # System configuration & OS health probe
-    ├── detect-targets.sh             # Installed tool & package manager detection
-    ├── security-audit.sh             # Security posture & supply-chain audit
-    ├── backup-config.sh              # Pre-modification backup & rollback manager
-    └── target-inspect.sh             # Per-target configuration & synergy inspector
+├── scripts/
+│   ├── lib.sh                        # Shared helpers (sourced by the others; keep it next to them)
+│   ├── hardware-probe.sh             # Dynamic hardware probe (CPU, RAM, GPU, Disk, OS)
+│   ├── system-probe.sh               # System configuration & OS health probe
+│   ├── detect-targets.sh             # Installed tool & package manager detection
+│   ├── security-audit.sh             # Security posture & supply-chain audit
+│   ├── backup-config.sh              # Pre-modification backup & rollback manager
+│   └── target-inspect.sh             # Per-target configuration & synergy inspector
+└── tests/
+    ├── backup-smoke.sh               # Backup, list, restore and safety checks (temp dir only)
+    ├── probe-fallback.sh             # Probes say "unknown" when PowerShell fails
+    ├── json-escape.sh                # JSON stays valid for quotes, backslashes, newlines
+    └── windows-baseline.sh           # Manual helper: run the probes on a Windows host (Git Bash)
 ```
+
+Copy the whole skill folder: every probe script needs `scripts/lib.sh` next to it.

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # windows-baseline.sh - run the 4 probes on Windows (Git Bash) and check their --json output.
-# Usage: see "Windows check (VM)" in specs/001-repo-quality-fixes/quickstart.md
+# Usage (from the Proxmox host, QEMU guest agent running in the VM):
+#   ssh root@<host> 'qm guest exec <vmid> --pass-stdin 1 --timeout 600 -- "C:\Program Files\Git\bin\bash.exe" -l -s' < tests/windows-baseline.sh
 # REPO may be a git URL or a local path; REF is an optional branch/tag.
 # Deliberately no `set -e`/pipefail: keep going so every probe is reported even if one fails.
 set -u
