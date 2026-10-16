@@ -18,8 +18,11 @@ ok()   { pass=$((pass + 1)); echo "ok   - $1"; }
 fail() { echo "FAIL - $1" >&2; exit 1; }
 
 # run_probe <script> [args]: run a probe in a Windows-looking environment with the stubs below
+# LOCALAPPDATA/APPDATA point to empty temp folders: a real runner has Chrome, Edge and more in the real ones
+mkdir -p "$WORK/appdata/Local" "$WORK/appdata/Roaming"
 run_probe() {
   env -u NUMBER_OF_PROCESSORS -u PROCESSOR_ARCHITECTURE -u SYSTEMDRIVE WINDIR='C:\Windows' \
+    LOCALAPPDATA="$WORK/appdata/Local" APPDATA="$WORK/appdata/Roaming" \
     bash "$ROOT/scripts/$1" "${@:2}"
 }
 # jget <json-file> <dotted.path>: print the value, or MISSING
