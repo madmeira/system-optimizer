@@ -28,7 +28,7 @@ app_path() {
 # Report a browser from its executable (empty when not found) and, on Windows, its user data folder
 # and policy key.
 browser_report() {
-  local exe="$1" data="$2" policy_key="$3" ver profiles managed
+  local exe="$1" data="${2:-}" policy_key="${3:-}" ver profiles managed
   if [[ -n "$exe" ]]; then
     echo "Status: INSTALLED"
     echo "Executable: $exe"
@@ -1513,11 +1513,10 @@ case "$target" in
   chrome|google-chrome|google-chrome-stable)
     echo "Category: Web Browser / Google Chrome"
     if is_windows; then
-      chrome_exe=$(app_path chrome.exe)
+      browser_report "$(app_path chrome.exe)" "$local_app_data/Google/Chrome/User Data" 'HKLM:\SOFTWARE\Policies\Google\Chrome'
     else
-      chrome_exe=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || true)
+      browser_report "$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || true)"
     fi
-    browser_report "$chrome_exe" "$local_app_data/Google/Chrome/User Data" 'HKLM:\SOFTWARE\Policies\Google\Chrome'
     echo "Triad Checkpoints (Performance, Configuration, Security):"
     echo "  * Performance: Hardware acceleration on; trim startup extensions"
     echo "  * Configuration: One profile per context; sync only what is needed"
@@ -1528,11 +1527,10 @@ case "$target" in
   edge|msedge|microsoft-edge)
     echo "Category: Web Browser / Microsoft Edge"
     if is_windows; then
-      edge_exe=$(app_path msedge.exe)
+      browser_report "$(app_path msedge.exe)" "$local_app_data/Microsoft/Edge/User Data" 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
     else
-      edge_exe=$(command -v microsoft-edge-stable || command -v microsoft-edge || true)
+      browser_report "$(command -v microsoft-edge-stable || command -v microsoft-edge || true)"
     fi
-    browser_report "$edge_exe" "$local_app_data/Microsoft/Edge/User Data" 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
     echo "Triad Checkpoints (Performance, Configuration, Security):"
     echo "  * Performance: Startup boost and background mode only if wanted; hardware acceleration on"
     echo "  * Configuration: One profile per context; sync only what is needed"

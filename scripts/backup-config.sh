@@ -117,6 +117,13 @@ confirm_sudo() {
   fi
 }
 
+# A target name becomes a folder name inside the backup store: one plain segment, no separators.
+validate_target_name() {
+  case "$1" in
+    ""|.|..|*/*|*\\*) echo "Error: invalid target name '$1' (use a plain name, no slashes)" >&2; return 1 ;;
+  esac
+}
+
 usage() {
   cat <<EOF
 Usage:
@@ -149,7 +156,10 @@ fi
 if [[ "$cmd" == "--list" ]]; then
   target="${2:-}"
   search_dir="$BACKUP_ROOT"
-  [[ -n "$target" ]] && search_dir="$BACKUP_ROOT/$target"
+  if [[ -n "$target" ]]; then
+    validate_target_name "$target" || exit 1
+    search_dir="$BACKUP_ROOT/$target"
+  fi
 
   if [[ ! -d "$search_dir" ]]; then
     echo "No backups found in $search_dir"
@@ -258,8 +268,14 @@ if [[ "$cmd" == "--restore" ]]; then
 fi
 
 # Backup mode: $1 is config-path, $2 is target-name, $3 is description
+if [[ "$cmd" == -* ]]; then
+  echo "Error: unknown option '$cmd'" >&2
+  usage >&2
+  exit 2
+fi
 config_path=$(normalize_path "$1")
 target_name="${2:-general}"
+validate_target_name "$target_name" || exit 1
 desc="${3:-Auto-backup before optimization}"
 
 if [[ ! -e "$config_path" ]]; then

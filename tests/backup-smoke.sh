@@ -138,4 +138,21 @@ else
   ok "restore stops when the safety copy cannot be written"
 fi
 
+# --- a mistyped option is an error, not a path that "needs no backup"
+mkdir -p "$WORK/opt"; printf 'x\n' > "$WORK/opt/a.conf"
+if bash "$BACKUP" --restor "$WORK/opt/a.conf" > "$WORK/out" 2> "$WORK/err"; then rc=0; else rc=$?; fi
+[[ "$rc" -eq 2 ]] || fail "unknown option exits $rc instead of 2"
+grep -q "unknown option" "$WORK/err" || fail "unknown option is not named in the error"
+ok "an unknown option is rejected with exit 2"
+
+# --- the target name is one plain folder name, never a path
+before="$(find "$WORK" -type d | wc -l)"
+for bad in '../escape' 'a/b' '..' '.'; do
+  if bash "$BACKUP" "$WORK/opt/a.conf" "$bad" > "$WORK/out" 2> "$WORK/err"; then fail "backup accepted target name '$bad'"; fi
+  grep -q "invalid target name" "$WORK/err" || fail "target name '$bad': no clear error"
+done
+if bash "$BACKUP" --list '../..' > "$WORK/out" 2> "$WORK/err"; then fail "--list accepted target '../..'"; fi
+[[ "$(find "$WORK" -type d | wc -l)" -eq "$before" ]] || fail "a rejected target name still created folders"
+ok "target names with slashes or dots are rejected before anything is written"
+
 echo "backup-smoke: $pass passed, $skipped skipped"

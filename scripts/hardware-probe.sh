@@ -56,12 +56,9 @@ if is_windows; then
     cpu_cores=$(echo "$ps_data" | grep -oE '"Threads":[0-9]+' | cut -d: -f2 || echo "unknown")
     cpu_arch=$(echo "$ps_data" | grep -oE '"Arch":"[^"]+"' | cut -d: -f2 | tr -d '"' || echo "unknown")
     power_raw=$(echo "$ps_data" | grep -oE '"PowerScheme":"[^"]+"' | cut -d: -f2- | tr -d '"' || true)
-    # powercfg prints "<label>: <GUID>  (<plan name>)"; keep only the plan name
-    if [[ "$power_raw" =~ \(([^\)]*)\)[[:space:]]*$ ]]; then
-      cpu_governor="${BASH_REMATCH[1]}"
-    else
-      cpu_governor="unknown"
-    fi
+    # keep only the plan name; without one in parentheses the GUID is not shown
+    cpu_governor="$(power_plan_name "$power_raw")"
+    if [[ -z "$cpu_governor" || "$cpu_governor" == "$power_raw" ]]; then cpu_governor="unknown"; fi
     microcode_rev="N/A (Managed by Windows/UEFI)"
     ram_total_gb=$(echo "$ps_data" | grep -oE '"RAMTotalGB":[0-9.]+' | cut -d: -f2 || echo "unknown")
     swap_total_gb=$(echo "$ps_data" | grep -oE '"SwapTotalGB":[0-9.]+' | cut -d: -f2 || echo "unknown")
