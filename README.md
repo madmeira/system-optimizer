@@ -5,7 +5,7 @@ A hardware-aware, cross-platform system, runtime, and developer toolchain optimi
 | Agent | Invocation | Status |
 |---|---|---|
 | Pi | `/skill:system-optimizer [targets]` | Original target |
-| Claude Code | `/system-optimizer [targets]` (skill folder `~/.claude/skills/system-optimizer/`) | Files installed; full end-to-end run not yet verified |
+| Claude Code | `/system-optimizer [targets]` (skill folder `~/.claude/skills/system-optimizer/`) | Verified: `full` audit run on a Windows 11 VM (read-only) |
 | Codex | mention `system-optimizer` by name, or copy `SKILL.md` into `AGENTS.md` | Untested |
 
 All scripts are plain bash and run on their own; script paths in the docs are relative to the skill folder.

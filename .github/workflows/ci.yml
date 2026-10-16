@@ -66,3 +66,7 @@ jobs:
       - name: All Targets Smoke Test (every target-inspect target runs without errors)
         shell: bash
         run: bash tests/inspect-smoke.sh
+
+      - name: Windows Targets Smoke Test (Windows branch of target-inspect on a real host)
+        shell: bash
+        run: bash tests/inspect-windows.sh

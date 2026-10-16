@@ -344,11 +344,11 @@ case "$target" in
     ;;
   winget)
     echo "Category: Package Manager / Windows Package Manager (winget)"
-    winget_bin=$(which winget 2>/dev/null || echo "")
+    winget_bin=$(command -v winget 2>/dev/null || echo "")
     echo "Binary: ${winget_bin:-Not installed}"
-    winget_ver="Unknown"
+    winget_ver="unknown"
     if [[ -n "$winget_bin" ]]; then
-      winget_ver=$(winget --version 2>/dev/null || echo "Unknown")
+      winget_ver=$(winget --version 2>/dev/null || echo "unknown")
     fi
     echo "Version: $winget_ver"
 
@@ -384,7 +384,7 @@ case "$target" in
     ;;
   windows-terminal|wt)
     echo "Category: Terminal Emulator / Windows Terminal"
-    wt_bin=$(which wt 2>/dev/null || echo "")
+    wt_bin=$(command -v wt 2>/dev/null || echo "")
     echo "Binary: ${wt_bin:-App Execution Alias (wt.exe)}"
 
     wt_settings=""
@@ -423,7 +423,7 @@ case "$target" in
     ;;
   wsl)
     echo "Category: Subsystem & Virtualization / Windows Subsystem for Linux (WSL)"
-    wsl_bin=$(which wsl 2>/dev/null || which wsl.exe 2>/dev/null || echo "")
+    wsl_bin=$(command -v wsl 2>/dev/null || command -v wsl.exe 2>/dev/null || echo "")
     echo "Binary: ${wsl_bin:-/c/Windows/System32/wsl.exe}"
     wsl_ver=$(wsl.exe --version 2>/dev/null | tr -d '\0\r' || true)
     # without WSL, wsl.exe prints its help text (translated, but it always names "wsl.exe")
@@ -488,9 +488,9 @@ case "$target" in
     ;;
   pwsh|powershell)
     echo "Category: Shell Environment / PowerShell"
-    ps_bin=$(which pwsh 2>/dev/null || which powershell 2>/dev/null || echo "")
-    echo "Binary: ${ps_bin:-Unknown}"
-    ps_ver=$(run_ps '$PSVersionTable.PSVersion.ToString()' 2>/dev/null || echo "Unknown")
+    ps_bin=$(command -v pwsh 2>/dev/null || command -v powershell 2>/dev/null || echo "")
+    echo "Binary: ${ps_bin:-unknown}"
+    ps_ver=$(run_ps '$PSVersionTable.PSVersion.ToString()' 2>/dev/null || echo "unknown")
     echo "Version: $ps_ver"
 
     echo "PowerShell Profile Paths:"
@@ -588,11 +588,11 @@ case "$target" in
     ;;
   pi|pi-agent|agent)
     echo "Category: Agent Harness / Pi Coding Agent"
-    pi_bin=$(which pi 2>/dev/null || echo "")
-    echo "Binary: ${pi_bin:-Unknown (running via wrapper/npx)}"
-    pi_ver="Unknown"
+    pi_bin=$(command -v pi 2>/dev/null || echo "")
+    echo "Binary: ${pi_bin:-unknown (running via wrapper/npx)}"
+    pi_ver="unknown"
     if [[ -n "$pi_bin" ]]; then
-      pi_ver=$("$pi_bin" --version 2>/dev/null || echo "Unknown")
+      pi_ver=$("$pi_bin" --version 2>/dev/null || echo "unknown")
     fi
     echo "Version: $pi_ver"
 
@@ -615,7 +615,7 @@ case "$target" in
     fi
 
     echo "Mise Toolchain Synergy in Agent Harness:"
-    mise_bin=$(which mise 2>/dev/null || echo "")
+    mise_bin=$(command -v mise 2>/dev/null || echo "")
     if [[ -n "$mise_bin" ]]; then
       echo "  * Mise Binary Detected: $mise_bin"
       mise_shims="$HOME/.local/share/mise/shims"
@@ -643,10 +643,10 @@ case "$target" in
     ;;
   controld|ctrld)
     echo "Category: Network & DNS / Control D Encrypted Resolver Daemon"
-    ctrld_bin=$(which ctrld 2>/dev/null || which controld 2>/dev/null || echo "")
+    ctrld_bin=$(command -v ctrld 2>/dev/null || command -v controld 2>/dev/null || echo "")
     echo "Binary: ${ctrld_bin:-Not installed}"
     if [[ -n "$ctrld_bin" ]]; then
-      ctrld_ver=$("$ctrld_bin" version 2>/dev/null || "$ctrld_bin" --version 2>/dev/null || echo "Unknown")
+      ctrld_ver=$("$ctrld_bin" version 2>/dev/null || "$ctrld_bin" --version 2>/dev/null || echo "unknown")
       echo "Version: $ctrld_ver"
     fi
 
@@ -669,7 +669,7 @@ case "$target" in
     ;;
   rustdesk)
     echo "Category: Remote Desktop / RustDesk Remote Access"
-    rd_bin=$(which rustdesk 2>/dev/null || echo "")
+    rd_bin=$(command -v rustdesk 2>/dev/null || echo "")
     echo "Binary: ${rd_bin:-Not installed (Windows App or Service)}"
 
     echo "Discovered Configuration Files:"
@@ -692,10 +692,10 @@ case "$target" in
     ;;
   mpv)
     echo "Category: Media Player / mpv Video Player"
-    mpv_bin=$(which mpv 2>/dev/null || echo "")
+    mpv_bin=$(command -v mpv 2>/dev/null || echo "")
     echo "Binary: ${mpv_bin:-Not installed}"
     if [[ -n "$mpv_bin" ]]; then
-      mpv_ver=$("$mpv_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      mpv_ver=$("$mpv_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $mpv_ver"
     fi
 
@@ -723,9 +723,9 @@ case "$target" in
     fi
 
     echo "MPV + yt-dlp + GPU HWDEC Companion Synergy:"
-    ytdl_bin=$(which yt-dlp 2>/dev/null || echo "")
+    ytdl_bin=$(command -v yt-dlp 2>/dev/null || echo "")
     if [[ -n "$ytdl_bin" ]]; then
-      ytdl_ver=$("$ytdl_bin" --version 2>/dev/null || echo "Unknown")
+      ytdl_ver=$("$ytdl_bin" --version 2>/dev/null || echo "unknown")
       echo "  * Media Streamer (yt-dlp): [AVAILABLE] ($ytdl_bin $ytdl_ver)"
     else
       echo "  * Media Streamer (yt-dlp): [NOT FOUND] (Install yt-dlp to stream web video directly to mpv)"
@@ -751,10 +751,10 @@ case "$target" in
     ;;
   topgrade)
     echo "Category: Maintenance & Update Orchestrator / Topgrade"
-    tg_bin=$(which topgrade 2>/dev/null || echo "")
+    tg_bin=$(command -v topgrade 2>/dev/null || echo "")
     echo "Binary: ${tg_bin:-Not installed}"
     if [[ -n "$tg_bin" ]]; then
-      tg_ver=$("$tg_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      tg_ver=$("$tg_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $tg_ver"
     fi
 
@@ -782,7 +782,7 @@ case "$target" in
       echo "  * Pre-Sudo Credential Cache: $pre_sudo_val"
 
       echo "Mise Companion Integration in Topgrade:"
-      mise_bin=$(which mise 2>/dev/null || echo "")
+      mise_bin=$(command -v mise 2>/dev/null || echo "")
       if [[ -n "$mise_bin" ]]; then
         tg_has_mise=$(grep -E '^[[:space:]]*\[mise\]' "$tg_cfg" 2>/dev/null || true)
         tg_bump=$(grep -A 5 '^[[:space:]]*\[mise\]' "$tg_cfg" 2>/dev/null | grep -E '^[[:space:]]*bump[[:space:]]*=' | cut -d= -f2- | tr -d ' "' || echo "false")
@@ -807,10 +807,10 @@ case "$target" in
     ;;
   mise|rtx)
     echo "Category: Polyglot Tool & Runtime Manager / mise"
-    mise_bin=$(which mise 2>/dev/null || echo "")
+    mise_bin=$(command -v mise 2>/dev/null || echo "")
     echo "Binary: ${mise_bin:-Not installed}"
     if [[ -n "$mise_bin" ]]; then
-      mise_ver=$("$mise_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      mise_ver=$("$mise_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $mise_ver"
       if is_windows; then
         echo "Platform: Windows (Native / shims)"
@@ -854,7 +854,7 @@ case "$target" in
     fi
 
     echo "Topgrade Integration Status:"
-    tg_bin=$(which topgrade 2>/dev/null || echo "")
+    tg_bin=$(command -v topgrade 2>/dev/null || echo "")
     if [[ -n "$tg_bin" ]]; then
       tg_cfg=""
       for tf in "$roaming_app_data/topgrade.toml" "$HOME/.config/topgrade.toml"; do
@@ -878,7 +878,7 @@ case "$target" in
     fi
 
     echo "Neovim Companion Status:"
-    nv_bin=$(which nvim 2>/dev/null || which neovim 2>/dev/null || echo "")
+    nv_bin=$(command -v nvim 2>/dev/null || command -v neovim 2>/dev/null || echo "")
     if [[ -n "$nv_bin" ]]; then
       nv_cfg=""
       for nf in "$local_app_data/nvim/init.lua" "$HOME/.config/nvim/init.lua"; do
@@ -900,11 +900,11 @@ case "$target" in
     ;;
   cargo|rust|rustc)
     echo "Category: Toolchain & Package Manager / Cargo & Rust"
-    cg_bin=$(which cargo 2>/dev/null || echo "")
+    cg_bin=$(command -v cargo 2>/dev/null || echo "")
     echo "Binary: ${cg_bin:-Not installed}"
     if [[ -n "$cg_bin" ]]; then
-      cg_ver=$("$cg_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
-      rc_ver=$(rustc --version 2>/dev/null | head -n 1 || echo "Unknown")
+      cg_ver=$("$cg_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
+      rc_ver=$(rustc --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $cg_ver (rustc: $rc_ver)"
     fi
 
@@ -928,7 +928,7 @@ case "$target" in
     fi
 
     echo "Mise & Topgrade Companion Integration:"
-    mise_bin=$(which mise 2>/dev/null || echo "")
+    mise_bin=$(command -v mise 2>/dev/null || echo "")
     if [[ -n "$mise_bin" ]]; then
       mise_cfg=""
       for mf in "$HOME/.config/mise/config.toml" "$local_app_data/mise/config.toml"; do
@@ -940,7 +940,7 @@ case "$target" in
       echo "  * Mise is not installed."
     fi
 
-    tg_bin=$(which topgrade 2>/dev/null || echo "")
+    tg_bin=$(command -v topgrade 2>/dev/null || echo "")
     if [[ -n "$tg_bin" ]]; then
       tg_cfg=""
       for tf in "$roaming_app_data/topgrade.toml" "$HOME/.config/topgrade.toml"; do
@@ -963,10 +963,10 @@ case "$target" in
     ;;
   ripgrep|rg)
     echo "Category: Search Utility / ripgrep (rg)"
-    rg_bin=$(which rg 2>/dev/null || which ripgrep 2>/dev/null || echo "")
+    rg_bin=$(command -v rg 2>/dev/null || command -v ripgrep 2>/dev/null || echo "")
     echo "Binary: ${rg_bin:-Not installed}"
     if [[ -n "$rg_bin" ]]; then
-      rg_ver=$("$rg_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      rg_ver=$("$rg_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $rg_ver"
     fi
 
@@ -981,7 +981,7 @@ case "$target" in
     else
       echo "  * FZF Backend: [RECOMMENDED] (Wire rg as backend: export FZF_DEFAULT_COMMAND=\"rg --files --hidden --glob '!.git/*'\")"
     fi
-    bat_bin=$(which bat 2>/dev/null || echo "")
+    bat_bin=$(command -v bat 2>/dev/null || echo "")
     if [[ -n "$bat_bin" ]]; then
       echo "  * Bat Previewer: [AVAILABLE] ($bat_bin provides line-numbered syntax previews)"
     else
@@ -997,10 +997,10 @@ case "$target" in
     ;;
   zoxide)
     echo "Category: Navigation / zoxide Directory Jumper"
-    zo_bin=$(which zoxide 2>/dev/null || echo "")
+    zo_bin=$(command -v zoxide 2>/dev/null || echo "")
     echo "Binary: ${zo_bin:-Not installed}"
     if [[ -n "$zo_bin" ]]; then
-      zo_ver=$("$zo_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      zo_ver=$("$zo_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $zo_ver"
     fi
 
@@ -1036,10 +1036,10 @@ case "$target" in
     ;;
   eza)
     echo "Category: Modern File Lister / eza"
-    eza_bin=$(which eza 2>/dev/null || echo "")
+    eza_bin=$(command -v eza 2>/dev/null || echo "")
     echo "Binary: ${eza_bin:-Not installed}"
     if [[ -n "$eza_bin" ]]; then
-      eza_ver=$("$eza_bin" --version 2>/dev/null | head -n 2 | tr '\n' ' ' || echo "Unknown")
+      eza_ver=$("$eza_bin" --version 2>/dev/null | head -n 2 | tr '\n' ' ' || echo "unknown")
       echo "Version: $eza_ver"
     fi
 
@@ -1057,10 +1057,10 @@ case "$target" in
     ;;
   lazygit)
     echo "Category: Git Terminal UI / lazygit"
-    lg_bin=$(which lazygit 2>/dev/null || echo "")
+    lg_bin=$(command -v lazygit 2>/dev/null || echo "")
     echo "Binary: ${lg_bin:-Not installed}"
     if [[ -n "$lg_bin" ]]; then
-      lg_ver=$("$lg_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      lg_ver=$("$lg_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $lg_ver"
     fi
 
@@ -1107,10 +1107,10 @@ case "$target" in
     ;;
   neovim|nvim)
     echo "Category: Modal Text Editor / Neovim"
-    nv_bin=$(which nvim 2>/dev/null || which neovim 2>/dev/null || echo "")
+    nv_bin=$(command -v nvim 2>/dev/null || command -v neovim 2>/dev/null || echo "")
     echo "Binary: ${nv_bin:-Not installed}"
     if [[ -n "$nv_bin" ]]; then
-      nv_ver=$("$nv_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      nv_ver=$("$nv_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $nv_ver"
     fi
 
@@ -1133,7 +1133,7 @@ case "$target" in
       fi
 
       echo "Mise Companion & Toolchain Integration in Neovim:"
-      mise_bin=$(which mise 2>/dev/null || echo "")
+      mise_bin=$(command -v mise 2>/dev/null || echo "")
       if [[ -n "$mise_bin" ]]; then
         echo "  * Mise Binary Detected: $mise_bin"
         has_shims_in_path=false
@@ -1172,10 +1172,10 @@ case "$target" in
     ;;
   git)
     echo "Category: Version Control / Git"
-    git_bin=$(which git 2>/dev/null || echo "")
+    git_bin=$(command -v git 2>/dev/null || echo "")
     echo "Binary: ${git_bin:-Not installed}"
     if [[ -n "$git_bin" ]]; then
-      git_ver=$(git --version 2>/dev/null || echo "Unknown")
+      git_ver=$(git --version 2>/dev/null || echo "unknown")
       echo "Version: $git_ver"
     fi
 
@@ -1201,10 +1201,10 @@ case "$target" in
     ;;
   bat)
     echo "Category: Syntax Pager / bat"
-    bat_bin=$(which bat 2>/dev/null || echo "")
+    bat_bin=$(command -v bat 2>/dev/null || echo "")
     echo "Binary: ${bat_bin:-Not installed}"
     if [[ -n "$bat_bin" ]]; then
-      bat_ver=$("$bat_bin" --version 2>/dev/null || echo "Unknown")
+      bat_ver=$("$bat_bin" --version 2>/dev/null || echo "unknown")
       echo "Version: $bat_ver"
     fi
 
@@ -1225,10 +1225,10 @@ case "$target" in
     ;;
   fzf)
     echo "Category: Fuzzy Finder / fzf"
-    fzf_bin=$(which fzf 2>/dev/null || echo "")
+    fzf_bin=$(command -v fzf 2>/dev/null || echo "")
     echo "Binary: ${fzf_bin:-Not installed}"
     if [[ -n "$fzf_bin" ]]; then
-      fzf_ver=$("$fzf_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      fzf_ver=$("$fzf_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $fzf_ver"
     fi
 
@@ -1260,10 +1260,10 @@ case "$target" in
     ;;
   starship)
     echo "Category: Shell Prompt / Starship Cross-Shell Prompt"
-    ss_bin=$(which starship 2>/dev/null || echo "")
+    ss_bin=$(command -v starship 2>/dev/null || echo "")
     echo "Binary: ${ss_bin:-Not installed}"
     if [[ -n "$ss_bin" ]]; then
-      ss_ver=$("$ss_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      ss_ver=$("$ss_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $ss_ver"
     fi
 
@@ -1314,10 +1314,10 @@ case "$target" in
     ;;
   yt-dlp)
     echo "Category: Media Downloader / yt-dlp"
-    ytdl_bin=$(which yt-dlp 2>/dev/null || echo "")
+    ytdl_bin=$(command -v yt-dlp 2>/dev/null || echo "")
     echo "Binary: ${ytdl_bin:-Not installed}"
     if [[ -n "$ytdl_bin" ]]; then
-      ytdl_ver=$("$ytdl_bin" --version 2>/dev/null || echo "Unknown")
+      ytdl_ver=$("$ytdl_bin" --version 2>/dev/null || echo "unknown")
       echo "Version: $ytdl_ver"
     fi
 
@@ -1335,10 +1335,10 @@ case "$target" in
     ;;
   herdr)
     echo "Category: Terminal Workspace & AI Agent Multiplexer / Herdr"
-    hdr_bin=$(which herdr 2>/dev/null || echo "")
+    hdr_bin=$(command -v herdr 2>/dev/null || echo "")
     echo "Binary: ${hdr_bin:-Not installed}"
     if [[ -n "$hdr_bin" ]]; then
-      hdr_ver=$("$hdr_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      hdr_ver=$("$hdr_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $hdr_ver"
     fi
 
@@ -1380,7 +1380,7 @@ case "$target" in
     theme_desc="synchronize theme (or prompt user)"
     [[ -n "$inferred_thm" ]] && theme_desc="synchronize theme (inferred: $inferred_thm)"
     echo "Mise Companion Workspace Toolchains:"
-    mise_bin=$(which mise 2>/dev/null || echo "")
+    mise_bin=$(command -v mise 2>/dev/null || echo "")
     if [[ -n "$mise_bin" ]]; then
       echo "  * Mise Binary Detected: $mise_bin"
       mise_shims="$HOME/.local/share/mise/shims"
@@ -1403,10 +1403,10 @@ case "$target" in
     ;;
   gh|github-cli)
     echo "Category: Developer Tool / GitHub CLI (gh)"
-    gh_bin=$(which gh 2>/dev/null || echo "")
+    gh_bin=$(command -v gh 2>/dev/null || echo "")
     echo "Binary: ${gh_bin:-Not installed}"
     if [[ -n "$gh_bin" ]]; then
-      gh_ver=$("$gh_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      gh_ver=$("$gh_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $gh_ver"
     fi
 
@@ -1494,7 +1494,7 @@ case "$target" in
       run_ps 'Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | ForEach-Object { "  * $($_.Name): $($_.InterfaceDescription), $($_.LinkSpeed)" }' 2>/dev/null || echo "  (unknown)"
       echo "DNS Servers (IPv4):"
       run_ps 'Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object { $_.ServerAddresses } | ForEach-Object { "  * $($_.InterfaceAlias): $($_.ServerAddresses -join ",")" }' 2>/dev/null || echo "  (unknown)"
-      echo "TCP Receive Window Auto-Tuning: $(run_ps '(netsh interface tcp show global | Select-String "Auto-Tuning Level").ToString().Split(":")[1].Trim()' 2>/dev/null || echo unknown)"
+      echo "TCP Receive Window Auto-Tuning: $(run_ps '"$((Get-NetTCPSetting -SettingName Internet).AutoTuningLevelLocal)".ToLower()' 2>/dev/null || echo unknown)"
       echo "Listening TCP Sockets: $(netstat -ano -p tcp 2>/dev/null | grep -ci LISTENING || true)"
     else
       echo "Default Route: $(ip route show default 2>/dev/null | head -n 1 || true)"
@@ -1555,7 +1555,7 @@ case "$target" in
   google-chrome) binary_lookup="google-chrome-stable" ;;
 esac
 
-bin_path=$(which "$binary_lookup" 2>/dev/null || which "$target" 2>/dev/null || echo "")
+bin_path=$(command -v "$binary_lookup" 2>/dev/null || command -v "$target" 2>/dev/null || echo "")
 
 if [[ -z "$bin_path" ]]; then
   echo "Status: NOT FOUND IN PATH"
@@ -1607,7 +1607,7 @@ esac
 echo "Status: INSTALLED"
 echo "Binary Path: $bin_path"
 
-version="Unknown"
+version="unknown"
 for flag in "--version" "-V" "-v" "version"; do
   if ver_out=$("$bin_path" $flag 2>/dev/null | tr -d '\0' | head -n 1); then
     if [[ -n "$ver_out" ]]; then

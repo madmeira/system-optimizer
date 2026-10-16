@@ -28,7 +28,7 @@ A comprehensive optimization skill for Windows and Linux systems, package manage
 | Agent | How to invoke | Status |
 |---|---|---|
 | Pi | `/skill:system-optimizer [targets]` | Original target |
-| Claude Code | `/system-optimizer [targets]`, or ask for it by name; skill folder `~/.claude/skills/system-optimizer/` | Files installed; full end-to-end run not yet verified |
+| Claude Code | `/system-optimizer [targets]`, or ask for it by name; skill folder `~/.claude/skills/system-optimizer/` | Verified: `full` audit run on a Windows 11 VM (read-only) |
 | Codex | Mention `system-optimizer` by name, or copy this file into `AGENTS.md` | Untested |
 
 Script paths below (`scripts/...`, `references/...`) are relative to the skill folder. The examples use the bare form `system-optimizer [targets]`; add your agent's prefix from the table.

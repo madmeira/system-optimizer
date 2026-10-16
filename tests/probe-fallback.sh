@@ -267,6 +267,12 @@ bash "$ROOT/scripts/target-inspect.sh" bash > "$WORK/bash8.txt"
 grep -Eq 'Interactive Startup Latency: (~[0-9]+\.[0-9] ms|n/a)' "$WORK/bash8.txt" || fail "bash latency line: $(grep Latency "$WORK/bash8.txt")"
 ok "bash startup latency is a number or n/a"
 
+# translated Windows text must not be parsed: TCP tuning and 8.3 names come from cmdlets and the registry
+if grep -n 'netsh' "$ROOT/scripts/system-probe.sh" "$ROOT/scripts/target-inspect.sh" >&2 || grep -n '8dot3name' "$ROOT/scripts/system-probe.sh" >&2; then
+  fail "a probe parses the text of netsh or fsutil 8dot3name, which is translated"
+fi
+ok "TCP tuning and 8.3 names do not depend on translated command output"
+
 unset PS_STUB_OUT
 
 # ---- case 4: parent disk names (lsblk is stubbed to fail so the name pattern is what gets tested)

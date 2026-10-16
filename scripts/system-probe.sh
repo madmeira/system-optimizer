@@ -24,9 +24,11 @@ if is_windows; then
       $out = cmd.exe /c "fsutil behavior query DisableDeleteNotify 2>&1"
       if ($out -match "NTFS DisableDeleteNotify = 0") { "Enabled (TRIM active)" } elseif ($out -match "DisableDeleteNotify") { "Disabled" } else { "unknown" }
     } catch { "unknown" }
+    # registry values and cmdlets, not the translated text of command-line tools
     $shortNames = try {
-      $sn = cmd.exe /c "fsutil 8dot3name query 2>&1"
-      if ($sn -match "state is 0|state is 2") { "Enabled" } elseif ($sn -match "state is") { "Disabled" } else { "unknown" }
+      switch ((Get-ItemPropertyValue -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name NtfsDisable8dot3NameCreation)) {
+        0 { "Enabled" } 1 { "Disabled" } 2 { "Per volume setting" } 3 { "Disabled except on the system volume" } default { "unknown" }
+      }
     } catch { "unknown" }
 
     $vols = @(Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object {
@@ -34,7 +36,7 @@ if is_windows; then
     })
 
     $mm = try { (Get-MMAgent -ErrorAction SilentlyContinue).MemoryCompression } catch { $null }
-    $tcp = try { ((netsh interface tcp show global 2>$null) | Select-String "Receive Window Auto-Tuning Level") -replace "^.*:\s*", "" } catch { "unknown" }
+    $tcp = try { "$((Get-NetTCPSetting -SettingName Internet).AutoTuningLevelLocal)".ToLower() } catch { "unknown" }
     $hiber = try { (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power" -Name HiberbootEnabled -ErrorAction SilentlyContinue).HiberbootEnabled } catch { $null }
     $startups = try { @(Get-CimInstance Win32_StartupCommand | Select-Object -ExpandProperty Name) } catch { @() }
     $stoppedSvcs = try { @(Get-Service | Where-Object { $_.StartType -eq "Automatic" -and $_.Status -ne "Running" } | Select-Object -ExpandProperty Name) } catch { @() }
