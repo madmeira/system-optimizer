@@ -69,12 +69,20 @@ score="$(jget "$WORK/sec.json" score)"
 ok "security-audit reports unknown and no false 6/6 when PowerShell fails ($score)"
 
 run_probe security-audit.sh > "$WORK/sec.txt"
-for label in 'Real-Time Protection' 'Antivirus Engine' 'Protection:' 'User Account Control' 'ExecutionPolicy' 'OpenSSH Server' 'Integrity Checks' 'Profile Status'; do
+labels=('Real-Time Protection' 'Antivirus Engine' 'Protection:' 'User Account Control' 'ExecutionPolicy' 'OpenSSH Server' 'Profile Status')
+forbidden='Enabled \(Secure\)|\(OK\)'
+# winget is not PowerShell: when the host has a readable winget the integrity line is a real answer
+if command -v winget > /dev/null 2>&1; then
+  echo "note: winget is present here, so its Integrity Checks line is not required to say unknown"
+else
+  labels+=('Integrity Checks'); forbidden+='|Enforced'
+fi
+for label in "${labels[@]}"; do
   line="$(grep -m1 -F -- "$label" "$WORK/sec.txt" || true)"
   [[ -n "$line" ]] || fail "text output has no '$label' line"
   grep -q 'unknown' <<< "$line" || fail "text line '$line' does not say unknown"
 done
-if grep -qE 'Enabled \(Secure\)|\(OK\)|Enforced' "$WORK/sec.txt"; then fail "text output claims protection that was not checked"; fi
+if grep -qE "$forbidden" "$WORK/sec.txt"; then fail "text output claims protection that was not checked"; fi
 ok "security-audit text says unknown"
 
 run_probe system-probe.sh --json > "$WORK/sys.json"

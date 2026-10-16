@@ -29,8 +29,9 @@ run_ps() {
 # JSON helpers: never emit an invented value.
 json_num()  { if [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]; then printf '%s' "$1"; else printf 'null'; fi; }
 json_bool() { case "$1" in true|false) printf '%s' "$1" ;; *) printf '"unknown"' ;; esac; }
-# Escape a single-line text value for use inside a JSON string: backslash first, then quote.
-json_str()  { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+# Escape a text value for use inside a JSON string: newlines and tabs become spaces, other control
+# characters are dropped, then backslash first and quote second.
+json_str()  { printf '%s' "$1" | tr '\n\r\t' '   ' | tr -d '\000-\010\013\014\016-\037' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 
 # Print a JSON array of strings from the arguments (each one escaped with json_str).
 to_json_arr() {
@@ -58,4 +59,15 @@ parent_disk() {
     parent="$(printf '%s' "$dev" | sed -E 's#^(nvme[0-9]+n[0-9]+|mmcblk[0-9]+)p[0-9]+$#\1#; s#^([sv]d[a-z]+)[0-9]+$#\1#')"
   fi
   printf '%s' "$parent"
+}
+
+# Run a command and print the first line of its output, or the default when it prints nothing.
+# Never fails. Use it instead of $(cmd || echo default): systemctl is-active prints "inactive" AND
+# exits 3, so the fallback echo would add a second line.
+first_line_or() {
+  local default="$1" out
+  shift
+  out="$("$@" 2>/dev/null || true)"
+  out="${out%%$'\n'*}"
+  printf '%s' "${out:-$default}"
 }

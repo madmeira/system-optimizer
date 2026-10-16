@@ -159,8 +159,8 @@ fw_enabled="disabled"
 
 for fw in ufw nftables firewalld; do
   if command -v "$fw" >/dev/null 2>&1; then
-    act=$(systemctl is-active "$fw" 2>/dev/null || echo "inactive")
-    enb=$(systemctl is-enabled "$fw" 2>/dev/null || echo "disabled")
+    act=$(first_line_or inactive systemctl is-active "$fw")
+    enb=$(first_line_or disabled systemctl is-enabled "$fw")
     if [[ "$act" == "active" ]]; then
       fw_name="$fw"
       fw_active="$act"
@@ -191,7 +191,7 @@ ssh_pass_auth="unknown"
 
 if command -v sshd >/dev/null 2>&1; then
   sshd_installed=true
-  if [[ $(systemctl is-active sshd 2>/dev/null || echo "inactive") == "active" ]]; then
+  if [[ $(first_line_or inactive systemctl is-active sshd) == "active" ]]; then
     sshd_active=true
   fi
 
@@ -241,7 +241,7 @@ if [[ -f /etc/pacman.conf ]]; then
   pacman_siglevel=$(grep -E "^[[:space:]]*SigLevel" /etc/pacman.conf 2>/dev/null | head -n 1 | sed 's/.*=[ \t]*//' || echo "default")
 fi
 
-keyring_timer_active=$(systemctl is-active archlinux-keyring-wkd-sync.timer 2>/dev/null || echo "inactive")
+keyring_timer_active=$(first_line_or inactive systemctl is-active archlinux-keyring-wkd-sync.timer)
 
 pending_sec_updates="unknown"
 if command -v arch-audit >/dev/null 2>&1; then

@@ -127,8 +127,8 @@ fi
 root_source=$(df --output=source / 2>/dev/null | tail -1 || echo "")
 root_fstype=$(df --output=fstype / 2>/dev/null | tail -1 || echo "")
 mount_options=$(findmnt -n -o OPTIONS / 2>/dev/null || echo "defaults")
-fstrim_active=$(systemctl is-active fstrim.timer 2>/dev/null || echo "inactive")
-fstrim_enabled=$(systemctl is-enabled fstrim.timer 2>/dev/null || echo "disabled")
+fstrim_active=$(first_line_or inactive systemctl is-active fstrim.timer)
+fstrim_enabled=$(first_line_or disabled systemctl is-enabled fstrim.timer)
 
 swappiness=$(sysctl -n vm.swappiness 2>/dev/null || echo "unknown")
 vfs_cache_pressure=$(sysctl -n vm.vfs_cache_pressure 2>/dev/null || echo "unknown")
