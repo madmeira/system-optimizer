@@ -45,7 +45,7 @@ expect() {  # expect <json-file> <path> <expected-json> <label>
 # ---- case 1: PowerShell fails completely
 # All three PowerShell entry points are stubbed: GitHub's runners ship a real pwsh, so a missing stub
 # would run the real PowerShell. The stub prints $PS_STUB_OUT, or fails when it is empty.
-ps_stub() { [[ -z "${PS_STUB_LOG:-}" ]] || printf '%s\n' "$*" >> "$PS_STUB_LOG"; if [[ -n "${PS_STUB_OUT:-}" ]]; then printf '%s' "$PS_STUB_OUT"; else return 1; fi; }
+ps_stub() { [[ -z "${PS_STUB_LOG:-}" ]] || printf 'CALL %s\n' "$*" >> "$PS_STUB_LOG"; if [[ -n "${PS_STUB_OUT:-}" ]]; then printf '%s' "$PS_STUB_OUT"; else return 1; fi; }
 pwsh() { ps_stub "$@"; }; powershell() { ps_stub "$@"; }; powershell.exe() { ps_stub "$@"; }
 export -f ps_stub pwsh powershell powershell.exe
 
@@ -226,8 +226,44 @@ export PS_STUB_LOG="$WORK/ps-cmds.txt"
 : > "$WORK/ps-cmds.txt"
 run_probe target-inspect.sh chrome > /dev/null
 grep -q 'HKCU' "$WORK/ps-cmds.txt" || fail "chrome lookup does not try the per-user registry key"
-unset PS_STUB_LOG
 ok "chrome lookup tries the machine-wide and the per-user registry keys"
+
+# one browser target = one PowerShell call for the browser itself (plus the GPU lookup at the top)
+launches=$(grep -c '^CALL ' "$WORK/ps-cmds.txt" || true)
+[[ "$launches" -le 2 ]] || fail "chrome target started PowerShell $launches times (expected at most 2)"
+ok "a browser target starts PowerShell at most twice"
+unset PS_STUB_LOG
+
+# wsl: a translated "no distribution" message with the Store link is not a distribution list, even at exit 0
+wsl.exe() { printf 'O Subsistema do Windows para Linux nao tem distribuicoes instaladas.\r\nhttps://aka.ms/wslstore\r\n'; }
+export -f wsl.exe
+run_probe target-inspect.sh wsl > "$WORK/wsl8link.txt"
+grep -qF '(none: no WSL distribution is installed)' "$WORK/wsl8link.txt" || fail "message with the Store link is listed as a distribution"
+unset -f wsl.exe
+ok "wsl message with the Store link is recognized at exit 0"
+
+# winget: "Enforced" needs both policy lines to be read; a missing or unreadable line is unknown, an enabled one is a warning
+export PS_STUB_OUT='{"FirewallAllActive":true,"FirewallSummary":"Domain:Active","RealTimeProtection":true,"AntivirusEnabled":true,"PUAProtection":1,"UACEnabled":true,"ExecutionPolicy":"RemoteSigned","SSHDService":"NotInstalled"}'
+winget() { printf 'Windows Package Manager v1.2\r\nSomething unrelated\r\n'; }
+export -f winget
+run_probe security-audit.sh > "$WORK/wg1.txt"
+if grep -q 'Integrity Checks: Enforced' "$WORK/wg1.txt"; then fail "winget is Enforced although no policy line was found"; fi
+grep -q 'Integrity Checks: unknown' "$WORK/wg1.txt" || fail "missing winget policy lines are not reported as unknown"
+winget() { printf 'InstallerHashOverride                     Disabled\r\nLocalArchiveMalwareScanOverride           Disabled\r\n'; }
+export -f winget
+run_probe security-audit.sh > "$WORK/wg2.txt"
+grep -q 'Integrity Checks: Enforced' "$WORK/wg2.txt" || fail "both policies Disabled should be Enforced"
+winget() { printf 'InstallerHashOverride                     Enabled\r\nLocalArchiveMalwareScanOverride           Disabled\r\n'; }
+export -f winget
+run_probe security-audit.sh > "$WORK/wg3.txt"
+grep -q 'WARNING.*InstallerHashOverride is Enabled' "$WORK/wg3.txt" || fail "an enabled hash override is not a warning"
+winget() { printf 'InstallerHashOverride                     Habilitado\r\nLocalArchiveMalwareScanOverride           Habilitado\r\n'; }
+export -f winget
+run_probe security-audit.sh > "$WORK/wg4.txt"
+if grep -q 'Integrity Checks: Enforced' "$WORK/wg4.txt"; then fail "untranslatable winget values are reported as Enforced"; fi
+unset -f winget
+unset PS_STUB_OUT
+ok "winget integrity needs both policy lines: missing or unreadable is unknown, enabled is a warning"
 
 # python: the Microsoft Store shortcut is not a Python
 jhas() {  # jhas <json-file> <key> <item>

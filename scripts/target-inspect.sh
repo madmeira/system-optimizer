@@ -20,36 +20,48 @@ fi
 local_app_data="${LOCALAPPDATA:-$HOME/AppData/Local}"
 roaming_app_data="${APPDATA:-$HOME/AppData/Roaming}"
 
-# Windows: path of an installed program from its "App Paths" key, machine-wide first, then per-user.
-app_path() {
-  SO_APP="$1" run_ps 'foreach ($r in "HKLM","HKCU") { $v = (Get-ItemProperty "${r}:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$env:SO_APP" -ErrorAction SilentlyContinue)."(default)"; if ($v) { $v; break } }' 2>/dev/null || true
+# Print a browser found on Linux (empty $1 = not installed).
+browser_report_linux() {
+  local exe="$1" ver
+  if [[ -z "$exe" ]]; then
+    echo "Status: NOT INSTALLED"
+    return 0
+  fi
+  ver=$("$exe" --version 2>/dev/null | head -n 1 || true)
+  echo "Status: INSTALLED"
+  echo "Executable: $exe"
+  echo "Version: ${ver:-unknown}"
 }
 
-# Report a browser from its executable (empty when not found) and, on Windows, its user data folder
-# and policy key.
-browser_report() {
-  local exe="$1" data="${2:-}" policy_key="${3:-}" ver profiles managed
+# Print a browser found on Windows: <app exe name> <user data folder> <policy registry key>.
+# One PowerShell call prints three lines: the program path ("App Paths", machine-wide first, then
+# per-user), its version and whether the policy key exists.
+browser_report_win() {
+  local app="$1" data="$2" policy_key="$3" info exe="" ver="" managed="" profiles
+  info=$(SO_APP="$app" SO_KEY="$policy_key" run_ps '
+    $p = ""
+    foreach ($r in "HKLM","HKCU") {
+      $v = (Get-ItemProperty "${r}:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$env:SO_APP" -ErrorAction SilentlyContinue)."(default)"
+      if ($v) { $p = $v; break }
+    }
+    $p
+    if ($p) { (Get-Item -LiteralPath $p).VersionInfo.ProductVersion } else { "" }
+    Test-Path -Path $env:SO_KEY' 2>/dev/null || true)
+  { read -r exe; read -r ver; read -r managed; } <<< "$info" || true
   if [[ -n "$exe" ]]; then
     echo "Status: INSTALLED"
     echo "Executable: $exe"
-    if is_windows; then
-      ver=$(SO_EXE="$exe" run_ps '(Get-Item -LiteralPath $env:SO_EXE).VersionInfo.ProductVersion' 2>/dev/null || true)
-    else
-      ver=$("$exe" --version 2>/dev/null | head -n 1 || true)
-    fi
     echo "Version: ${ver:-unknown}"
-  elif is_windows && [[ -d "$data" ]]; then
+  elif [[ -d "$data" ]]; then
     echo "Status: user data found, executable not located"
   else
     echo "Status: NOT INSTALLED"
   fi
-  is_windows || return 0
   if [[ -d "$data" ]]; then
     profiles=$(find "$data" -maxdepth 1 -type d \( -name Default -o -name 'Profile *' \) 2>/dev/null | wc -l || true)
     echo "User Data: ${data//\//\\}"
     echo "Profiles: $profiles"
   fi
-  managed=$(SO_KEY="$policy_key" run_ps 'Test-Path -Path $env:SO_KEY' 2>/dev/null || true)
   echo "Managed Policies: ${managed:-unknown}"
 }
 
@@ -452,11 +464,12 @@ case "$target" in
     done
 
     echo "Registered WSL Distributions:"
-    # Without WSL, wsl.exe prints its help text; without a distribution it fails with a message.
-    # Both texts are translated, so judge by the exit status and by the program name, not by words.
+    # Without WSL, wsl.exe prints its help text; without a distribution it prints a message with the
+    # Store link (and normally fails). The texts are translated, so judge by the exit status and by
+    # the program name or link they contain, not by words.
     wsl_list=""
     wsl_list=$(wsl.exe -l -v 2>/dev/null | tr -d '\0\r') || wsl_list=""
-    if [[ -z "$wsl_list" || "$wsl_list" == *"wsl.exe"* ]]; then
+    if [[ -z "$wsl_list" || "$wsl_list" == *"wsl.exe"* || "$wsl_list" == *"aka.ms/"* ]]; then
       echo "  (none: no WSL distribution is installed)"
     else
       while IFS= read -r line; do
@@ -1513,9 +1526,9 @@ case "$target" in
   chrome|google-chrome|google-chrome-stable)
     echo "Category: Web Browser / Google Chrome"
     if is_windows; then
-      browser_report "$(app_path chrome.exe)" "$local_app_data/Google/Chrome/User Data" 'HKLM:\SOFTWARE\Policies\Google\Chrome'
+      browser_report_win chrome.exe "$local_app_data/Google/Chrome/User Data" 'HKLM:\SOFTWARE\Policies\Google\Chrome'
     else
-      browser_report "$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || true)"
+      browser_report_linux "$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || true)"
     fi
     echo "Triad Checkpoints (Performance, Configuration, Security):"
     echo "  * Performance: Hardware acceleration on; trim startup extensions"
@@ -1527,9 +1540,9 @@ case "$target" in
   edge|msedge|microsoft-edge)
     echo "Category: Web Browser / Microsoft Edge"
     if is_windows; then
-      browser_report "$(app_path msedge.exe)" "$local_app_data/Microsoft/Edge/User Data" 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
+      browser_report_win msedge.exe "$local_app_data/Microsoft/Edge/User Data" 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
     else
-      browser_report "$(command -v microsoft-edge-stable || command -v microsoft-edge || true)"
+      browser_report_linux "$(command -v microsoft-edge-stable || command -v microsoft-edge || true)"
     fi
     echo "Triad Checkpoints (Performance, Configuration, Security):"
     echo "  * Performance: Startup boost and background mode only if wanted; hardware acceleration on"

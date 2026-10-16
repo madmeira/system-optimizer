@@ -59,19 +59,25 @@ if is_windows; then
     done < <(netstat -ano -p tcp 2>/dev/null | grep -i "LISTENING" | awk '{print $2}' | sort -u || true)
   fi
 
-  # Winget Security Check
+  # Winget Security Check: the policy names in "winget --info" are not translated, so the state is read
+  # from the last word of the line; a missing line or an unknown word is "unknown", never "secure".
   winget_sec_ok="unknown"
   winget_details=""
   if command -v winget >/dev/null 2>&1; then
-    winget_info=$(winget --info 2>/dev/null || true)
-    [[ -n "$winget_info" ]] && winget_sec_ok=true
-    if echo "$winget_info" | grep -i "InstallerHashOverride" | grep -qi "Enabled"; then
+    winget_info=$(winget --info 2>/dev/null | tr -d '\r' || true)
+    winget_state() { printf '%s\n' "$winget_info" | awk -v k="$1" '$1 == k { print $NF; exit }'; }
+    hash_state=$(winget_state InstallerHashOverride)
+    scan_state=$(winget_state LocalArchiveMalwareScanOverride)
+    if [[ "$hash_state" == "Enabled" ]]; then
       winget_sec_ok=false
       winget_details+="InstallerHashOverride is Enabled (Insecure); "
     fi
-    if echo "$winget_info" | grep -i "LocalArchiveMalwareScanOverride" | grep -qi "Enabled"; then
+    if [[ "$scan_state" == "Enabled" ]]; then
       winget_sec_ok=false
       winget_details+="LocalArchiveMalwareScanOverride is Enabled (Insecure); "
+    fi
+    if [[ "$winget_sec_ok" == "unknown" && "$hash_state" == "Disabled" && "$scan_state" == "Disabled" ]]; then
+      winget_sec_ok=true
     fi
   fi
 

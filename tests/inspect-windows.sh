@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # inspect-windows.sh - on a real Windows host (Git Bash), the Windows branch of target-inspect.sh must
-# run to the end (exit 0) and print no carriage return. inspect-smoke.sh covers Linux; this covers Windows.
+# run to the end (exit 0), print its header and no carriage return, and show no shell error. inspect-smoke.sh covers Linux; this covers Windows.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,6 +23,10 @@ for t in $targets; do
     failed=$((failed + 1)); echo "FAIL - target '$t': exit $rc, stderr: $(head -n 2 "$WORK/err" | cut -c1-200)" >&2
   elif grep -q $'\r' "$WORK/out"; then
     failed=$((failed + 1)); echo "FAIL - target '$t': the output has a carriage return" >&2
+  elif ! grep -qF "=== Target Inspection: $t ===" "$WORK/out"; then
+    failed=$((failed + 1)); echo "FAIL - target '$t': no header, output starts with: $(head -n 1 "$WORK/out" | cut -c1-120)" >&2
+  elif grep -Eq 'unbound variable|syntax error|command not found|bad substitution' "$WORK/err" "$WORK/out"; then
+    failed=$((failed + 1)); echo "FAIL - target '$t': shell error: $(grep -Eh 'unbound variable|syntax error|command not found|bad substitution' "$WORK/err" "$WORK/out" | head -n 1 | cut -c1-160)" >&2
   fi
 done
 
