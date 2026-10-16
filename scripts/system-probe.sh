@@ -22,11 +22,11 @@ if is_windows; then
     $power = try { ((powercfg /getactivescheme 2>$null) -replace "^.*:\s*", "") } catch { "unknown" }
     $trimNtfs = try {
       $out = cmd.exe /c "fsutil behavior query DisableDeleteNotify 2>&1"
-      if ($out -match "NTFS DisableDeleteNotify = 0") { "Enabled (TRIM active)" } else { "Disabled" }
+      if ($out -match "NTFS DisableDeleteNotify = 0") { "Enabled (TRIM active)" } elseif ($out -match "DisableDeleteNotify") { "Disabled" } else { "unknown" }
     } catch { "unknown" }
     $shortNames = try {
       $sn = cmd.exe /c "fsutil 8dot3name query 2>&1"
-      if ($sn -match "state is 0|state is 2") { "Enabled" } else { "Disabled" }
+      if ($sn -match "state is 0|state is 2") { "Enabled" } elseif ($sn -match "state is") { "Disabled" } else { "unknown" }
     } catch { "unknown" }
 
     $vols = @(Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object {
@@ -34,7 +34,7 @@ if is_windows; then
     })
 
     $mm = try { (Get-MMAgent -ErrorAction SilentlyContinue).MemoryCompression } catch { $null }
-    $tcp = try { ((netsh interface tcp show global 2>$null) | Select-String "Receive Window Auto-Tuning Level") -replace "^.*:\s*", "" } catch { "normal" }
+    $tcp = try { ((netsh interface tcp show global 2>$null) | Select-String "Receive Window Auto-Tuning Level") -replace "^.*:\s*", "" } catch { "unknown" }
     $hiber = try { (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power" -Name HiberbootEnabled -ErrorAction SilentlyContinue).HiberbootEnabled } catch { $null }
     $startups = try { @(Get-CimInstance Win32_StartupCommand | Select-Object -ExpandProperty Name) } catch { @() }
     $stoppedSvcs = try { @(Get-Service | Where-Object { $_.StartType -eq "Automatic" -and $_.Status -ne "Running" } | Select-Object -ExpandProperty Name) } catch { @() }
@@ -51,9 +51,9 @@ if is_windows; then
       Volumes = ($vols -join "; ")
       TRIM = $trimNtfs
       ShortNames8dot3 = $shortNames
-      MemoryCompression = if ($null -ne $mm) { [bool]$mm } else { $true }
+      MemoryCompression = if ($null -ne $mm) { [bool]$mm } else { $null }
       TcpAutoTuning = "$tcp".Trim()
-      FastStartup = if ($null -ne $hiber) { [bool]$hiber } else { $true }
+      FastStartup = if ($null -ne $hiber) { [bool]$hiber } else { $null }
       StartupAppsCount = $startups.Count
       StartupApps = ($startups -join ", ")
       StoppedAutoServicesCount = $stoppedSvcs.Count
@@ -62,21 +62,25 @@ if is_windows; then
   ' 2>/dev/null || true)
 
   if [[ "$output_json" == true ]]; then
-    echo "$ps_data"
+    if [[ -n "$ps_data" ]]; then
+      echo "$ps_data"
+    else
+      echo '{"error": "powershell unavailable or returned no data"}'
+    fi
   else
-    os_info=$(echo "$ps_data" | grep -oE '"OS":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "Windows 11")
+    os_info=$(echo "$ps_data" | grep -oE '"OS":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
     uptime_info=$(echo "$ps_data" | grep -oE '"Uptime":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
-    power_info=$(echo "$ps_data" | grep -oE '"PowerScheme":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "Balanced")
-    vols_info=$(echo "$ps_data" | grep -oE '"Volumes":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "C: (NTFS)")
-    trim_info=$(echo "$ps_data" | grep -oE '"TRIM":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "Enabled")
-    sn_info=$(echo "$ps_data" | grep -oE '"ShortNames8dot3":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "Disabled")
-    mc_info=$(echo "$ps_data" | grep -oE '"MemoryCompression":(true|false)' | cut -d: -f2 || echo "true")
-    tcp_info=$(echo "$ps_data" | grep -oE '"TcpAutoTuning":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "normal")
-    fast_info=$(echo "$ps_data" | grep -oE '"FastStartup":(true|false)' | cut -d: -f2 || echo "true")
-    startup_count=$(echo "$ps_data" | grep -oE '"StartupAppsCount":[0-9]+' | cut -d: -f2 || echo "0")
-    startup_list=$(echo "$ps_data" | grep -oE '"StartupApps":"[^"]*"' | cut -d: -f2- | tr -d '"' || echo "None")
-    stopped_count=$(echo "$ps_data" | grep -oE '"StoppedAutoServicesCount":[0-9]+' | cut -d: -f2 || echo "0")
-    stopped_list=$(echo "$ps_data" | grep -oE '"StoppedAutoServices":"[^"]*"' | cut -d: -f2- | tr -d '"' || echo "None")
+    power_info=$(echo "$ps_data" | grep -oE '"PowerScheme":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
+    vols_info=$(echo "$ps_data" | grep -oE '"Volumes":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
+    trim_info=$(echo "$ps_data" | grep -oE '"TRIM":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
+    sn_info=$(echo "$ps_data" | grep -oE '"ShortNames8dot3":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
+    mc_info=$(echo "$ps_data" | grep -oE '"MemoryCompression":(true|false)' | cut -d: -f2 || echo "unknown")
+    tcp_info=$(echo "$ps_data" | grep -oE '"TcpAutoTuning":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
+    fast_info=$(echo "$ps_data" | grep -oE '"FastStartup":(true|false)' | cut -d: -f2 || echo "unknown")
+    startup_count=$(echo "$ps_data" | grep -oE '"StartupAppsCount":[0-9]+' | cut -d: -f2 || echo "unknown")
+    startup_list=$(echo "$ps_data" | grep -oE '"StartupApps":"[^"]*"' | cut -d: -f2- | tr -d '"' || echo "unknown")
+    stopped_count=$(echo "$ps_data" | grep -oE '"StoppedAutoServicesCount":[0-9]+' | cut -d: -f2 || echo "unknown")
+    stopped_list=$(echo "$ps_data" | grep -oE '"StoppedAutoServices":"[^"]*"' | cut -d: -f2- | tr -d '"' || echo "unknown")
 
     cat <<EOF
 === System Configuration & Performance Probe (Windows) ===
@@ -160,34 +164,34 @@ journal_size=$(journalctl --disk-usage 2>/dev/null | grep -oE "[0-9]+(\.[0-9]+)?
 if [[ "$output_json" == true ]]; then
   cat <<EOF
 {
-  "os": "$os_name",
-  "kernel": "$kernel_ver",
-  "virtualization": "$virt_type",
-  "cpu_governor": "$governor",
-  "energy_performance_preference": "$energy_perf",
+  "os": "$(json_str "$os_name")",
+  "kernel": "$(json_str "$kernel_ver")",
+  "virtualization": "$(json_str "$virt_type")",
+  "cpu_governor": "$(json_str "$governor")",
+  "energy_performance_preference": "$(json_str "$energy_perf")",
   "storage": {
-    "root_device": "$root_source",
-    "fstype": "$root_fstype",
-    "mount_options": "$mount_options",
+    "root_device": "$(json_str "$root_source")",
+    "fstype": "$(json_str "$root_fstype")",
+    "mount_options": "$(json_str "$mount_options")",
     "fstrim_timer": {
-      "active": "$fstrim_active",
-      "enabled": "$fstrim_enabled"
+      "active": "$(json_str "$fstrim_active")",
+      "enabled": "$(json_str "$fstrim_enabled")"
     }
   },
   "memory_sysctl": {
-    "swappiness": "$swappiness",
-    "vfs_cache_pressure": "$vfs_cache_pressure",
-    "dirty_ratio": "$dirty_ratio",
-    "dirty_background_ratio": "$dirty_background_ratio",
+    "swappiness": "$(json_str "$swappiness")",
+    "vfs_cache_pressure": "$(json_str "$vfs_cache_pressure")",
+    "dirty_ratio": "$(json_str "$dirty_ratio")",
+    "dirty_background_ratio": "$(json_str "$dirty_background_ratio")",
     "zram_generator_configured": $zram_configured
   },
   "network_sysctl": {
-    "tcp_congestion_control": "$tcp_congestion",
-    "default_qdisc": "$qdisc"
+    "tcp_congestion_control": "$(json_str "$tcp_congestion")",
+    "default_qdisc": "$(json_str "$qdisc")"
   },
   "boot_performance": {
-    "startup_time": "$boot_time",
-    "journal_disk_usage": "$journal_size"
+    "startup_time": "$(json_str "$boot_time")",
+    "journal_disk_usage": "$(json_str "$journal_size")"
   },
   "failed_units_count": ${#failed_units[@]}
 }

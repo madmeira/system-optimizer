@@ -214,21 +214,6 @@ for t in "${system_domains[@]}" "${security_domains[@]}" "${detected_pms_runtime
 done
 
 if [[ "$output_json" == true ]]; then
-  to_json_arr() {
-    local arr=("$@")
-    if [[ ${#arr[@]} -eq 0 ]]; then
-      echo "[]"
-      return
-    fi
-    local json="["
-    for i in "${!arr[@]}"; do
-      json+="\"${arr[i]}\""
-      [[ $i -lt $((${#arr[@]} - 1)) ]] && json+=", "
-    done
-    json+="]"
-    echo "$json"
-  }
-
   cat <<EOF
 {
   "active_package_managers": $(to_json_arr "${available_pms[@]}"),

@@ -15,26 +15,11 @@ if [[ "${1:-}" == "--json" ]]; then
   output_json=true
 fi
 
-to_json_arr() {
-  local arr=("$@")
-  if [[ ${#arr[@]} -eq 0 ]]; then
-    echo "[]"
-    return
-  fi
-  local json="["
-  for i in "${!arr[@]}"; do
-    json+="\"${arr[i]}\""
-    [[ $i -lt $((${#arr[@]} - 1)) ]] && json+=", "
-  done
-  json+="]"
-  echo "$json"
-}
-
 if is_windows; then
   # Windows Security Audit
   ps_sec=$(run_ps '
     $fw = @(Get-NetFirewallProfile)
-    $fwAllActive = ($fw | Where-Object { $_.Enabled -eq $true }).Count -eq $fw.Count
+    $fwAllActive = if ($fw.Count -gt 0) { ($fw | Where-Object { $_.Enabled -eq $true }).Count -eq $fw.Count } else { $null }
     $fwSummary = ($fw | ForEach-Object { "$($_.Name):$(if ($_.Enabled) {"Active"} else {"Disabled"})" }) -join ", "
 
     $mp = try { Get-MpComputerStatus } catch { $null }
@@ -47,24 +32,24 @@ if is_windows; then
     [PSCustomObject]@{
       FirewallAllActive = $fwAllActive
       FirewallSummary = $fwSummary
-      RealTimeProtection = if ($mp) { [bool]$mp.RealTimeProtectionEnabled } else { $true }
-      AntivirusEnabled = if ($mp) { [bool]$mp.AntivirusEnabled } else { $true }
-      PUAProtection = if ($pref) { [int]$pref.PUAProtection } else { 0 }
-      UACEnabled = if ($uacKey) { $uacKey.EnableLUA -eq 1 } else { $true }
-      ConsentBehavior = if ($uacKey) { $uacKey.ConsentPromptBehaviorAdmin } else { 5 }
+      RealTimeProtection = if ($mp) { [bool]$mp.RealTimeProtectionEnabled } else { $null }
+      AntivirusEnabled = if ($mp) { [bool]$mp.AntivirusEnabled } else { $null }
+      PUAProtection = if ($pref) { [int]$pref.PUAProtection } else { $null }
+      UACEnabled = if ($uacKey) { $uacKey.EnableLUA -eq 1 } else { $null }
+      ConsentBehavior = if ($uacKey) { $uacKey.ConsentPromptBehaviorAdmin } else { $null }
       ExecutionPolicy = "$ep"
       SSHDService = if ($sshd) { "$($sshd.Status)" } else { "NotInstalled" }
     } | ConvertTo-Json -Compress
   ' 2>/dev/null || true)
 
-  fw_summary=$(echo "$ps_sec" | grep -oE '"FirewallSummary":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "Domain:Active, Private:Active, Public:Active")
-  fw_all_active=$(echo "$ps_sec" | grep -oE '"FirewallAllActive":(true|false)' | cut -d: -f2 || echo "true")
-  realtime_prot=$(echo "$ps_sec" | grep -oE '"RealTimeProtection":(true|false)' | cut -d: -f2 || echo "true")
-  av_enabled=$(echo "$ps_sec" | grep -oE '"AntivirusEnabled":(true|false)' | cut -d: -f2 || echo "true")
-  pua_prot=$(echo "$ps_sec" | grep -oE '"PUAProtection":[0-9]+' | cut -d: -f2 || echo "0")
-  uac_enabled=$(echo "$ps_sec" | grep -oE '"UACEnabled":(true|false)' | cut -d: -f2 || echo "true")
-  exec_policy=$(echo "$ps_sec" | grep -oE '"ExecutionPolicy":"[^"]+"' | cut -d: -f2 | tr -d '"' || echo "RemoteSigned")
-  sshd_status=$(echo "$ps_sec" | grep -oE '"SSHDService":"[^"]+"' | cut -d: -f2 | tr -d '"' || echo "NotInstalled")
+  fw_summary=$(echo "$ps_sec" | grep -oE '"FirewallSummary":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
+  fw_all_active=$(echo "$ps_sec" | grep -oE '"FirewallAllActive":(true|false)' | cut -d: -f2 || echo "unknown")
+  realtime_prot=$(echo "$ps_sec" | grep -oE '"RealTimeProtection":(true|false)' | cut -d: -f2 || echo "unknown")
+  av_enabled=$(echo "$ps_sec" | grep -oE '"AntivirusEnabled":(true|false)' | cut -d: -f2 || echo "unknown")
+  pua_prot=$(echo "$ps_sec" | grep -oE '"PUAProtection":[0-9]+' | cut -d: -f2 || echo "unknown")
+  uac_enabled=$(echo "$ps_sec" | grep -oE '"UACEnabled":(true|false)' | cut -d: -f2 || echo "unknown")
+  exec_policy=$(echo "$ps_sec" | grep -oE '"ExecutionPolicy":"[^"]+"' | cut -d: -f2 | tr -d '"' || echo "unknown")
+  sshd_status=$(echo "$ps_sec" | grep -oE '"SSHDService":"[^"]+"' | cut -d: -f2 | tr -d '"' || echo "unknown")
 
   # Network Exposure (listening TCP ports)
   listening_tcp=()
@@ -75,10 +60,11 @@ if is_windows; then
   fi
 
   # Winget Security Check
-  winget_sec_ok=true
+  winget_sec_ok="unknown"
   winget_details=""
   if command -v winget >/dev/null 2>&1; then
     winget_info=$(winget --info 2>/dev/null || true)
+    [[ -n "$winget_info" ]] && winget_sec_ok=true
     if echo "$winget_info" | grep -i "InstallerHashOverride" | grep -qi "Enabled"; then
       winget_sec_ok=false
       winget_details+="InstallerHashOverride is Enabled (Insecure); "
@@ -89,20 +75,11 @@ if is_windows; then
     fi
   fi
 
-  # Sensitive file permissions
+  # Sensitive file permissions: POSIX mode bits from Git Bash do not reflect NTFS ACLs, so they are
+  # not judged here (the Linux branch applies the 600/400 rule).
   ssh_dir_perms="absent"
-  [[ -d "$HOME/.ssh" ]] && ssh_dir_perms=$(stat -c "%a" "$HOME/.ssh" 2>/dev/null || echo "present")
+  [[ -d "$HOME/.ssh" ]] && ssh_dir_perms="n/a (NTFS)"
   insecure_ssh_keys=()
-  if [[ -d "$HOME/.ssh" ]]; then
-    for keyfile in "$HOME"/.ssh/id_*; do
-      if [[ -f "$keyfile" && "$keyfile" != *.pub ]]; then
-        kperm=$(stat -c "%a" "$keyfile" 2>/dev/null || echo "")
-        if [[ -n "$kperm" && "$kperm" != "600" && "$kperm" != "400" && "$kperm" != "644" ]]; then
-          insecure_ssh_keys+=("$(basename "$keyfile") ($kperm)")
-        fi
-      fi
-    done
-  fi
 
   # Score calculation
   score_flags=0
@@ -112,35 +89,35 @@ if is_windows; then
   [[ "$realtime_prot" == "true" ]] && ((score_flags++)) || true
   [[ "$av_enabled" == "true" ]] && ((score_flags++)) || true
   [[ "$uac_enabled" == "true" ]] && ((score_flags++)) || true
-  [[ "$exec_policy" != "Unrestricted" && "$exec_policy" != "Bypass" ]] && ((score_flags++)) || true
+  [[ "$exec_policy" != "Unrestricted" && "$exec_policy" != "Bypass" && "$exec_policy" != "unknown" ]] && ((score_flags++)) || true
   [[ "$winget_sec_ok" == "true" ]] && ((score_flags++)) || true
 
   if [[ "$output_json" == true ]]; then
     cat <<EOF
 {
   "firewall": {
-    "all_profiles_active": $fw_all_active,
-    "summary": "$fw_summary"
+    "all_profiles_active": $(json_bool "$fw_all_active"),
+    "summary": "$(json_str "$fw_summary")"
   },
   "defender": {
-    "realtime_protection": $realtime_prot,
-    "antivirus_enabled": $av_enabled,
-    "pua_protection": $pua_prot
+    "realtime_protection": $(json_bool "$realtime_prot"),
+    "antivirus_enabled": $(json_bool "$av_enabled"),
+    "pua_protection": $(json_num "$pua_prot")
   },
   "system_security": {
-    "uac_enabled": $uac_enabled,
-    "execution_policy": "$exec_policy",
-    "sshd_service": "$sshd_status"
+    "uac_enabled": $(json_bool "$uac_enabled"),
+    "execution_policy": "$(json_str "$exec_policy")",
+    "sshd_service": "$(json_str "$sshd_status")"
   },
   "winget_security": {
-    "hash_override_disabled": $winget_sec_ok,
-    "details": "${winget_details:-All secure}"
+    "hash_override_disabled": $(json_bool "$winget_sec_ok"),
+    "details": "$(if [[ "$winget_sec_ok" == "unknown" ]]; then echo "winget missing or unreadable, not checked"; else echo "${winget_details:-All secure}"; fi)"
   },
   "network": {
     "listening_tcp": $(to_json_arr "${listening_tcp[@]}")
   },
   "permissions": {
-    "ssh_dir": "$ssh_dir_perms",
+    "ssh_dir": "$(json_str "$ssh_dir_perms")",
     "insecure_ssh_keys": $(to_json_arr "${insecure_ssh_keys[@]}")
   },
   "score": "$score_flags/$total_flags"
@@ -155,13 +132,13 @@ EOF
 - Windows Defender Antivirus & Exploit Guard:
   * Real-Time Protection: $realtime_prot
   * Antivirus Engine: $av_enabled
-  * Potentially Unwanted App (PUA) Protection: $(if [[ "$pua_prot" -eq 1 ]]; then echo "Enabled (Secure)"; else echo "Disabled (Recommend: Set-MpPreference -PUAProtection 1)"; fi)
+  * Potentially Unwanted App (PUA) Protection: $(case "$pua_prot" in 1) echo "Enabled (Secure)" ;; 2) echo "Audit mode (detects but does not block; Recommend: Set-MpPreference -PUAProtection 1)" ;; 0) echo "Disabled (Recommend: Set-MpPreference -PUAProtection 1)" ;; *) echo "unknown" ;; esac)
 - System Integrity & Policies:
-  * User Account Control (UAC): $(if [[ "$uac_enabled" == "true" ]]; then echo "Enabled"; else echo "[CRITICAL: Disabled]"; fi)
-  * PowerShell ExecutionPolicy: $exec_policy $(if [[ "$exec_policy" == "RemoteSigned" || "$exec_policy" == "Restricted" ]]; then echo "(OK)"; else echo "(Review)"; fi)
+  * User Account Control (UAC): $(case "$uac_enabled" in true) echo "Enabled" ;; false) echo "[CRITICAL: Disabled]" ;; *) echo "unknown" ;; esac)
+  * PowerShell ExecutionPolicy: $exec_policy $(case "$exec_policy" in RemoteSigned|Restricted) echo "(OK)" ;; unknown) echo "" ;; *) echo "(Review)" ;; esac)
   * OpenSSH Server Service: $sshd_status
 - Package Manager Security (winget):
-  * Integrity Checks: $(if [[ "$winget_sec_ok" == "true" ]]; then echo "Enforced (Hash verification and Malware scans active)"; else echo "[WARNING: $winget_details]"; fi)
+  * Integrity Checks: $(case "$winget_sec_ok" in true) echo "Enforced (Hash verification and Malware scans active)" ;; false) echo "[WARNING: $winget_details]" ;; *) echo "unknown (winget missing or unreadable, not checked)" ;; esac)
 - Network Exposure:
   * Listening TCP Sockets: ${#listening_tcp[@]} detected (${listening_tcp[*]:-None})
 - Sensitive File Permissions:
@@ -298,9 +275,9 @@ if [[ "$output_json" == true ]]; then
   cat <<EOF
 {
   "firewall": {
-    "name": "$fw_name",
-    "active": "$fw_active",
-    "enabled": "$fw_enabled"
+    "name": "$(json_str "$fw_name")",
+    "active": "$(json_str "$fw_active")",
+    "enabled": "$(json_str "$fw_enabled")"
   },
   "network": {
     "listening_tcp": $(to_json_arr "${listening_tcp[@]}"),
@@ -309,31 +286,31 @@ if [[ "$output_json" == true ]]; then
   "ssh": {
     "installed": $sshd_installed,
     "active": $sshd_active,
-    "permit_root_login": "$ssh_root_login",
-    "password_authentication": "$ssh_pass_auth"
+    "permit_root_login": "$(json_str "$ssh_root_login")",
+    "password_authentication": "$(json_str "$ssh_pass_auth")"
   },
   "kernel_sysctl_security": {
-    "kptr_restrict": "$kptr_restrict",
-    "dmesg_restrict": "$dmesg_restrict",
-    "unprivileged_bpf_disabled": "$unpriv_bpf",
-    "yama_ptrace_scope": "$yama_ptrace",
-    "fs_protected_hardlinks": "$prot_hardlinks",
-    "fs_protected_symlinks": "$prot_symlinks",
-    "fs_protected_fifos": "$prot_fifos",
-    "fs_protected_regular": "$prot_regular",
-    "rp_filter": "$rp_filter",
-    "accept_redirects": "$accept_redirects"
+    "kptr_restrict": "$(json_str "$kptr_restrict")",
+    "dmesg_restrict": "$(json_str "$dmesg_restrict")",
+    "unprivileged_bpf_disabled": "$(json_str "$unpriv_bpf")",
+    "yama_ptrace_scope": "$(json_str "$yama_ptrace")",
+    "fs_protected_hardlinks": "$(json_str "$prot_hardlinks")",
+    "fs_protected_symlinks": "$(json_str "$prot_symlinks")",
+    "fs_protected_fifos": "$(json_str "$prot_fifos")",
+    "fs_protected_regular": "$(json_str "$prot_regular")",
+    "rp_filter": "$(json_str "$rp_filter")",
+    "accept_redirects": "$(json_str "$accept_redirects")"
   },
   "permissions": {
-    "umask": "$current_umask",
-    "ssh_dir": "$ssh_dir_perms",
-    "gnupg_dir": "$gnupg_dir_perms",
+    "umask": "$(json_str "$current_umask")",
+    "ssh_dir": "$(json_str "$ssh_dir_perms")",
+    "gnupg_dir": "$(json_str "$gnupg_dir_perms")",
     "insecure_ssh_keys": $(to_json_arr "${insecure_ssh_keys[@]}")
   },
   "package_security": {
-    "pacman_siglevel": "$pacman_siglevel",
-    "keyring_timer_active": "$keyring_timer_active",
-    "pending_security_updates": "$pending_sec_updates"
+    "pacman_siglevel": "$(json_str "$pacman_siglevel")",
+    "keyring_timer_active": "$(json_str "$keyring_timer_active")",
+    "pending_security_updates": "$(json_str "$pending_sec_updates")"
   },
   "systemd_security_audit": {
     "ok_services": $systemd_sec_ok,
