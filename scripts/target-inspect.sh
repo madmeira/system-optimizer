@@ -20,22 +20,33 @@ fi
 local_app_data="${LOCALAPPDATA:-$HOME/AppData/Local}"
 roaming_app_data="${APPDATA:-$HOME/AppData/Roaming}"
 
-# Report a browser from its executable (empty when not found) and its user data folder.
+# Windows: path of an installed program from its "App Paths" key, machine-wide first, then per-user.
+app_path() {
+  SO_APP="$1" run_ps 'foreach ($r in "HKLM","HKCU") { $v = (Get-ItemProperty "${r}:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$env:SO_APP" -ErrorAction SilentlyContinue)."(default)"; if ($v) { $v; break } }' 2>/dev/null || true
+}
+
+# Report a browser from its executable (empty when not found) and, on Windows, its user data folder
+# and policy key.
 browser_report() {
   local exe="$1" data="$2" policy_key="$3" ver profiles managed
   if [[ -n "$exe" ]]; then
     echo "Status: INSTALLED"
     echo "Executable: $exe"
-    ver=$(SO_EXE="$exe" run_ps '(Get-Item -LiteralPath $env:SO_EXE).VersionInfo.ProductVersion' 2>/dev/null || true)
+    if is_windows; then
+      ver=$(SO_EXE="$exe" run_ps '(Get-Item -LiteralPath $env:SO_EXE).VersionInfo.ProductVersion' 2>/dev/null || true)
+    else
+      ver=$("$exe" --version 2>/dev/null | head -n 1 || true)
+    fi
     echo "Version: ${ver:-unknown}"
-  elif [[ -d "$data" ]]; then
+  elif is_windows && [[ -d "$data" ]]; then
     echo "Status: user data found, executable not located"
   else
     echo "Status: NOT INSTALLED"
   fi
+  is_windows || return 0
   if [[ -d "$data" ]]; then
     profiles=$(find "$data" -maxdepth 1 -type d \( -name Default -o -name 'Profile *' \) 2>/dev/null | wc -l || true)
-    echo "User Data: $data"
+    echo "User Data: ${data//\//\\}"
     echo "Profiles: $profiles"
   fi
   managed=$(SO_KEY="$policy_key" run_ps 'Test-Path -Path $env:SO_KEY' 2>/dev/null || true)
@@ -414,9 +425,11 @@ case "$target" in
     echo "Category: Subsystem & Virtualization / Windows Subsystem for Linux (WSL)"
     wsl_bin=$(which wsl 2>/dev/null || which wsl.exe 2>/dev/null || echo "")
     echo "Binary: ${wsl_bin:-/c/Windows/System32/wsl.exe}"
-    wsl_ver=$(wsl.exe --version 2>/dev/null | tr -d '\0\r' | awk 'NF { print; exit }' || true)
+    wsl_ver=$(wsl.exe --version 2>/dev/null | tr -d '\0\r' || true)
+    # without WSL, wsl.exe prints its help text (translated, but it always names "wsl.exe")
     case "$wsl_ver" in
-      ""|Copyright*|*Usage*) wsl_ver="unknown (WSL is not installed)" ;;
+      ""|*wsl.exe*) wsl_ver="unknown (WSL is not installed)" ;;
+      *) wsl_ver=$(awk 'NF { print; exit }' <<< "$wsl_ver") ;;
     esac
     echo "Version: $wsl_ver"
 
@@ -439,9 +452,11 @@ case "$target" in
     done
 
     echo "Registered WSL Distributions:"
-    wsl_list=$(wsl.exe -l -v 2>/dev/null | tr -d '\0\r' || true)
-    # without WSL, or without a distribution, wsl.exe prints its help text instead of a list
-    if [[ -z "$wsl_list" || "$wsl_list" == *"Usage: wsl.exe"* || "$wsl_list" == *"no installed distributions"* ]]; then
+    # Without WSL, wsl.exe prints its help text; without a distribution it fails with a message.
+    # Both texts are translated, so judge by the exit status and by the program name, not by words.
+    wsl_list=""
+    wsl_list=$(wsl.exe -l -v 2>/dev/null | tr -d '\0\r') || wsl_list=""
+    if [[ -z "$wsl_list" || "$wsl_list" == *"wsl.exe"* ]]; then
       echo "  (none: no WSL distribution is installed)"
     else
       while IFS= read -r line; do
@@ -1498,18 +1513,11 @@ case "$target" in
   chrome|google-chrome|google-chrome-stable)
     echo "Category: Web Browser / Google Chrome"
     if is_windows; then
-      chrome_exe=$(run_ps '(Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe" -ErrorAction SilentlyContinue)."(default)"' 2>/dev/null || true)
-      browser_report "$chrome_exe" "$local_app_data/Google/Chrome/User Data" 'HKLM:\SOFTWARE\Policies\Google\Chrome'
+      chrome_exe=$(app_path chrome.exe)
     else
-      chrome_bin=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || true)
-      if [[ -n "$chrome_bin" ]]; then
-        echo "Status: INSTALLED"
-        echo "Executable: $chrome_bin"
-        echo "Version: $("$chrome_bin" --version 2>/dev/null | head -n 1 || echo unknown)"
-      else
-        echo "Status: NOT INSTALLED"
-      fi
+      chrome_exe=$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || true)
     fi
+    browser_report "$chrome_exe" "$local_app_data/Google/Chrome/User Data" 'HKLM:\SOFTWARE\Policies\Google\Chrome'
     echo "Triad Checkpoints (Performance, Configuration, Security):"
     echo "  * Performance: Hardware acceleration on; trim startup extensions"
     echo "  * Configuration: One profile per context; sync only what is needed"
@@ -1520,18 +1528,11 @@ case "$target" in
   edge|msedge|microsoft-edge)
     echo "Category: Web Browser / Microsoft Edge"
     if is_windows; then
-      edge_exe=$(run_ps '(Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe" -ErrorAction SilentlyContinue)."(default)"' 2>/dev/null || true)
-      browser_report "$edge_exe" "$local_app_data/Microsoft/Edge/User Data" 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
+      edge_exe=$(app_path msedge.exe)
     else
-      edge_bin=$(command -v microsoft-edge-stable || command -v microsoft-edge || true)
-      if [[ -n "$edge_bin" ]]; then
-        echo "Status: INSTALLED"
-        echo "Executable: $edge_bin"
-        echo "Version: $("$edge_bin" --version 2>/dev/null | head -n 1 || echo unknown)"
-      else
-        echo "Status: NOT INSTALLED"
-      fi
+      edge_exe=$(command -v microsoft-edge-stable || command -v microsoft-edge || true)
     fi
+    browser_report "$edge_exe" "$local_app_data/Microsoft/Edge/User Data" 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
     echo "Triad Checkpoints (Performance, Configuration, Security):"
     echo "  * Performance: Startup boost and background mode only if wanted; hardware acceleration on"
     echo "  * Configuration: One profile per context; sync only what is needed"

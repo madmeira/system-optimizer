@@ -45,8 +45,8 @@ expect() {  # expect <json-file> <path> <expected-json> <label>
 # ---- case 1: PowerShell fails completely
 # All three PowerShell entry points are stubbed: GitHub's runners ship a real pwsh, so a missing stub
 # would run the real PowerShell. The stub prints $PS_STUB_OUT, or fails when it is empty.
-ps_stub() { if [[ -n "${PS_STUB_OUT:-}" ]]; then printf '%s' "$PS_STUB_OUT"; else return 1; fi; }
-pwsh() { ps_stub; }; powershell() { ps_stub; }; powershell.exe() { ps_stub; }
+ps_stub() { [[ -z "${PS_STUB_LOG:-}" ]] || printf '%s\n' "$*" >> "$PS_STUB_LOG"; if [[ -n "${PS_STUB_OUT:-}" ]]; then printf '%s' "$PS_STUB_OUT"; else return 1; fi; }
+pwsh() { ps_stub "$@"; }; powershell() { ps_stub "$@"; }; powershell.exe() { ps_stub "$@"; }
 export -f ps_stub pwsh powershell powershell.exe
 
 run_probe hardware-probe.sh --json > "$WORK/hw.json"
@@ -200,8 +200,34 @@ if grep -q 'Usage: wsl.exe' "$WORK/wsl8.txt"; then fail "wsl still prints the he
 grep -q '^Version: unknown' "$WORK/wsl8.txt" || fail "wsl version is not unknown: $(grep '^Version' "$WORK/wsl8.txt")"
 no_cr "$WORK/wsl8.txt" "wsl"
 [[ "$(tr -cd '\0' < "$WORK/wsl8.txt" | wc -c)" -eq 0 ]] || fail "wsl output has a NUL byte"
+
+# translated help text (pt-BR) must be recognized too: judged by the program name, not by English words
+wsl.exe() { printf 'Direitos autorais (c) Microsoft Corporation.\r\r\n\r\r\nUso: wsl.exe [Argumento]\r\r\n'; }
+export -f wsl.exe
+run_probe target-inspect.sh wsl > "$WORK/wsl8pt.txt"
+grep -qF '(none: no WSL distribution is installed)' "$WORK/wsl8pt.txt" || fail "translated wsl help text is listed as distributions"
+grep -q '^Version: unknown' "$WORK/wsl8pt.txt" || fail "translated wsl help text is taken as a version"
+# WSL installed but no distribution: translated message and a failing exit status
+wsl.exe() { echo 'O Subsistema do Windows para Linux nao tem distribuicoes instaladas.'; return 1; }
+export -f wsl.exe
+run_probe target-inspect.sh wsl > "$WORK/wsl8nd.txt"
+grep -qF '(none: no WSL distribution is installed)' "$WORK/wsl8nd.txt" || fail "failing wsl -l is listed as a distribution"
+# a real list is still shown
+wsl.exe() { printf '  NAME      STATE           VERSION\r\n* Ubuntu    Running         2\r\n'; }
+export -f wsl.exe
+run_probe target-inspect.sh wsl > "$WORK/wsl8ok.txt"
+grep -q '\* \* Ubuntu' "$WORK/wsl8ok.txt" || fail "a real distribution list is not shown"
 unset -f wsl.exe
-ok "wsl without a distribution says so, and the output is clean"
+ok "wsl without a distribution says so (also translated), and a real list is shown"
+
+# a browser installed for the current user only is found through HKCU as well
+export PS_STUB_OUT=$'C:\\Users\\x\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe\r\n'
+export PS_STUB_LOG="$WORK/ps-cmds.txt"
+: > "$WORK/ps-cmds.txt"
+run_probe target-inspect.sh chrome > /dev/null
+grep -q 'HKCU' "$WORK/ps-cmds.txt" || fail "chrome lookup does not try the per-user registry key"
+unset PS_STUB_LOG
+ok "chrome lookup tries the machine-wide and the per-user registry keys"
 
 # python: the Microsoft Store shortcut is not a Python
 jhas() {  # jhas <json-file> <key> <item>
