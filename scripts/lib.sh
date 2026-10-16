@@ -14,16 +14,26 @@ is_windows() {
   [[ -n "${WINDIR:-}" || ( -n "${OS:-}" && "$OS" == "Windows_NT" ) ]]
 }
 
+# Run a PowerShell command and print its output without carriage returns (PowerShell ends lines with
+# CRLF, and a stray \r garbles text output). With pipefail a PowerShell failure is still reported.
 run_ps() {
+  local ps
   if command -v pwsh >/dev/null 2>&1; then
-    pwsh -NoProfile -NonInteractive -Command "$1"
+    ps=pwsh
   elif command -v powershell.exe >/dev/null 2>&1; then
-    powershell.exe -NoProfile -NonInteractive -Command "$1"
+    ps=powershell.exe
   elif command -v powershell >/dev/null 2>&1; then
-    powershell -NoProfile -NonInteractive -Command "$1"
+    ps=powershell
   else
     return 1
   fi
+  "$ps" -NoProfile -NonInteractive -Command "$1" | tr -d '\r'
+}
+
+# powercfg prints "<label>: <GUID>  (<plan name>)". Print the plan name; without parentheses, print the input.
+power_plan_name() {
+  local raw="$1"
+  if [[ "$raw" =~ \(([^\)]*)\)[[:space:]]*$ ]]; then printf '%s' "${BASH_REMATCH[1]}"; else printf '%s' "$raw"; fi
 }
 
 # JSON helpers: never emit an invented value.

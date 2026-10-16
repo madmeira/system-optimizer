@@ -149,6 +149,13 @@ run_probe system-probe.sh > "$WORK/sys6.txt"
 grep -q 'Power Scheme: Balanced' "$WORK/sys6.txt" || fail "system-probe text does not show the plan name only: $(grep 'Power Scheme' "$WORK/sys6.txt")"
 ok "system-probe shows only the power plan name"
 
+# ---- case 7: PowerShell CRLF output and the target-inspect cpu power plan line
+export PS_STUB_OUT=$'Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)\r\n'
+run_probe target-inspect.sh cpu > "$WORK/cpu7.txt"
+grep -qx 'Active Power Scheme: Balanced' "$WORK/cpu7.txt" || fail "target-inspect cpu power plan line: $(grep 'Power Scheme' "$WORK/cpu7.txt")"
+if grep -q $'\r' "$WORK/cpu7.txt"; then fail "target-inspect cpu output still has a carriage return"; fi
+ok "target-inspect cpu shows only the plan name and no carriage returns"
+
 # ---- case 4: parent disk names (lsblk is stubbed to fail so the name pattern is what gets tested)
 # shellcheck source=../scripts/lib.sh
 source "$ROOT/scripts/lib.sh"
@@ -158,5 +165,13 @@ for pair in "/dev/nvme0n1p2:nvme0n1" "/dev/mmcblk0p1:mmcblk0" "/dev/sda1:sda" "/
   [[ "$got" == "$want" ]] || fail "parent_disk $dev gave '$got', expected '$want'"
 done
 ok "parent_disk understands nvme, mmc, sd and vd names"
+
+# run_ps drops carriage returns; power_plan_name keeps the name inside the parentheses
+export PS_STUB_OUT=$'Enabled=True\r\nOther=False\r\n'
+got="$(run_ps 'x')"
+[[ "$got" == $'Enabled=True\nOther=False' ]] || fail "run_ps kept carriage returns: $(printf '%q' "$got")"
+[[ "$(power_plan_name 'Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (High performance)')" == "High performance" ]] || fail "power_plan_name"
+[[ "$(power_plan_name 'no parentheses here')" == "no parentheses here" ]] || fail "power_plan_name without parentheses"
+ok "run_ps strips carriage returns and power_plan_name returns the plan name"
 
 echo "probe-fallback: $pass passed"

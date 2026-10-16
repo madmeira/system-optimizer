@@ -171,9 +171,11 @@ case "$target" in
   cpu|governor|power)
     echo "Category: System Core / CPU & Power Management"
     if is_windows; then
-      cpu_name=$(run_ps '(Get-CimInstance Win32_Processor | Select-Object -First 1).Name.Trim()' 2>/dev/null || echo "Unknown CPU")
-      threads=$(run_ps '(Get-CimInstance Win32_Processor | Select-Object -First 1).NumberOfLogicalProcessors' 2>/dev/null || echo "${NUMBER_OF_PROCESSORS:-12}")
-      power_scheme=$(run_ps '((powercfg /getactivescheme 2>$null) -replace "^.*:\s*", "")' 2>/dev/null || echo "High performance")
+      cpu_name=$(run_ps '(Get-CimInstance Win32_Processor | Select-Object -First 1).Name.Trim()' 2>/dev/null || echo "unknown")
+      threads=$(run_ps '(Get-CimInstance Win32_Processor | Select-Object -First 1).NumberOfLogicalProcessors' 2>/dev/null || echo "${NUMBER_OF_PROCESSORS:-unknown}")
+      power_raw=$(run_ps '(powercfg /getactivescheme 2>$null | Out-String).Trim()' 2>/dev/null || true)
+      power_scheme=$(power_plan_name "$power_raw")
+      [[ -n "$power_scheme" ]] || power_scheme="unknown"
       echo "CPU: $cpu_name ($threads threads)"
       echo "Active Power Scheme: $power_scheme"
       echo "Triad Checkpoints (Performance, Configuration, Security):"
