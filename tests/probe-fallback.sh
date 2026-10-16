@@ -242,6 +242,19 @@ grep -qF '(none: no WSL distribution is installed)' "$WORK/wsl8link.txt" || fail
 unset -f wsl.exe
 ok "wsl message with the Store link is recognized at exit 0"
 
+# real output of WSL installed without a distribution on a pt-BR host: exit -1, translated text that still names wsl.exe,
+# and a version label with an OEM-encoded byte (found on the Windows VM)
+wsl.exe() {
+  if [[ "$1" == "--version" ]]; then printf 'Vers\343o do WSL: 3.0.1.0\r\nVers\343o do n\372cleo: 6.18.20.1\r\n'; return 0; fi
+  printf "Subsistema do Windows para Linux n\343o tem distribui\347\365es instaladas.\r\nUse 'wsl.exe --list --online' para listar\r\ne 'wsl.exe --install <Distro>' para instalar.\r\n"; return 255
+}
+export -f wsl.exe
+LC_ALL=C.UTF-8 run_probe target-inspect.sh wsl > "$WORK/wsl8real.txt"
+grep -qF '(none: no WSL distribution is installed)' "$WORK/wsl8real.txt" || fail "real pt-BR 'no distribution' output is listed as a distribution"
+grep -q '^Version: 3.0.1.0$' "$WORK/wsl8real.txt" || fail "WSL version is not just the number: $(grep '^Version' "$WORK/wsl8real.txt")"
+unset -f wsl.exe
+ok "wsl installed without a distribution (real pt-BR output) shows no distribution and a clean version"
+
 # winget: "Enforced" needs both policy lines to be read; a missing or unreadable line is unknown, an enabled one is a warning
 export PS_STUB_OUT='{"FirewallAllActive":true,"FirewallSummary":"Domain:Active","RealTimeProtection":true,"AntivirusEnabled":true,"PUAProtection":1,"UACEnabled":true,"ExecutionPolicy":"RemoteSigned","SSHDService":"NotInstalled"}'
 winget() { printf 'Windows Package Manager v1.2\r\nSomething unrelated\r\n'; }

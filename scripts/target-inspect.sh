@@ -451,7 +451,9 @@ case "$target" in
     # without WSL, wsl.exe prints its help text (translated, but it always names "wsl.exe")
     case "$wsl_ver" in
       ""|*wsl.exe*) wsl_ver="unknown (WSL is not installed)" ;;
-      *) wsl_ver=$(awk 'NF { print; exit }' <<< "$wsl_ver") ;;
+      # the label is translated and may carry OEM-encoded bytes ("Versão do WSL: 3.0.1.0"): keep the number
+      *) wsl_ver=$(LC_ALL=C grep -a -oE '[0-9]+(\.[0-9]+){1,3}' <<< "$wsl_ver" | head -n 1 || true)
+         wsl_ver="${wsl_ver:-unknown}" ;;
     esac
     echo "Version: $wsl_ver"
 
