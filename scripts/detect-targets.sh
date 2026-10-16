@@ -2,17 +2,18 @@
 # detect-targets.sh - Distro & OS agnostic detection of system domains, tools, and packages (Windows & Linux)
 set -euo pipefail
 
+LIB="$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+if [[ ! -f "$LIB" ]]; then
+  echo "Error: $LIB not found; copy the whole skill folder, not a single script." >&2
+  exit 1
+fi
+# shellcheck source=lib.sh
+source "$LIB"
+
 output_json=false
 if [[ "${1:-}" == "--json" ]]; then
   output_json=true
 fi
-
-is_windows() {
-  case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*|Windows_NT*) return 0 ;;
-  esac
-  [[ -n "${WINDIR:-}" || ( -n "${OS:-}" && "$OS" == "Windows_NT" ) ]]
-}
 
 local_app_data="${LOCALAPPDATA:-$HOME/AppData/Local}"
 roaming_app_data="${APPDATA:-$HOME/AppData/Roaming}"

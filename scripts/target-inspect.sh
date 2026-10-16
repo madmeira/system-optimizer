@@ -2,31 +2,20 @@
 # target-inspect.sh - Inspects system domains, tools, and packages across Performance, Config, and Security (Windows & Linux)
 set -euo pipefail
 
+LIB="$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+if [[ ! -f "$LIB" ]]; then
+  echo "Error: $LIB not found; copy the whole skill folder, not a single script." >&2
+  exit 1
+fi
+# shellcheck source=lib.sh
+source "$LIB"
+
 target="${1:-}"
 
 if [[ -z "$target" ]]; then
   echo "Usage: $0 <target-domain-tool-or-package>" >&2
   exit 1
 fi
-
-is_windows() {
-  case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*|Windows_NT*) return 0 ;;
-  esac
-  [[ -n "${WINDIR:-}" || ( -n "${OS:-}" && "$OS" == "Windows_NT" ) ]]
-}
-
-run_ps() {
-  if command -v pwsh >/dev/null 2>&1; then
-    pwsh -NoProfile -NonInteractive -Command "$1"
-  elif command -v powershell.exe >/dev/null 2>&1; then
-    powershell.exe -NoProfile -NonInteractive -Command "$1"
-  elif command -v powershell >/dev/null 2>&1; then
-    powershell -NoProfile -NonInteractive -Command "$1"
-  else
-    return 1
-  fi
-}
 
 local_app_data="${LOCALAPPDATA:-$HOME/AppData/Local}"
 roaming_app_data="${APPDATA:-$HOME/AppData/Roaming}"
