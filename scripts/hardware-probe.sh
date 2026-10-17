@@ -2,29 +2,18 @@
 # hardware-probe.sh - Probes system hardware for system and tool optimization (Windows & Linux)
 set -euo pipefail
 
+LIB="$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+if [[ ! -f "$LIB" ]]; then
+  echo "Error: $LIB not found; copy the whole skill folder, not a single script." >&2
+  exit 1
+fi
+# shellcheck source=lib.sh
+source "$LIB"
+
 output_json=false
 if [[ "${1:-}" == "--json" ]]; then
   output_json=true
 fi
-
-is_windows() {
-  case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*|Windows_NT*) return 0 ;;
-  esac
-  [[ -n "${WINDIR:-}" || ( -n "${OS:-}" && "$OS" == "Windows_NT" ) ]]
-}
-
-run_ps() {
-  if command -v pwsh >/dev/null 2>&1; then
-    pwsh -NoProfile -NonInteractive -Command "$1"
-  elif command -v powershell.exe >/dev/null 2>&1; then
-    powershell.exe -NoProfile -NonInteractive -Command "$1"
-  elif command -v powershell >/dev/null 2>&1; then
-    powershell -NoProfile -NonInteractive -Command "$1"
-  else
-    return 1
-  fi
-}
 
 if is_windows; then
   # Probing Windows via PowerShell CIM/WMI
@@ -36,20 +25,20 @@ if is_windows; then
     $gpuRam = if ($gpus.Count -gt 0 -and $gpus[0].AdapterRAM) { "$([math]::Round($gpus[0].AdapterRAM / 1GB, 2)) GB" } else { "" }
     $gpuStr = if ($gpuRam) { "$gpuName ($gpuRam)" } else { $gpuName }
 
-    $disks = try { @(Get-PhysicalDisk | Select-Object -ExpandProperty MediaType -Unique) } catch { @("Unknown") }
-    $diskType = if ($disks.Count -gt 0) { ($disks -join "/") } else { "SSD" }
+    $disks = try { @(Get-PhysicalDisk | Select-Object -ExpandProperty MediaType -Unique) } catch { @() }
+    $diskType = if ($disks.Count -gt 0) { ($disks -join "/") } else { "unknown" }
 
     $pf = Get-CimInstance Win32_PageFileUsage | Measure-Object -Property AllocatedBaseSize -Sum
     $swapGb = if ($pf.Sum) { [math]::Round($pf.Sum / 1KB, 2) } else { 0 }
     $ramGb = [math]::Round($os.TotalVisibleMemorySize / 1MB, 2)
 
-    $power = try { ((powercfg /getactivescheme 2>$null) -replace "^.*:\s*", "") } catch { "unknown" }
+    $power = try { (powercfg /getactivescheme 2>$null | Out-String).Trim() } catch { $null }
     $mm = try { (Get-MMAgent -ErrorAction SilentlyContinue).MemoryCompression } catch { $null }
 
     [PSCustomObject]@{
-      CPUModel = if ($cpu) { $cpu.Name.Trim() } else { "Unknown CPU" }
-      Cores = if ($cpu) { [int]$cpu.NumberOfCores } else { 1 }
-      Threads = if ($cpu) { [int]$cpu.NumberOfLogicalProcessors } else { 1 }
+      CPUModel = if ($cpu) { $cpu.Name.Trim() } else { $null }
+      Cores = if ($cpu) { [int]$cpu.NumberOfCores } else { $null }
+      Threads = if ($cpu) { [int]$cpu.NumberOfLogicalProcessors } else { $null }
       Arch = if ([Environment]::Is64BitOperatingSystem) { "x86_64" } else { "x86" }
       RAMTotalGB = $ramGb
       SwapTotalGB = $swapGb
@@ -58,45 +47,48 @@ if is_windows; then
       OSName = $os.Caption.Trim()
       Kernel = "$($os.Version) (Build $($os.BuildNumber))"
       PowerScheme = $power
-      MemoryCompression = if ($null -ne $mm) { [bool]$mm } else { $true }
+      MemoryCompression = if ($null -ne $mm) { [bool]$mm } else { $null }
     } | ConvertTo-Json -Compress
   ' 2>/dev/null || true)
 
   if [[ -n "$ps_data" ]]; then
-    cpu_model=$(echo "$ps_data" | grep -oE '"CPUModel":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "Unknown CPU")
-    cpu_cores=$(echo "$ps_data" | grep -oE '"Threads":[0-9]+' | cut -d: -f2 || echo "1")
-    cpu_arch=$(echo "$ps_data" | grep -oE '"Arch":"[^"]+"' | cut -d: -f2 | tr -d '"' || echo "x86_64")
-    cpu_governor=$(echo "$ps_data" | grep -oE '"PowerScheme":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
+    cpu_model=$(echo "$ps_data" | grep -oE '"CPUModel":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
+    cpu_cores=$(echo "$ps_data" | grep -oE '"Threads":[0-9]+' | cut -d: -f2 || echo "unknown")
+    cpu_arch=$(echo "$ps_data" | grep -oE '"Arch":"[^"]+"' | cut -d: -f2 | tr -d '"' || echo "unknown")
+    power_raw=$(echo "$ps_data" | grep -oE '"PowerScheme":"[^"]+"' | cut -d: -f2- | tr -d '"' || true)
+    # keep only the plan name; without one in parentheses the GUID is not shown
+    cpu_governor="$(power_plan_name "$power_raw")"
+    if [[ -z "$cpu_governor" || "$cpu_governor" == "$power_raw" ]]; then cpu_governor="unknown"; fi
     microcode_rev="N/A (Managed by Windows/UEFI)"
-    ram_total_gb=$(echo "$ps_data" | grep -oE '"RAMTotalGB":[0-9.]+' | cut -d: -f2 || echo "16.0")
-    swap_total_gb=$(echo "$ps_data" | grep -oE '"SwapTotalGB":[0-9.]+' | cut -d: -f2 || echo "0.0")
+    ram_total_gb=$(echo "$ps_data" | grep -oE '"RAMTotalGB":[0-9.]+' | cut -d: -f2 || echo "unknown")
+    swap_total_gb=$(echo "$ps_data" | grep -oE '"SwapTotalGB":[0-9.]+' | cut -d: -f2 || echo "unknown")
     zram_active=false
     zram_size="0"
     zram_algorithm="none"
-    mem_compression=$(echo "$ps_data" | grep -oE '"MemoryCompression":(true|false)' | cut -d: -f2 || echo "true")
-    gpu_info=$(echo "$ps_data" | grep -oE '"GPU":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "Unknown GPU")
-    rotational=$(echo "$ps_data" | grep -oE '"StorageType":"[^"]+"' | cut -d: -f2 | tr -d '"' || echo "SSD")
+    mem_compression=$(echo "$ps_data" | grep -oE '"MemoryCompression":(true|false)' | cut -d: -f2 || echo "unknown")
+    gpu_info=$(echo "$ps_data" | grep -oE '"GPU":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
+    rotational=$(echo "$ps_data" | grep -oE '"StorageType":"[^"]+"' | cut -d: -f2 | tr -d '"' || echo "unknown")
     root_device="C:"
-    os_name=$(echo "$ps_data" | grep -oE '"OSName":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "Microsoft Windows")
-    kernel=$(echo "$ps_data" | grep -oE '"Kernel":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "10.0")
+    os_name=$(echo "$ps_data" | grep -oE '"OSName":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
+    kernel=$(echo "$ps_data" | grep -oE '"Kernel":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
   else
-    # Fallback to environment if PowerShell failed
-    cpu_model="Generic Multi-Core Processor"
-    cpu_cores="${NUMBER_OF_PROCESSORS:-4}"
-    cpu_arch="${PROCESSOR_ARCHITECTURE:-x86_64}"
-    cpu_governor="Balanced"
-    microcode_rev="N/A"
-    ram_total_gb="8.00"
-    swap_total_gb="8.00"
+    # PowerShell failed: report only what the environment really tells us, everything else is unknown
+    cpu_model="unknown"
+    cpu_cores="${NUMBER_OF_PROCESSORS:-unknown}"
+    cpu_arch="${PROCESSOR_ARCHITECTURE:-unknown}"
+    cpu_governor="unknown"
+    microcode_rev="unknown"
+    ram_total_gb="unknown"
+    swap_total_gb="unknown"
     zram_active=false
     zram_size="0"
     zram_algorithm="none"
-    mem_compression="true"
-    gpu_info="Generic Display Adapter"
-    rotational="SSD"
-    root_device="C:"
-    os_name="Microsoft Windows"
-    kernel="10.0"
+    mem_compression="unknown"
+    gpu_info="unknown"
+    rotational="unknown"
+    root_device="${SYSTEMDRIVE:-unknown}"
+    os_name="unknown"
+    kernel="unknown"
   fi
 else
   # Linux hardware probing
@@ -131,7 +123,7 @@ else
 
   gpu_info="None detected"
   if command -v lspci >/dev/null 2>&1; then
-    gpu_info=$(lspci 2>/dev/null | grep -Ei "vga|3d|display" | sed 's/.*: //' | tr '\n' '; ' | sed 's/; $//' || true)
+    gpu_info=$(lspci 2>/dev/null | grep -Ei "vga|3d|display" | sed 's/.*: //' | paste -sd';' | sed 's/;/; /g' || true)
     [[ -z "$gpu_info" ]] && gpu_info="None detected"
   elif command -v fastfetch >/dev/null 2>&1; then
     gpu_info=$(fastfetch --pipe 2>/dev/null | grep "GPU:" | sed 's/GPU:[ \t]*//' || true)
@@ -152,7 +144,7 @@ else
   fi
 
   if [[ "$rotational" == "unknown" && -n "$root_device" ]]; then
-    clean_dev=$(basename "$root_device" | sed 's/[0-9]*$//')
+    clean_dev=$(parent_disk "$root_device")
     if [[ -f "/sys/block/${clean_dev}/queue/rotational" ]]; then
       if [[ $(cat "/sys/block/${clean_dev}/queue/rotational") == "0" ]]; then
         rotational="SSD/NVMe"
@@ -169,15 +161,15 @@ else
   kernel=$(uname -r)
 fi
 
-# Memory tier & concurrency budget
-if (( $(awk "BEGIN {print ($ram_total_gb < 4.0)}") )); then
-  safe_concurrency=$cpu_cores
+# Memory tier & concurrency budget (concurrency is the logical core count, as the docs say)
+safe_concurrency=$cpu_cores
+if [[ ! "$ram_total_gb" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  memory_tier="unknown"
+elif (( $(awk "BEGIN {print ($ram_total_gb < 4.0)}") )); then
   memory_tier="low"
 elif (( $(awk "BEGIN {print ($ram_total_gb < 16.0)}") )); then
-  safe_concurrency=$(( cpu_cores * 2 ))
   memory_tier="medium"
 else
-  safe_concurrency=$(( cpu_cores * 4 ))
   memory_tier="high"
 fi
 
@@ -185,31 +177,31 @@ if [[ "$output_json" == true ]]; then
   cat <<EOF
 {
   "cpu": {
-    "model": "$cpu_model",
-    "cores": $cpu_cores,
-    "arch": "$cpu_arch",
-    "governor": "$cpu_governor",
-    "microcode": "$microcode_rev"
+    "model": "$(json_str "$cpu_model")",
+    "cores": $(json_num "$cpu_cores"),
+    "arch": "$(json_str "$cpu_arch")",
+    "governor": "$(json_str "$cpu_governor")",
+    "microcode": "$(json_str "$microcode_rev")"
   },
   "ram": {
-    "total_gb": $ram_total_gb,
-    "swap_gb": $swap_total_gb,
-    "tier": "$memory_tier",
-    "zram_active": $zram_active,
-    "zram_size": "$zram_size",
-    "zram_algorithm": "$zram_algorithm",
-    "memory_compression": $mem_compression
+    "total_gb": $(json_num "$ram_total_gb"),
+    "swap_gb": $(json_num "$swap_total_gb"),
+    "tier": "$(json_str "$memory_tier")",
+    "zram_active": $(json_bool "$zram_active"),
+    "zram_size": "$(json_str "$zram_size")",
+    "zram_algorithm": "$(json_str "$zram_algorithm")",
+    "memory_compression": $(json_bool "$mem_compression")
   },
-  "gpu": "$gpu_info",
+  "gpu": "$(json_str "$gpu_info")",
   "storage": {
-    "root_device": "$root_device",
-    "root_disk_type": "$rotational"
+    "root_device": "$(json_str "$root_device")",
+    "root_disk_type": "$(json_str "$rotational")"
   },
   "os": {
-    "name": "$os_name",
-    "kernel": "$kernel"
+    "name": "$(json_str "$os_name")",
+    "kernel": "$(json_str "$kernel")"
   },
-  "recommended_concurrency": $safe_concurrency
+  "recommended_concurrency": $(json_num "$safe_concurrency")
 }
 EOF
 else
@@ -218,7 +210,11 @@ else
 - OS: $os_name ($kernel, $cpu_arch)
 - CPU: $cpu_model ($cpu_cores threads, Power/Governor: $cpu_governor, Microcode: $microcode_rev)
 - Memory: ${ram_total_gb} GiB Total (Pagefile/Swap: ${swap_total_gb} GiB, Tier: $memory_tier, Compression: $mem_compression)
-$(if [[ "$zram_active" == true ]]; then echo "- zram Swap: Active: $zram_active (Size: $zram_size, Algorithm: $zram_algorithm)"; fi)
+EOF
+  if [[ "$zram_active" == true ]]; then
+    echo "- zram Swap: Active: $zram_active (Size: $zram_size, Algorithm: $zram_algorithm)"
+  fi
+  cat <<EOF
 - GPU: $gpu_info
 - Storage Type: $rotational (Root: $root_device)
 - Recommended Concurrency / Thread limit: $safe_concurrency

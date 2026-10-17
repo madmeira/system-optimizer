@@ -5,6 +5,7 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   validate:
@@ -22,15 +23,50 @@ jobs:
       - name: Validate Bash Script Syntax
         shell: bash
         run: |
-          for script in scripts/*.sh; do
+          for script in scripts/*.sh tests/*.sh; do
             echo "Checking syntax: $script"
             bash -n "$script"
           done
 
-      - name: Test Hardware & Target Probes (Dry-run / JSON output)
+      - name: Lint with ShellCheck
+        if: runner.os == 'Linux'
+        shell: bash
+        run: shellcheck -S warning scripts/*.sh tests/*.sh
+
+      - name: Locate Python
         shell: bash
         run: |
-          ./scripts/hardware-probe.sh --json
-          ./scripts/system-probe.sh --json
-          ./scripts/detect-targets.sh --json
-          ./scripts/security-audit.sh --json
+          PY="$(command -v python3 || command -v python || true)"
+          if [ -z "$PY" ]; then
+            echo "::error::python3/python not found on this runner; cannot validate JSON"
+            exit 1
+          fi
+          echo "PY=$PY" >> "$GITHUB_ENV"
+
+      - name: Test Hardware & Target Probes (valid JSON output)
+        shell: bash
+        run: |
+          for p in hardware-probe system-probe detect-targets security-audit; do
+            echo "== $p --json"
+            ./scripts/$p.sh --json | "$PY" -m json.tool > /dev/null
+          done
+
+      - name: Backup / Restore Smoke Test
+        shell: bash
+        run: bash tests/backup-smoke.sh
+
+      - name: Probe Fallback Test (unknown instead of invented values)
+        shell: bash
+        run: bash tests/probe-fallback.sh
+
+      - name: JSON Escaping Test
+        shell: bash
+        run: bash tests/json-escape.sh
+
+      - name: All Targets Smoke Test (every target-inspect target runs without errors)
+        shell: bash
+        run: bash tests/inspect-smoke.sh
+
+      - name: Windows Targets Smoke Test (Windows branch of target-inspect on a real host)
+        shell: bash
+        run: bash tests/inspect-windows.sh

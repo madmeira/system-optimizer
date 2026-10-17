@@ -2,6 +2,14 @@
 # target-inspect.sh - Inspects system domains, tools, and packages across Performance, Config, and Security (Windows & Linux)
 set -euo pipefail
 
+LIB="$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+if [[ ! -f "$LIB" ]]; then
+  echo "Error: $LIB not found; copy the whole skill folder, not a single script." >&2
+  exit 1
+fi
+# shellcheck source=lib.sh
+source "$LIB"
+
 target="${1:-}"
 
 if [[ -z "$target" ]]; then
@@ -9,27 +17,53 @@ if [[ -z "$target" ]]; then
   exit 1
 fi
 
-is_windows() {
-  case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*|Windows_NT*) return 0 ;;
-  esac
-  [[ -n "${WINDIR:-}" || ( -n "${OS:-}" && "$OS" == "Windows_NT" ) ]]
-}
-
-run_ps() {
-  if command -v pwsh >/dev/null 2>&1; then
-    pwsh -NoProfile -NonInteractive -Command "$1"
-  elif command -v powershell.exe >/dev/null 2>&1; then
-    powershell.exe -NoProfile -NonInteractive -Command "$1"
-  elif command -v powershell >/dev/null 2>&1; then
-    powershell -NoProfile -NonInteractive -Command "$1"
-  else
-    return 1
-  fi
-}
-
 local_app_data="${LOCALAPPDATA:-$HOME/AppData/Local}"
 roaming_app_data="${APPDATA:-$HOME/AppData/Roaming}"
+
+# Print a browser found on Linux (empty $1 = not installed).
+browser_report_linux() {
+  local exe="$1" ver
+  if [[ -z "$exe" ]]; then
+    echo "Status: NOT INSTALLED"
+    return 0
+  fi
+  ver=$("$exe" --version 2>/dev/null | head -n 1 || true)
+  echo "Status: INSTALLED"
+  echo "Executable: $exe"
+  echo "Version: ${ver:-unknown}"
+}
+
+# Print a browser found on Windows: <app exe name> <user data folder> <policy registry key>.
+# One PowerShell call prints three lines: the program path ("App Paths", machine-wide first, then
+# per-user), its version and whether the policy key exists.
+browser_report_win() {
+  local app="$1" data="$2" policy_key="$3" info exe="" ver="" managed="" profiles
+  info=$(SO_APP="$app" SO_KEY="$policy_key" run_ps '
+    $p = ""
+    foreach ($r in "HKLM","HKCU") {
+      $v = (Get-ItemProperty "${r}:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$env:SO_APP" -ErrorAction SilentlyContinue)."(default)"
+      if ($v) { $p = $v; break }
+    }
+    $p
+    if ($p) { (Get-Item -LiteralPath $p).VersionInfo.ProductVersion } else { "" }
+    Test-Path -Path $env:SO_KEY' 2>/dev/null || true)
+  { read -r exe; read -r ver; read -r managed; } <<< "$info" || true
+  if [[ -n "$exe" ]]; then
+    echo "Status: INSTALLED"
+    echo "Executable: $exe"
+    echo "Version: ${ver:-unknown}"
+  elif [[ -d "$data" ]]; then
+    echo "Status: user data found, executable not located"
+  else
+    echo "Status: NOT INSTALLED"
+  fi
+  if [[ -d "$data" ]]; then
+    profiles=$(find "$data" -maxdepth 1 -type d \( -name Default -o -name 'Profile *' \) 2>/dev/null | wc -l || true)
+    echo "User Data: ${data//\//\\}"
+    echo "Profiles: $profiles"
+  fi
+  echo "Managed Policies: ${managed:-unknown}"
+}
 
 # Dynamic hardware detection
 detected_threads=$(nproc 2>/dev/null || echo "${NUMBER_OF_PROCESSORS:-4}")
@@ -121,9 +155,17 @@ case "$target" in
     if is_windows; then
       echo "Mounted Volumes & Free Space:"
       run_ps 'Get-Volume | Where-Object { $_.DriveLetter } | ForEach-Object { "  * Drive $($_.DriveLetter): [$($_.FileSystem)] $([math]::Round($_.SizeRemaining/1GB, 1)) GB free of $([math]::Round($_.Size/1GB, 1)) GB" }' 2>/dev/null || true
-      trim_status=$(fsutil.exe behavior query DisableDeleteNotify 2>&1 | grep -i "NTFS" || echo "unknown")
+      # fsutil prints translated text in the OEM code page (bytes that are not valid UTF-8), so only the
+      # number after "=" is read (LC_ALL=C: "." must match any byte) and the explanation is written here.
+      trim_val=$(fsutil.exe behavior query DisableDeleteNotify 2>&1 | LC_ALL=C grep -a -i "NTFS" | LC_ALL=C sed -nE 's/.*=[[:space:]]*([0-9]+).*/\1/p' | head -n 1 || true)
+      case "$trim_val" in
+        0) trim_status="NTFS DisableDeleteNotify = 0  (TRIM operations are sent to the storage device)" ;;
+        1) trim_status="NTFS DisableDeleteNotify = 1  (TRIM is disabled)" ;;
+        *) trim_status="unknown" ;;
+      esac
       echo "SSD TRIM Status: $trim_status"
-      sn_status=$(fsutil.exe 8dot3name query 2>&1 | head -n 1 || echo "unknown")
+      sn_status=$(run_ps 'switch ((Get-ItemPropertyValue -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name NtfsDisable8dot3NameCreation)) { 0 { "Enabled on all volumes" } 1 { "Disabled on all volumes" } 2 { "Per volume setting (the default)" } 3 { "Disabled, except on the system volume" } default { "unknown" } }' 2>/dev/null || true)
+      sn_status="${sn_status:-unknown}"
       echo "NTFS 8.3 Short Name Creation: $sn_status"
       echo "Triad Checkpoints (Performance, Configuration, Security):"
       echo "  * Performance: NVMe/SSD TRIM enabled (DisableDeleteNotify=0), weekly Optimize-Volume -ReTrim"
@@ -182,9 +224,11 @@ case "$target" in
   cpu|governor|power)
     echo "Category: System Core / CPU & Power Management"
     if is_windows; then
-      cpu_name=$(run_ps '(Get-CimInstance Win32_Processor | Select-Object -First 1).Name.Trim()' 2>/dev/null || echo "Unknown CPU")
-      threads=$(run_ps '(Get-CimInstance Win32_Processor | Select-Object -First 1).NumberOfLogicalProcessors' 2>/dev/null || echo "${NUMBER_OF_PROCESSORS:-12}")
-      power_scheme=$(run_ps '((powercfg /getactivescheme 2>$null) -replace "^.*:\s*", "")' 2>/dev/null || echo "High performance")
+      cpu_name=$(run_ps '(Get-CimInstance Win32_Processor | Select-Object -First 1).Name.Trim()' 2>/dev/null || echo "unknown")
+      threads=$(run_ps '(Get-CimInstance Win32_Processor | Select-Object -First 1).NumberOfLogicalProcessors' 2>/dev/null || echo "${NUMBER_OF_PROCESSORS:-unknown}")
+      power_raw=$(run_ps '(powercfg /getactivescheme 2>$null | Out-String).Trim()' 2>/dev/null || true)
+      power_scheme=$(power_plan_name "$power_raw")
+      [[ -n "$power_scheme" ]] || power_scheme="unknown"
       echo "CPU: $cpu_name ($threads threads)"
       echo "Active Power Scheme: $power_scheme"
       echo "Triad Checkpoints (Performance, Configuration, Security):"
@@ -231,7 +275,7 @@ case "$target" in
       echo "  * Security: Verify Secure Boot status (Confirm-SecureBootUEFI)"
     else
       echo "Startup Time: $(systemd-analyze 2>/dev/null | head -n 1 || echo unknown)"
-      echo "Failed Units: $(systemctl --failed --no-legend 2>/dev/null | wc -l || echo 0) unit(s)"
+      echo "Failed Units: $(systemctl --failed --no-legend 2>/dev/null | wc -l || true) unit(s)"
       echo "Journal Usage: $(journalctl --disk-usage 2>/dev/null || echo unknown)"
     fi
     echo "====================================="
@@ -277,11 +321,11 @@ case "$target" in
       sshd_svc=$(run_ps '(Get-Service -Name sshd -ErrorAction SilentlyContinue).Status' 2>/dev/null || echo "NotInstalled")
       echo "OpenSSH Server Service: $sshd_svc"
       echo "Config Locations:"
-      for f in "$HOME/.ssh/config" "/c/ProgramData/ssh/sshd_config" "/etc/ssh/sshd_config"; do
+      for f in "$HOME/.ssh/config" "/c/ProgramData/ssh/sshd_config"; do
         [[ -f "$f" ]] && echo "  - [EXISTS] $f"
       done
       echo "Local Key Directory: $HOME/.ssh"
-      [[ -d "$HOME/.ssh" ]] && echo "  - Permissions: $(stat -c '%a' "$HOME/.ssh" 2>/dev/null || echo 'present')"
+      [[ -d "$HOME/.ssh" ]] && echo "  - Permissions: n/a (NTFS ACLs, not POSIX modes)"
     else
       echo "sshd Service: $(systemctl is-active sshd 2>/dev/null || echo inactive) ($(systemctl is-enabled sshd 2>/dev/null || echo disabled))"
       echo "SSH Configs:"
@@ -296,7 +340,7 @@ case "$target" in
           echo "  * PasswordAuthentication: $(echo "$sshd_t" | grep -i '^passwordauthentication' | awk '{print $2}')"
         fi
       fi
-      echo "~/.ssh Directory Permissions: $(stat -c '%a' ~/.ssh 2>/dev/null || echo absent)"
+      echo "Permissions of ~/.ssh directory: $(stat -c '%a' "$HOME/.ssh" 2>/dev/null || echo absent)"
     fi
     echo "====================================="
     exit 0
@@ -320,11 +364,11 @@ case "$target" in
     ;;
   winget)
     echo "Category: Package Manager / Windows Package Manager (winget)"
-    winget_bin=$(which winget 2>/dev/null || echo "")
+    winget_bin=$(command -v winget 2>/dev/null || echo "")
     echo "Binary: ${winget_bin:-Not installed}"
-    winget_ver="Unknown"
+    winget_ver="unknown"
     if [[ -n "$winget_bin" ]]; then
-      winget_ver=$(winget --version 2>/dev/null || echo "Unknown")
+      winget_ver=$(winget --version 2>/dev/null || echo "unknown")
     fi
     echo "Version: $winget_ver"
 
@@ -349,6 +393,8 @@ case "$target" in
     winget --info 2>/dev/null | grep -E "InstallerHashOverride|LocalArchiveMalwareScanOverride|BypassCertificatePinning" | while read -r line; do
       echo "  * $line"
     done || true
+    echo "Administrator settings (winget settings export, language-independent):"
+    winget settings export 2>/dev/null | tr -d '\r' | grep -oE '"(BypassCertificatePinningForMicrosoftStore|InstallerHashOverride|LocalArchiveMalwareScanOverride|LocalManifestFiles)"[[:space:]]*:[[:space:]]*(true|false)' | sed -E 's/^"([^"]+)"[[:space:]]*:[[:space:]]*/  * \1: /' || echo "  (not available in this winget version)"
 
     echo "Triad Checkpoints (Performance, Configuration, Security):"
     echo "  * Performance: Set 'source.autoUpdateIntervalInMinutes: 120' to eliminate 5-10s source sync stall on every invocation"
@@ -360,7 +406,7 @@ case "$target" in
     ;;
   windows-terminal|wt)
     echo "Category: Terminal Emulator / Windows Terminal"
-    wt_bin=$(which wt 2>/dev/null || echo "")
+    wt_bin=$(command -v wt 2>/dev/null || echo "")
     echo "Binary: ${wt_bin:-App Execution Alias (wt.exe)}"
 
     wt_settings=""
@@ -399,9 +445,16 @@ case "$target" in
     ;;
   wsl)
     echo "Category: Subsystem & Virtualization / Windows Subsystem for Linux (WSL)"
-    wsl_bin=$(which wsl 2>/dev/null || which wsl.exe 2>/dev/null || echo "")
+    wsl_bin=$(command -v wsl 2>/dev/null || command -v wsl.exe 2>/dev/null || echo "")
     echo "Binary: ${wsl_bin:-/c/Windows/System32/wsl.exe}"
-    wsl_ver=$(wsl.exe --version 2>/dev/null | tr -d '\0' | head -n 1 || echo "Unknown")
+    wsl_ver=$(wsl.exe --version 2>/dev/null | tr -d '\0\r' || true)
+    # without WSL, wsl.exe prints its help text (translated, but it always names "wsl.exe")
+    case "$wsl_ver" in
+      ""|*wsl.exe*) wsl_ver="unknown (WSL is not installed)" ;;
+      # the label is translated and may carry OEM-encoded bytes ("Versão do WSL: 3.0.1.0"): keep the number
+      *) wsl_ver=$(LC_ALL=C grep -a -oE '[0-9]+(\.[0-9]+){1,3}' <<< "$wsl_ver" | head -n 1 || true)
+         wsl_ver="${wsl_ver:-unknown}" ;;
+    esac
     echo "Version: $wsl_ver"
 
     echo "Discovered Configuration Files:"
@@ -423,9 +476,18 @@ case "$target" in
     done
 
     echo "Registered WSL Distributions:"
-    wsl.exe -l -v 2>/dev/null | tr -d '\0' | while IFS= read -r line; do
-      [[ -n "$line" ]] && echo "  * $line"
-    done || true
+    # Without WSL, wsl.exe prints its help text; without a distribution it prints a message with the
+    # Store link (and normally fails). The texts are translated, so judge by the exit status and by
+    # the program name or link they contain, not by words.
+    wsl_list=""
+    wsl_list=$(wsl.exe -l -v 2>/dev/null | tr -d '\0\r') || wsl_list=""
+    if [[ -z "$wsl_list" || "$wsl_list" == *"wsl.exe"* || "$wsl_list" == *"aka.ms/"* ]]; then
+      echo "  (none: no WSL distribution is installed)"
+    else
+      while IFS= read -r line; do
+        [[ -n "$line" ]] && echo "  * $line"
+      done <<< "$wsl_list"
+    fi
 
     wsl_conf_file=""
     for candidate in "${wsl_cfg_candidates[@]}"; do
@@ -451,9 +513,9 @@ case "$target" in
     ;;
   pwsh|powershell)
     echo "Category: Shell Environment / PowerShell"
-    ps_bin=$(which pwsh 2>/dev/null || which powershell 2>/dev/null || echo "")
-    echo "Binary: ${ps_bin:-Unknown}"
-    ps_ver=$(run_ps '$PSVersionTable.PSVersion.ToString()' 2>/dev/null || echo "Unknown")
+    ps_bin=$(command -v pwsh 2>/dev/null || command -v powershell 2>/dev/null || echo "")
+    echo "Binary: ${ps_bin:-unknown}"
+    ps_ver=$(run_ps '$PSVersionTable.PSVersion.ToString()' 2>/dev/null || echo "unknown")
     echo "Version: $ps_ver"
 
     echo "PowerShell Profile Paths:"
@@ -524,15 +586,15 @@ case "$target" in
     fi
 
     echo "Performance Metrics:"
-    if command -v python3 >/dev/null 2>&1; then
-      startup_ms=$(python3 -c "
-import time, subprocess
-for _ in range(3): subprocess.run(['bash', '-i', '-c', 'exit'], capture_output=True)
-s = time.perf_counter()
-for _ in range(5): subprocess.run(['bash', '-i', '-c', 'exit'], capture_output=True)
-print(f'{(time.perf_counter() - s)/5*1000:.1f}')
-" 2>/dev/null || echo "unknown")
+    if [[ -n "${EPOCHREALTIME:-}" ]]; then
+      for _ in 1 2 3; do bash -i -c exit > /dev/null 2>&1 || true; done
+      lat_start="${EPOCHREALTIME/,/.}"   # some locales print a comma
+      for _ in 1 2 3 4 5; do bash -i -c exit > /dev/null 2>&1 || true; done
+      lat_end="${EPOCHREALTIME/,/.}"
+      startup_ms=$(awk -v s="$lat_start" -v e="$lat_end" 'BEGIN { printf "%.1f", (e - s) / 5 * 1000 }')
       echo "  * Interactive Startup Latency: ~${startup_ms} ms"
+    else
+      echo "  * Interactive Startup Latency: n/a (needs bash 5: EPOCHREALTIME)"
     fi
 
     echo "Security & Hygiene Checks:"
@@ -551,11 +613,11 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     ;;
   pi|pi-agent|agent)
     echo "Category: Agent Harness / Pi Coding Agent"
-    pi_bin=$(which pi 2>/dev/null || echo "")
-    echo "Binary: ${pi_bin:-Unknown (running via wrapper/npx)}"
-    pi_ver="Unknown"
+    pi_bin=$(command -v pi 2>/dev/null || echo "")
+    echo "Binary: ${pi_bin:-unknown (running via wrapper/npx)}"
+    pi_ver="unknown"
     if [[ -n "$pi_bin" ]]; then
-      pi_ver=$("$pi_bin" --version 2>/dev/null || echo "Unknown")
+      pi_ver=$("$pi_bin" --version 2>/dev/null || echo "unknown")
     fi
     echo "Version: $pi_ver"
 
@@ -567,7 +629,7 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     echo "Performance & Storage Metrics:"
     sessions_dir="$HOME/.pi/agent/sessions"
     if [[ -d "$sessions_dir" ]]; then
-      sess_count=$(find "$sessions_dir" -type f -name "*.jsonl" 2>/dev/null | wc -l || echo 0)
+      sess_count=$(find "$sessions_dir" -type f -name "*.jsonl" 2>/dev/null | wc -l || true)
       sess_size=$(du -sh "$sessions_dir" 2>/dev/null | awk '{print $1}' || echo "0")
       echo "  * Saved Sessions: $sess_count session files ($sess_size disk usage)"
     fi
@@ -578,7 +640,7 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     fi
 
     echo "Mise Toolchain Synergy in Agent Harness:"
-    mise_bin=$(which mise 2>/dev/null || echo "")
+    mise_bin=$(command -v mise 2>/dev/null || echo "")
     if [[ -n "$mise_bin" ]]; then
       echo "  * Mise Binary Detected: $mise_bin"
       mise_shims="$HOME/.local/share/mise/shims"
@@ -606,10 +668,10 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     ;;
   controld|ctrld)
     echo "Category: Network & DNS / Control D Encrypted Resolver Daemon"
-    ctrld_bin=$(which ctrld 2>/dev/null || which controld 2>/dev/null || echo "")
+    ctrld_bin=$(command -v ctrld 2>/dev/null || command -v controld 2>/dev/null || echo "")
     echo "Binary: ${ctrld_bin:-Not installed}"
     if [[ -n "$ctrld_bin" ]]; then
-      ctrld_ver=$("$ctrld_bin" version 2>/dev/null || "$ctrld_bin" --version 2>/dev/null || echo "Unknown")
+      ctrld_ver=$("$ctrld_bin" version 2>/dev/null || "$ctrld_bin" --version 2>/dev/null || echo "unknown")
       echo "Version: $ctrld_ver"
     fi
 
@@ -632,7 +694,7 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     ;;
   rustdesk)
     echo "Category: Remote Desktop / RustDesk Remote Access"
-    rd_bin=$(which rustdesk 2>/dev/null || echo "")
+    rd_bin=$(command -v rustdesk 2>/dev/null || echo "")
     echo "Binary: ${rd_bin:-Not installed (Windows App or Service)}"
 
     echo "Discovered Configuration Files:"
@@ -655,10 +717,10 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     ;;
   mpv)
     echo "Category: Media Player / mpv Video Player"
-    mpv_bin=$(which mpv 2>/dev/null || echo "")
+    mpv_bin=$(command -v mpv 2>/dev/null || echo "")
     echo "Binary: ${mpv_bin:-Not installed}"
     if [[ -n "$mpv_bin" ]]; then
-      mpv_ver=$("$mpv_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      mpv_ver=$("$mpv_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $mpv_ver"
     fi
 
@@ -686,9 +748,9 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     fi
 
     echo "MPV + yt-dlp + GPU HWDEC Companion Synergy:"
-    ytdl_bin=$(which yt-dlp 2>/dev/null || echo "")
+    ytdl_bin=$(command -v yt-dlp 2>/dev/null || echo "")
     if [[ -n "$ytdl_bin" ]]; then
-      ytdl_ver=$("$ytdl_bin" --version 2>/dev/null || echo "Unknown")
+      ytdl_ver=$("$ytdl_bin" --version 2>/dev/null || echo "unknown")
       echo "  * Media Streamer (yt-dlp): [AVAILABLE] ($ytdl_bin $ytdl_ver)"
     else
       echo "  * Media Streamer (yt-dlp): [NOT FOUND] (Install yt-dlp to stream web video directly to mpv)"
@@ -714,10 +776,10 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     ;;
   topgrade)
     echo "Category: Maintenance & Update Orchestrator / Topgrade"
-    tg_bin=$(which topgrade 2>/dev/null || echo "")
+    tg_bin=$(command -v topgrade 2>/dev/null || echo "")
     echo "Binary: ${tg_bin:-Not installed}"
     if [[ -n "$tg_bin" ]]; then
-      tg_ver=$("$tg_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      tg_ver=$("$tg_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $tg_ver"
     fi
 
@@ -745,7 +807,7 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
       echo "  * Pre-Sudo Credential Cache: $pre_sudo_val"
 
       echo "Mise Companion Integration in Topgrade:"
-      mise_bin=$(which mise 2>/dev/null || echo "")
+      mise_bin=$(command -v mise 2>/dev/null || echo "")
       if [[ -n "$mise_bin" ]]; then
         tg_has_mise=$(grep -E '^[[:space:]]*\[mise\]' "$tg_cfg" 2>/dev/null || true)
         tg_bump=$(grep -A 5 '^[[:space:]]*\[mise\]' "$tg_cfg" 2>/dev/null | grep -E '^[[:space:]]*bump[[:space:]]*=' | cut -d= -f2- | tr -d ' "' || echo "false")
@@ -770,10 +832,10 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     ;;
   mise|rtx)
     echo "Category: Polyglot Tool & Runtime Manager / mise"
-    mise_bin=$(which mise 2>/dev/null || echo "")
+    mise_bin=$(command -v mise 2>/dev/null || echo "")
     echo "Binary: ${mise_bin:-Not installed}"
     if [[ -n "$mise_bin" ]]; then
-      mise_ver=$("$mise_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      mise_ver=$("$mise_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $mise_ver"
       if is_windows; then
         echo "Platform: Windows (Native / shims)"
@@ -812,12 +874,12 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
 
     if [[ -n "$mise_bin" ]]; then
       echo "Mise Runtime & Tool Summary:"
-      tool_count=$("$mise_bin" ls --current 2>/dev/null | wc -l || echo "0")
+      tool_count=$("$mise_bin" ls --current 2>/dev/null | wc -l || true)
       echo "  * Active/Managed Tools: $tool_count installed"
     fi
 
     echo "Topgrade Integration Status:"
-    tg_bin=$(which topgrade 2>/dev/null || echo "")
+    tg_bin=$(command -v topgrade 2>/dev/null || echo "")
     if [[ -n "$tg_bin" ]]; then
       tg_cfg=""
       for tf in "$roaming_app_data/topgrade.toml" "$HOME/.config/topgrade.toml"; do
@@ -841,7 +903,7 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     fi
 
     echo "Neovim Companion Status:"
-    nv_bin=$(which nvim 2>/dev/null || which neovim 2>/dev/null || echo "")
+    nv_bin=$(command -v nvim 2>/dev/null || command -v neovim 2>/dev/null || echo "")
     if [[ -n "$nv_bin" ]]; then
       nv_cfg=""
       for nf in "$local_app_data/nvim/init.lua" "$HOME/.config/nvim/init.lua"; do
@@ -863,11 +925,11 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     ;;
   cargo|rust|rustc)
     echo "Category: Toolchain & Package Manager / Cargo & Rust"
-    cg_bin=$(which cargo 2>/dev/null || echo "")
+    cg_bin=$(command -v cargo 2>/dev/null || echo "")
     echo "Binary: ${cg_bin:-Not installed}"
     if [[ -n "$cg_bin" ]]; then
-      cg_ver=$("$cg_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
-      rc_ver=$(rustc --version 2>/dev/null | head -n 1 || echo "Unknown")
+      cg_ver=$("$cg_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
+      rc_ver=$(rustc --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $cg_ver (rustc: $rc_ver)"
     fi
 
@@ -891,7 +953,7 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     fi
 
     echo "Mise & Topgrade Companion Integration:"
-    mise_bin=$(which mise 2>/dev/null || echo "")
+    mise_bin=$(command -v mise 2>/dev/null || echo "")
     if [[ -n "$mise_bin" ]]; then
       mise_cfg=""
       for mf in "$HOME/.config/mise/config.toml" "$local_app_data/mise/config.toml"; do
@@ -903,7 +965,7 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
       echo "  * Mise is not installed."
     fi
 
-    tg_bin=$(which topgrade 2>/dev/null || echo "")
+    tg_bin=$(command -v topgrade 2>/dev/null || echo "")
     if [[ -n "$tg_bin" ]]; then
       tg_cfg=""
       for tf in "$roaming_app_data/topgrade.toml" "$HOME/.config/topgrade.toml"; do
@@ -926,10 +988,10 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     ;;
   ripgrep|rg)
     echo "Category: Search Utility / ripgrep (rg)"
-    rg_bin=$(which rg 2>/dev/null || which ripgrep 2>/dev/null || echo "")
+    rg_bin=$(command -v rg 2>/dev/null || command -v ripgrep 2>/dev/null || echo "")
     echo "Binary: ${rg_bin:-Not installed}"
     if [[ -n "$rg_bin" ]]; then
-      rg_ver=$("$rg_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      rg_ver=$("$rg_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $rg_ver"
     fi
 
@@ -944,7 +1006,7 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     else
       echo "  * FZF Backend: [RECOMMENDED] (Wire rg as backend: export FZF_DEFAULT_COMMAND=\"rg --files --hidden --glob '!.git/*'\")"
     fi
-    bat_bin=$(which bat 2>/dev/null || echo "")
+    bat_bin=$(command -v bat 2>/dev/null || echo "")
     if [[ -n "$bat_bin" ]]; then
       echo "  * Bat Previewer: [AVAILABLE] ($bat_bin provides line-numbered syntax previews)"
     else
@@ -960,10 +1022,10 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     ;;
   zoxide)
     echo "Category: Navigation / zoxide Directory Jumper"
-    zo_bin=$(which zoxide 2>/dev/null || echo "")
+    zo_bin=$(command -v zoxide 2>/dev/null || echo "")
     echo "Binary: ${zo_bin:-Not installed}"
     if [[ -n "$zo_bin" ]]; then
-      zo_ver=$("$zo_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      zo_ver=$("$zo_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $zo_ver"
     fi
 
@@ -973,7 +1035,7 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     done
 
     if command -v zoxide >/dev/null 2>&1; then
-      db_count=$(zoxide query -l 2>/dev/null | wc -l || echo "0")
+      db_count=$(zoxide query -l 2>/dev/null | wc -l || true)
       echo "Tracked Directories in Database: $db_count entries"
     fi
 
@@ -999,10 +1061,10 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     ;;
   eza)
     echo "Category: Modern File Lister / eza"
-    eza_bin=$(which eza 2>/dev/null || echo "")
+    eza_bin=$(command -v eza 2>/dev/null || echo "")
     echo "Binary: ${eza_bin:-Not installed}"
     if [[ -n "$eza_bin" ]]; then
-      eza_ver=$("$eza_bin" --version 2>/dev/null | head -n 2 | tr '\n' ' ' || echo "Unknown")
+      eza_ver=$("$eza_bin" --version 2>/dev/null | head -n 2 | tr '\n' ' ' || echo "unknown")
       echo "Version: $eza_ver"
     fi
 
@@ -1020,10 +1082,10 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     ;;
   lazygit)
     echo "Category: Git Terminal UI / lazygit"
-    lg_bin=$(which lazygit 2>/dev/null || echo "")
+    lg_bin=$(command -v lazygit 2>/dev/null || echo "")
     echo "Binary: ${lg_bin:-Not installed}"
     if [[ -n "$lg_bin" ]]; then
-      lg_ver=$("$lg_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      lg_ver=$("$lg_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $lg_ver"
     fi
 
@@ -1070,10 +1132,10 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     ;;
   neovim|nvim)
     echo "Category: Modal Text Editor / Neovim"
-    nv_bin=$(which nvim 2>/dev/null || which neovim 2>/dev/null || echo "")
+    nv_bin=$(command -v nvim 2>/dev/null || command -v neovim 2>/dev/null || echo "")
     echo "Binary: ${nv_bin:-Not installed}"
     if [[ -n "$nv_bin" ]]; then
-      nv_ver=$("$nv_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      nv_ver=$("$nv_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $nv_ver"
     fi
 
@@ -1096,7 +1158,7 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
       fi
 
       echo "Mise Companion & Toolchain Integration in Neovim:"
-      mise_bin=$(which mise 2>/dev/null || echo "")
+      mise_bin=$(command -v mise 2>/dev/null || echo "")
       if [[ -n "$mise_bin" ]]; then
         echo "  * Mise Binary Detected: $mise_bin"
         has_shims_in_path=false
@@ -1135,10 +1197,10 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     ;;
   git)
     echo "Category: Version Control / Git"
-    git_bin=$(which git 2>/dev/null || echo "")
+    git_bin=$(command -v git 2>/dev/null || echo "")
     echo "Binary: ${git_bin:-Not installed}"
     if [[ -n "$git_bin" ]]; then
-      git_ver=$(git --version 2>/dev/null || echo "Unknown")
+      git_ver=$(git --version 2>/dev/null || echo "unknown")
       echo "Version: $git_ver"
     fi
 
@@ -1164,10 +1226,10 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     ;;
   bat)
     echo "Category: Syntax Pager / bat"
-    bat_bin=$(which bat 2>/dev/null || echo "")
+    bat_bin=$(command -v bat 2>/dev/null || echo "")
     echo "Binary: ${bat_bin:-Not installed}"
     if [[ -n "$bat_bin" ]]; then
-      bat_ver=$("$bat_bin" --version 2>/dev/null || echo "Unknown")
+      bat_ver=$("$bat_bin" --version 2>/dev/null || echo "unknown")
       echo "Version: $bat_ver"
     fi
 
@@ -1188,10 +1250,10 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     ;;
   fzf)
     echo "Category: Fuzzy Finder / fzf"
-    fzf_bin=$(which fzf 2>/dev/null || echo "")
+    fzf_bin=$(command -v fzf 2>/dev/null || echo "")
     echo "Binary: ${fzf_bin:-Not installed}"
     if [[ -n "$fzf_bin" ]]; then
-      fzf_ver=$("$fzf_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      fzf_ver=$("$fzf_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $fzf_ver"
     fi
 
@@ -1200,15 +1262,15 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     echo "  * FZF_DEFAULT_OPTS: ${FZF_DEFAULT_OPTS:-[UNSET]}"
 
     echo "Ripgrep + FZF + Bat Synergy Integration:"
-    if [[ "$FZF_DEFAULT_COMMAND" =~ (rg|ripgrep) ]]; then
+    if [[ "${FZF_DEFAULT_COMMAND:-}" =~ (rg|ripgrep) ]]; then
       echo "  * Search Generator (ripgrep): [CONFIGURED] (rg wired as FZF_DEFAULT_COMMAND backend)"
-    elif [[ "$FZF_DEFAULT_COMMAND" =~ fd ]]; then
+    elif [[ "${FZF_DEFAULT_COMMAND:-}" =~ fd ]]; then
       echo "  * Search Generator (fd): [CONFIGURED] (fd directory walker)"
     else
       echo "  * Search Generator: [DEFAULT/MISSING] (Wire rg: export FZF_DEFAULT_COMMAND=\"rg --files --hidden --glob '!.git/*'\")"
     fi
 
-    if [[ "$FZF_DEFAULT_OPTS" =~ bat ]]; then
+    if [[ "${FZF_DEFAULT_OPTS:-}" =~ bat ]]; then
       echo "  * Syntax Previewer (bat): [CONFIGURED] (bat rendering line-numbered previews)"
     else
       echo "  * Syntax Previewer (bat): [RECOMMENDED] (Configure --preview 'bat --style=numbers --color=always --line-range :500 {}')"
@@ -1223,10 +1285,10 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     ;;
   starship)
     echo "Category: Shell Prompt / Starship Cross-Shell Prompt"
-    ss_bin=$(which starship 2>/dev/null || echo "")
+    ss_bin=$(command -v starship 2>/dev/null || echo "")
     echo "Binary: ${ss_bin:-Not installed}"
     if [[ -n "$ss_bin" ]]; then
-      ss_ver=$("$ss_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      ss_ver=$("$ss_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $ss_ver"
     fi
 
@@ -1277,10 +1339,10 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     ;;
   yt-dlp)
     echo "Category: Media Downloader / yt-dlp"
-    ytdl_bin=$(which yt-dlp 2>/dev/null || echo "")
+    ytdl_bin=$(command -v yt-dlp 2>/dev/null || echo "")
     echo "Binary: ${ytdl_bin:-Not installed}"
     if [[ -n "$ytdl_bin" ]]; then
-      ytdl_ver=$("$ytdl_bin" --version 2>/dev/null || echo "Unknown")
+      ytdl_ver=$("$ytdl_bin" --version 2>/dev/null || echo "unknown")
       echo "Version: $ytdl_ver"
     fi
 
@@ -1298,10 +1360,10 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     ;;
   herdr)
     echo "Category: Terminal Workspace & AI Agent Multiplexer / Herdr"
-    hdr_bin=$(which herdr 2>/dev/null || echo "")
+    hdr_bin=$(command -v herdr 2>/dev/null || echo "")
     echo "Binary: ${hdr_bin:-Not installed}"
     if [[ -n "$hdr_bin" ]]; then
-      hdr_ver=$("$hdr_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      hdr_ver=$("$hdr_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $hdr_ver"
     fi
 
@@ -1343,7 +1405,7 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     theme_desc="synchronize theme (or prompt user)"
     [[ -n "$inferred_thm" ]] && theme_desc="synchronize theme (inferred: $inferred_thm)"
     echo "Mise Companion Workspace Toolchains:"
-    mise_bin=$(which mise 2>/dev/null || echo "")
+    mise_bin=$(command -v mise 2>/dev/null || echo "")
     if [[ -n "$mise_bin" ]]; then
       echo "  * Mise Binary Detected: $mise_bin"
       mise_shims="$HOME/.local/share/mise/shims"
@@ -1366,10 +1428,10 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     ;;
   gh|github-cli)
     echo "Category: Developer Tool / GitHub CLI (gh)"
-    gh_bin=$(which gh 2>/dev/null || echo "")
+    gh_bin=$(command -v gh 2>/dev/null || echo "")
     echo "Binary: ${gh_bin:-Not installed}"
     if [[ -n "$gh_bin" ]]; then
-      gh_ver=$("$gh_bin" --version 2>/dev/null | head -n 1 || echo "Unknown")
+      gh_ver=$("$gh_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
       echo "Version: $gh_ver"
     fi
 
@@ -1409,7 +1471,7 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
 
     echo "Installed GitHub CLI Extensions:"
     if command -v gh >/dev/null 2>&1; then
-      ext_count=$(gh extension list 2>/dev/null | wc -l || echo 0)
+      ext_count=$(gh extension list 2>/dev/null | wc -l || true)
       if [[ "$ext_count" -gt 0 ]]; then
         echo "  * Total Extensions: $ext_count"
         gh extension list 2>/dev/null | while read -r eline; do
@@ -1450,6 +1512,57 @@ print(f'{(time.perf_counter() - s)/5*1000:.1f}')
     echo "====================================="
     exit 0
     ;;
+  network|net)
+    echo "Category: System Core / Network"
+    if is_windows; then
+      echo "Active Adapters:"
+      run_ps 'Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | ForEach-Object { "  * $($_.Name): $($_.InterfaceDescription), $($_.LinkSpeed)" }' 2>/dev/null || echo "  (unknown)"
+      echo "DNS Servers (IPv4):"
+      run_ps 'Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object { $_.ServerAddresses } | ForEach-Object { "  * $($_.InterfaceAlias): $($_.ServerAddresses -join ",")" }' 2>/dev/null || echo "  (unknown)"
+      echo "TCP Receive Window Auto-Tuning: $(run_ps '"$((Get-NetTCPSetting -SettingName Internet).AutoTuningLevelLocal)".ToLower()' 2>/dev/null || echo unknown)"
+      echo "Listening TCP Sockets: $(netstat -ano -p tcp 2>/dev/null | grep -ci LISTENING || true)"
+    else
+      echo "Default Route: $(ip route show default 2>/dev/null | head -n 1 || true)"
+      echo "DNS Resolvers: $(grep '^nameserver' /etc/resolv.conf 2>/dev/null | awk '{print $2}' | tr '\n' ' ' || true)"
+      echo "TCP Congestion Control: $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo unknown)"
+      echo "Default Queue Discipline: $(sysctl -n net.core.default_qdisc 2>/dev/null || echo unknown)"
+      echo "Listening TCP Sockets: $(ss -tlnH 2>/dev/null | wc -l || true)"
+    fi
+    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "  * Performance: TCP auto-tuning left at normal; BBR or CUBIC congestion control; no leftover VPN adapters"
+    echo "  * Configuration: Encrypted DNS (DoH/DoT) with a local cache; static addressing only where needed"
+    echo "  * Security: Close listening sockets that nothing uses; firewall limited to the local network"
+    echo "====================================="
+    exit 0
+    ;;
+  chrome|google-chrome|google-chrome-stable)
+    echo "Category: Web Browser / Google Chrome"
+    if is_windows; then
+      browser_report_win chrome.exe "$local_app_data/Google/Chrome/User Data" 'HKLM:\SOFTWARE\Policies\Google\Chrome'
+    else
+      browser_report_linux "$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || true)"
+    fi
+    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "  * Performance: Hardware acceleration on; trim startup extensions"
+    echo "  * Configuration: One profile per context; sync only what is needed"
+    echo "  * Security: Safe Browsing on, auto-update on, audit extensions"
+    echo "====================================="
+    exit 0
+    ;;
+  edge|msedge|microsoft-edge)
+    echo "Category: Web Browser / Microsoft Edge"
+    if is_windows; then
+      browser_report_win msedge.exe "$local_app_data/Microsoft/Edge/User Data" 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
+    else
+      browser_report_linux "$(command -v microsoft-edge-stable || command -v microsoft-edge || true)"
+    fi
+    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "  * Performance: Startup boost and background mode only if wanted; hardware acceleration on"
+    echo "  * Configuration: One profile per context; sync only what is needed"
+    echo "  * Security: SmartScreen on, auto-update on, audit extensions"
+    echo "====================================="
+    exit 0
+    ;;
 esac
 
 # 2. Package / Tool Handling
@@ -1465,7 +1578,7 @@ case "$target" in
   google-chrome) binary_lookup="google-chrome-stable" ;;
 esac
 
-bin_path=$(which "$binary_lookup" 2>/dev/null || which "$target" 2>/dev/null || echo "")
+bin_path=$(command -v "$binary_lookup" 2>/dev/null || command -v "$target" 2>/dev/null || echo "")
 
 if [[ -z "$bin_path" ]]; then
   echo "Status: NOT FOUND IN PATH"
@@ -1503,10 +1616,21 @@ if [[ -z "$bin_path" ]]; then
   exit 0
 fi
 
+case "$target" in
+  python|python3)
+    if ! python_ok "$bin_path"; then
+      echo "Status: NOT INSTALLED (the python command is only the Microsoft Store shortcut)"
+      echo "Binary Path: $bin_path"
+      echo "====================================="
+      exit 0
+    fi
+    ;;
+esac
+
 echo "Status: INSTALLED"
 echo "Binary Path: $bin_path"
 
-version="Unknown"
+version="unknown"
 for flag in "--version" "-V" "-v" "version"; do
   if ver_out=$("$bin_path" $flag 2>/dev/null | tr -d '\0' | head -n 1); then
     if [[ -n "$ver_out" ]]; then

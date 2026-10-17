@@ -1,6 +1,14 @@
 # system-optimizer
 
-A hardware-aware, cross-platform system, runtime, and developer toolchain optimizer for [Pi](https://github.com/mario-dn/pi).
+A hardware-aware, cross-platform system, runtime, and developer toolchain optimizer, packaged as an agent skill for [Pi](https://github.com/mario-dn/pi), Claude Code and Codex.
+
+| Agent | Invocation | Status |
+|---|---|---|
+| Pi | `/skill:system-optimizer [targets]` | Original target |
+| Claude Code | `/system-optimizer [targets]` (skill folder `~/.claude/skills/system-optimizer/`) | Verified: `full` audit run on a Windows 11 VM (read-only) |
+| Codex | mention `system-optimizer` by name, or copy `SKILL.md` into `AGENTS.md` | Untested |
+
+All scripts are plain bash and run on their own; script paths in the docs are relative to the skill folder.
 
 ## Overview
 
@@ -41,13 +49,22 @@ system-optimizer/
 ├── SKILL.md                          # Primary agent skill specification & invocation rules
 ├── README.md                         # Architecture overview & documentation
 ├── .gitignore                        # Git exclusion rules
+├── .github/workflows/ci.yml          # ShellCheck, probe JSON validation and the test scripts
 ├── references/
 │   └── optimization-guide.md         # Reference guides, config templates & triad checklists
-└── scripts/
-    ├── hardware-probe.sh             # Dynamic hardware probe (CPU, RAM, GPU, Disk, OS)
-    ├── system-probe.sh               # System configuration & OS health probe
-    ├── detect-targets.sh             # Installed tool & package manager detection
-    ├── security-audit.sh             # Security posture & supply-chain audit
-    ├── backup-config.sh              # Pre-modification backup & rollback manager
-    └── target-inspect.sh             # Per-target configuration & synergy inspector
+├── scripts/
+│   ├── lib.sh                        # Shared helpers (sourced by the others; keep it next to them)
+│   ├── hardware-probe.sh             # Dynamic hardware probe (CPU, RAM, GPU, Disk, OS)
+│   ├── system-probe.sh               # System configuration & OS health probe
+│   ├── detect-targets.sh             # Installed tool & package manager detection
+│   ├── security-audit.sh             # Security posture & supply-chain audit
+│   ├── backup-config.sh              # Pre-modification backup & rollback manager
+│   └── target-inspect.sh             # Per-target configuration & synergy inspector
+└── tests/
+    ├── backup-smoke.sh               # Backup, list, restore and safety checks (temp dir only)
+    ├── probe-fallback.sh             # Probes say "unknown" when PowerShell fails
+    ├── json-escape.sh                # JSON stays valid for quotes, backslashes, newlines
+    └── windows-baseline.sh           # Manual helper: run the probes on a Windows host (Git Bash)
 ```
+
+Copy the whole skill folder: every probe script needs `scripts/lib.sh` next to it.

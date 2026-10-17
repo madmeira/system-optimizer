@@ -2,17 +2,18 @@
 # detect-targets.sh - Distro & OS agnostic detection of system domains, tools, and packages (Windows & Linux)
 set -euo pipefail
 
+LIB="$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+if [[ ! -f "$LIB" ]]; then
+  echo "Error: $LIB not found; copy the whole skill folder, not a single script." >&2
+  exit 1
+fi
+# shellcheck source=lib.sh
+source "$LIB"
+
 output_json=false
 if [[ "${1:-}" == "--json" ]]; then
   output_json=true
 fi
-
-is_windows() {
-  case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*|Windows_NT*) return 0 ;;
-  esac
-  [[ -n "${WINDIR:-}" || ( -n "${OS:-}" && "$OS" == "Windows_NT" ) ]]
-}
 
 local_app_data="${LOCALAPPDATA:-$HOME/AppData/Local}"
 roaming_app_data="${APPDATA:-$HOME/AppData/Roaming}"
@@ -104,12 +105,21 @@ canonical_name() {
 is_target_present() {
   local t="$1"
   if command -v "$t" >/dev/null 2>&1; then
+    case "$t" in
+      python|python3) python_ok "$t" || return 1 ;;
+    esac
     return 0
   fi
   if is_windows; then
     case "$t" in
       windows-terminal|wt)
-        command -v wt >/dev/null 2>&1 || [[ -d "$local_app_data/Packages" ]] && ls "$local_app_data/Packages" 2>/dev/null | grep -qi "WindowsTerminal" && return 0
+        if command -v wt >/dev/null 2>&1; then
+          return 0
+        fi
+        if [[ -d "$local_app_data/Packages" ]]; then
+          # subshell keeps nocaseglob/nullglob from leaking into the rest of the script
+          ( shopt -s nocaseglob nullglob; set -- "$local_app_data/Packages/"*WindowsTerminal*; [[ $# -gt 0 ]] ) && return 0
+        fi
         ;;
       brave)
         [[ -d "$local_app_data/BraveSoftware" ]] && return 0
@@ -145,7 +155,7 @@ detected_browsers_desktop=()
 for item in "${browser_desktop_candidates[@]}"; do
   if is_target_present "$item"; then
     canon=$(canonical_name "$item")
-    if [[ ! " ${detected_browsers_desktop[*]:-} " =~ " ${canon} " ]]; then
+    if [[ " ${detected_browsers_desktop[*]:-} " != *" ${canon} "* ]]; then
       detected_browsers_desktop+=("$canon")
     fi
   fi
@@ -156,7 +166,7 @@ detected_pms_runtimes=()
 for item in "${package_runtime_candidates[@]}"; do
   if is_target_present "$item"; then
     canon=$(canonical_name "$item")
-    if [[ ! " ${detected_pms_runtimes[*]:-} " =~ " ${canon} " ]]; then
+    if [[ " ${detected_pms_runtimes[*]:-} " != *" ${canon} "* ]]; then
       detected_pms_runtimes+=("$canon")
     fi
   fi
@@ -167,7 +177,7 @@ detected_dev_cli=()
 for item in "${dev_cli_candidates[@]}"; do
   if is_target_present "$item"; then
     canon=$(canonical_name "$item")
-    if [[ ! " ${detected_dev_cli[*]:-} " =~ " ${canon} " ]]; then
+    if [[ " ${detected_dev_cli[*]:-} " != *" ${canon} "* ]]; then
       detected_dev_cli+=("$canon")
     fi
   fi
@@ -201,27 +211,12 @@ fi
 # Build complete queue for Full System Optimization (Option 7)
 full_targets=()
 for t in "${system_domains[@]}" "${security_domains[@]}" "${detected_pms_runtimes[@]}" "${detected_browsers_desktop[@]}" "${detected_dev_cli[@]}"; do
-  if [[ ! " ${full_targets[*]:-} " =~ " ${t} " ]]; then
+  if [[ " ${full_targets[*]:-} " != *" ${t} "* ]]; then
     full_targets+=("$t")
   fi
 done
 
 if [[ "$output_json" == true ]]; then
-  to_json_arr() {
-    local arr=("$@")
-    if [[ ${#arr[@]} -eq 0 ]]; then
-      echo "[]"
-      return
-    fi
-    local json="["
-    for i in "${!arr[@]}"; do
-      json+="\"${arr[i]}\""
-      [[ $i -lt $((${#arr[@]} - 1)) ]] && json+=", "
-    done
-    json+="]"
-    echo "$json"
-  }
-
   cat <<EOF
 {
   "active_package_managers": $(to_json_arr "${available_pms[@]}"),
