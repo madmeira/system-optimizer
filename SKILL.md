@@ -102,7 +102,7 @@ When **Full Optimization** is selected, the skill systematically orchestrates th
 | `mpv` + `yt-dlp` + GPU | Hardware-decoded web video outside the browser |
 | `winget` + `wsl` + `windows-terminal` | Aligned downloads, WSL2 limits and GPU text rendering |
 | `gh` + `git` + `lazygit` + `topgrade` | One credential helper, `bat` pager, automatic extension upgrades |
-| `neovim` + `mise` | One source of language servers and formatters |
+| `neovim` + `mise` | Single-source LSPs, formatters & linters via mise (`aqua:`/`go:`/`npm:`/`github:`), Mason locked to editor-only adapters (`opts_extend = {}`, `mason = false`), async `DirChanged` `mise env --json` sync |
 | `windows-terminal` + `pwsh` + `starship` + `zoxide` + `fzf` | Fast prompt, path jump and history search |
 | `topgrade` + `mise` | OS packages and user runtimes updated separately, shims refreshed |
 | `mise` + `starship` + shell | Native `[mise]` prompt module, no per-language subshells |
@@ -210,7 +210,7 @@ Propose improvements across all three pillars, and apply only the items the user
   - `topgrade`: Coordinated updates across `pacman`/`yay`/`winget`, `wsl`, `git`, `cargo`, `mise`; dedicated `[mise]` table (`bump = true`, jobs bound to `$(nproc)`); `cleanup = true` (triggers `mise prune`); post-command `mise reshim`; collision avoidance via `disable = ["uv", "cargo"]` when Rust CLIs are managed via mise binstall.
   - `mise`: Version pinning (`pin = true`), storage hygiene (`cache_prune_age = "7d"`, `always_keep_download = false`), runtime ergonomics (`node.corepack = true`, `python.uv_venv_auto = "source"`), pre-compiled Rust binaries (`cargo.binstall = true`), and companion integration with Topgrade.
   - `cargo`: Concurrency bound to `build.jobs = $(nproc)`, `registries.crates-io.protocol = "sparse"`, `net.git-fetch-with-cli = true`, global CLI utilities delegated to `mise` with `cargo.binstall = true`, and Topgrade from-source rebuild step disabled (`disable = ["cargo"]`).
-  - `neovim`: Bytecode loader (`vim.loader.enable()`), mise shims PATH safety guard, Mason `PATH = "append"` de-duplication, persistent undo (`undofile`), and single-source polyglot LSP integration.
+  - `neovim`: Bytecode loader (`vim.loader.enable()`), mise shims prepended + Mason bin appended on `vim.env.PATH`, Mason de-duplication (`PATH = "append"`, `opts_extend = {}`, `automatic_installation = false`, `mason = false` on Mise LSPs, pruning duplicate Mason packages on disk), async `DirChanged`/`VimEnter` `mise env --json` synchronization, LazyVim v15+ compatibility (`nvim-treesitter` `main` branch without `nvim-treesitter.configs`, `lazydev.nvim` in `.neoconf.json`, `ai.sidekick`, `crates.nvim` `cmp.enabled = false` with `blink.cmp`, `matchit`/`matchparen` retained), and `lsp.log` rotation.
   - `pi`: Toolchain shim inheritance via active `mise` shims on subshell PATH, session lifecycle hygiene (>30d pruning), compaction reserve boundaries (`16384`), thinking budget alignment, and strict permission deny rules (`0600` `auth.json`, SSH/secrets deny).
   - `herdr`: Multiplexed AI workspace panes with persistent session resumption (`resume_agents_on_restore = true`), default shell bound to `/bin/bash` or `pwsh`, theme synchronization, system toast delivery, `mise` shims inheritance, and local UNIX socket security (`0600`).
   - `gh`: Set `git_protocol = "ssh"`, `pager = "bat --color=always --style=plain"`, `prompt = "enabled"`, configure `gh auth setup-git` for Git credential delegation, and automate extension upgrades via Topgrade.

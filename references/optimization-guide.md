@@ -349,6 +349,27 @@ appendWindowsPath=true
   python = "latest"
   uv = "latest"
   rust = "stable"
+  go = "latest"
+
+  # Single-source Neovim LSPs, formatters, linters & debuggers
+  "aqua:LuaLS/lua-language-server" = "latest"
+  "aqua:JohnnyMorganz/StyLua" = "latest"
+  "aqua:mvdan/sh" = "latest"
+  "aqua:koalaman/shellcheck" = "latest"
+  "aqua:astral-sh/ruff" = "latest"
+  "aqua:mvdan/gofumpt" = "latest"
+  "aqua:golangci/golangci-lint" = "latest"
+  "aqua:artempyanykh/marksman" = "latest"
+  "aqua:tamasfe/taplo" = "latest"
+  "go:golang.org/x/tools/gopls" = "latest"
+  "go:golang.org/x/tools/cmd/goimports" = "latest"
+  "npm:@vtsls/language-server" = "latest"
+  "npm:vscode-langservers-extracted" = "latest"
+  "npm:pyright" = "latest"
+  "npm:bash-language-server" = "latest"
+  "npm:markdownlint-cli2" = "latest"
+  "npm:markdown-toc" = "latest"
+  "github:Samsung/netcoredbg" = "latest"
   ```
 
 ### Mise & Topgrade Unified Workstation Orchestration Architecture
@@ -441,44 +462,77 @@ The combination of `topgrade` and `mise` forms the foundational modern workstati
   - *Security*: Respect git `safe.directory` rules; avoid untrusted custom commands.
 
 ### Modal Text Editor (`neovim` / `nvim`)
-- **Configuration**: `%LOCALAPPDATA%\nvim\init.lua` (Windows) or `~/.config/nvim/init.lua` (Linux).
-- **Production Performance `init.lua` Template**:
+- **Configuration**: `%LOCALAPPDATA%\nvim\init.lua` (Windows) or `~/.config/nvim/init.lua` (Linux), plus modular `lua/config/*.lua` and `lua/plugins/*.lua` (LazyVim / `lazy.nvim`).
+- **Production Performance `init.lua` / `lua/config/options.lua` Template**:
   ```lua
-  -- 1. Bytecode loader caching: cuts Neovim startup time to <100ms
+  -- 1. Bytecode loader caching: cuts Neovim startup time to <65ms
   if vim.loader then
     vim.loader.enable()
   end
 
-  -- 2. Mise shims PATH safety guard: ensures LSPs/formatters resolve even when launched from GUI/desktop
+  -- 2. Mise shims prepended + Mason bin appended on PATH:
+  --    Ensures Mise shims take priority even when launched from GUI/desktop,
+  --    while editor-only Mason adapters (roslyn, codelldb, js-debug-adapter)
+  --    remain immediately discoverable before mason.nvim lazy-loads.
   local is_win = vim.fn.has("win32") == 1
   local sep = is_win and ";" or ":"
   local mise_shims = is_win and vim.fn.expand("$LOCALAPPDATA/mise/shims") or vim.fn.expand("~/.local/share/mise/shims")
-  if vim.fn.isdirectory(mise_shims) == 1 and not string.find(vim.env.PATH, mise_shims, 1, true) then
+  if vim.fn.isdirectory(mise_shims) == 1 and not vim.env.PATH:find(mise_shims, 1, true) then
     vim.env.PATH = mise_shims .. sep .. vim.env.PATH
   end
+  local mason_bin = vim.fn.stdpath("data") .. "/mason/bin"
+  if vim.fn.isdirectory(mason_bin) == 1 and not vim.env.PATH:find(mason_bin, 1, true) then
+    vim.env.PATH = vim.env.PATH .. sep .. mason_bin
+  end
+  vim.env.MASON = vim.fn.stdpath("data") .. "/mason"
 
-  -- 3. Core ergonomics & persistent undo
+  -- 3. Disable unused legacy remote plugin hosts (saves 50-100ms startup)
+  vim.g.loaded_node_provider = 0
+  vim.g.loaded_python3_provider = 0
+  vim.g.loaded_perl_provider = 0
+  vim.g.loaded_ruby_provider = 0
+
+  -- 4. Core ergonomics & persistent undo
   vim.opt.undofile = true
   vim.opt.undolevels = 10000
   vim.opt.updatetime = 200
   vim.opt.timeoutlen = 300
 
-  -- 4. Security: block arbitrary execution from downloaded files
+  -- 5. Security: block arbitrary execution from downloaded files
   vim.opt.modeline = false
+  vim.opt.exrc = false
   ```
 - **Triad Tuning**:
-  - *Performance*: Enable byte-compiled Lua caching at the top of `init.lua` (`vim.loader.enable()`); defer non-critical plugins via `lazy.nvim` (`event = "VeryLazy"`); resolve language servers via shims on PATH without spawning slow synchronous subshells (`mise which` / `mise exec`).
-  - *Configuration*: Integrate with system clipboard (`win32yank`/`powershell` on Windows, `wl-clipboard`/`xclip` on Linux); telescope integration with `ripgrep` and `fzf`; single-source LSP and formatter management via `mise`.
-  - *Security*: Disable insecure modelines (`vim.opt.modeline = false`) to prevent arbitrary command execution from untrusted downloaded source files; enforce plugin lockfile pinning in `lazy-lock.json`; set config permissions to `0600`.
+  - *Performance*:
+    - Enable byte-compiled Lua caching at the top of `init.lua` (`vim.loader.enable()`).
+    - Disable legacy remote providers (`loaded_node_provider`, `loaded_python3_provider`, `loaded_perl_provider`, `loaded_ruby_provider = 0`).
+    - Disable unused built-in runtime plugins (`gzip`, `tarPlugin`, `tohtml`, `tutor`, `zipPlugin`, `netrwPlugin`), while **retaining `matchit` and `matchparen`** (negligible <1ms cost in Neovim 0.12+, required for `%` block/tag jumping unless `vim-matchup` is installed).
+    - Resolve language servers and formatters directly via `mise` shims on `PATH` without spawning synchronous `mise which` subshells.
+    - Rotate or truncate oversized `~/.local/state/nvim/lsp.log` when it exceeds 1 MB.
+  - *Configuration*:
+    - Integrate with system clipboard (`win32yank`/`powershell` on Windows, `wl-clipboard`/`xclip` on Linux).
+    - Single-source LSP, linter, formatter, and debugger provisioning via `mise` (`aqua:`, `go:`, `npm:`, `github:` backends), locking `mason.nvim` strictly to editor-only VSIX/custom-registry bundles (`codelldb`, `js-debug-adapter`, `roslyn`).
+    - Async `DirChanged` + `VimEnter` hook running `mise env --json` to dynamically sync project `.mise.toml` `[env]` variables (`GOPATH`, `JAVA_HOME`, virtualenvs, custom project vars) when switching projects inside a running Neovim instance.
+    - **LazyVim v15+ & Modern Plugin Hygiene**:
+      - **`nvim-treesitter` (`main` branch rewrite)**: Never call `require("nvim-treesitter.configs").setup(opts)` (removed in the `main` branch rewrite). Use `opts_extend = { "ensure_installed" }` with `opts = { ensure_installed = { ... } }` and let LazyVim's built-in setup handle initialization. Ensure `tree-sitter` CLI (`>= 0.26.1`) is available via system package or `mise`.
+      - **Avoid Redundant Fold/Bigfile Overrides**: Do not override `vim.opt.foldexpr = "v:lua.vim.treesitter.foldexpr()"` or create custom `BigFileDisable` `BufReadPre` autocmds when using LazyVim/`snacks.nvim` — LazyVim already uses `v:lua.lazyvim.util.ui.foldexpr()` and `snacks.nvim` provides `bigfile = { enabled = true, size = 1.5 * 1024 * 1024 }`.
+      - **`blink.cmp` + `crates.nvim`**: Set `completion = { cmp = { enabled = false } }` on `saecki/crates.nvim` when using `blink.cmp` so `:checkhealth` does not warn about missing `nvim-cmp` (completion is served via `crates.nvim`'s in-process LSP).
+      - **Modern AI & Lua Dev Extras**: Prefer `lazyvim.plugins.extras.ai.sidekick` (`folke/sidekick.nvim` — Next Edit Suggestions + integrated CLI agent terminals) over legacy `ai.copilot-chat`, and replace deprecated `"neodev"` keys in `.neoconf.json` with `"lazydev"` (`folke/lazydev.nvim`).
+      - **Backup File Hygiene**: Never leave `.bak.*` files inside `~/.config/nvim/lua/` (keep backups strictly in `~/.config/system-optimizer/backups/neovim/`).
+  - *Security*: Disable insecure modelines (`vim.opt.modeline = false`) and untrusted local `.nvim.lua` (`vim.opt.exrc = false`); enforce plugin lockfile commit pinning in `lazy-lock.json`; enforce `0600` permissions on config files.
 
 #### Neovim & Mise Polyglot LSP, Formatter & Toolchain Architecture
-The integration between Neovim and Mise establishes a unified, reproducible development environment where language servers and formatters are decoupled from ad-hoc editor plugin managers and bound to project-level or global mise configurations.
+The integration between Neovim and Mise establishes a unified, reproducible development environment where language servers, linters, and formatters are managed by Mise (with SLSA/Cosign verification) and shared identically across terminal, Git hooks, CI, and Neovim.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────┐
-│                           Polyglot Toolchain in Mise                             │
-│       Node / TS       Python          Rust         Go          Lua        Shell  │
-│       pyright         ruff / black    rust-analyzer gopls      lua-ls     shfmt  │
+│                     Polyglot Toolchain & LSPs in Mise                            │
+│  aqua:LuaLS/lua-language-server   aqua:JohnnyMorganz/StyLua   aqua:mvdan/sh      │
+│  aqua:koalaman/shellcheck         aqua:astral-sh/ruff         aqua:tamasfe/taplo │
+│  aqua:artempyanykh/marksman       aqua:mvdan/gofumpt          aqua:golangci-lint │
+│  go:golang.org/x/tools/gopls      go:golang.org/x/tools/cmd/goimports            │
+│  npm:@vtsls/language-server       npm:vscode-langservers-extracted               │
+│  npm:pyright  npm:markdownlint-cli2  npm:markdown-toc  github:Samsung/netcoredbg │
 └────────────────────────────────────────┬─────────────────────────────────────────┘
                                          │
                      ┌───────────────────┴───────────────────┐
@@ -495,45 +549,91 @@ The integration between Neovim and Mise establishes a unified, reproducible deve
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-1. **Mason.nvim PATH Precedence & De-duplication**:
-   - By default, `mason.nvim` prepends its private binary directory (`~/.local/share/nvim/mason/bin`) to Neovim's `PATH`. This causes Neovim to run isolated Mason-managed binaries instead of the project-pinned compiler, LSP, or formatter specified in `.mise.toml`.
-   - **Recommended Configuration**: Set `PATH = "append"` in `mason.nvim`:
+1. **Migrating Mason Packages to Mise & Locking Down `mason.nvim`**:
+   - **Why**: By default, `mason.nvim` and LazyVim `lang.*` extras (`lang.go`, `lang.python`, `lang.typescript`, `lang.rust`, `lang.json`, `lang.markdown`, `util.dot`) install duplicate private copies of language servers, formatters, and linters into `~/.local/share/nvim/mason/packages/`. Even setting `ensure_installed = {}` is bypassed unless `opts_extend = {}` is set on `mason.nvim`, `automatic_installation = false` is set on `mason-lspconfig.nvim`, and `mason = false` is set on each Mise-managed server in `nvim-lspconfig`.
+   - **Mise Backend Mapping for Neovim Tools**:
+     - *Aqua Registry (cryptographically verified binaries)*: `aqua:LuaLS/lua-language-server`, `aqua:JohnnyMorganz/StyLua`, `aqua:mvdan/sh` (`shfmt`), `aqua:koalaman/shellcheck`, `aqua:astral-sh/ruff`, `aqua:mvdan/gofumpt`, `aqua:golangci/golangci-lint`, `aqua:artempyanykh/marksman`, `aqua:tamasfe/taplo`.
+     - *Go Backend*: `go:golang.org/x/tools/gopls`, `go:golang.org/x/tools/cmd/goimports` (plus `dlv` via Go/system).
+     - *NPM Backend*: `npm:@vtsls/language-server`, `npm:vscode-langservers-extracted` (`vscode-json-language-server`, `vscode-eslint-language-server`), `npm:pyright`, `npm:bash-language-server`, `npm:markdownlint-cli2`, `npm:markdown-toc`.
+     - *GitHub Releases Backend*: `github:Samsung/netcoredbg` (C#/.NET debugger).
+     - *Toolchain Built-ins*: `rust-analyzer` (bundled with `mise` `rust` toolchain).
+   - **Editor-Only Packages Retained in Mason**: Reserve Mason strictly for VSIX bundles or custom-registry editor adapters that do not belong in global CLI toolchains: `codelldb` (C/C++/Rust LLDB VSIX), `js-debug-adapter` (VSCode JS DAP bundle), and `roslyn` (from `github:Crashdummyy/mason-registry`). Uninstall all migrated packages from `~/.local/share/nvim/mason/packages/`.
+   - **Recommended `lua/plugins/mason.lua` Configuration**:
      ```lua
-     -- In lua/plugins/mason.lua
      return {
-       "williamboman/mason.nvim",
-       opts = {
-         PATH = "append", -- Project/mise tools on PATH take precedence; Mason only fills gaps
+       {
+         "mason-org/mason.nvim",
+         opts_extend = {}, -- Prevent LazyVim lang extras from re-adding Mise-managed tools
+         opts = {
+           PATH = "append", -- Mise shims take priority; Mason acts strictly as fallback
+           registries = {
+             "github:mason-org/mason-registry",
+             "github:Crashdummyy/mason-registry", -- If using roslyn.nvim
+           },
+           ensure_installed = {
+             "codelldb",
+             "js-debug-adapter",
+             "roslyn",
+           },
+         },
+       },
+       {
+         "mason-org/mason-lspconfig.nvim",
+         opts = { ensure_installed = {}, automatic_installation = false },
+       },
+       {
+         "jay-babu/mason-nvim-dap.nvim",
+         optional = true,
+         opts = { ensure_installed = {}, automatic_installation = false },
+       },
+       {
+         "neovim/nvim-lspconfig",
+         opts = function(_, opts)
+           opts.servers = opts.servers or {}
+           for _, server in ipairs({
+             "bashls", "eslint", "gopls", "jsonls", "lua_ls", "marksman",
+             "pyright", "ruff", "rust_analyzer", "taplo", "vtsls",
+           }) do
+             opts.servers[server] = opts.servers[server] or {}
+             opts.servers[server].mason = false
+           end
+         end,
        },
      }
      ```
-   - **De-duplication**: Avoid installing packages in Mason that are already managed in `~/.config/mise/config.toml` or project `.mise.toml` (e.g. `pyright`, `ruff`, `typescript-language-server`, `rust-analyzer`). Reserve Mason strictly for editor-only extensions (such as `roslyn.nvim` or specialized DAP debug adapters).
 
-2. **Native LSP & Formatter Setup via Mise Shims**:
-   - `nvim-lspconfig` and `conform.nvim` automatically discover executables on `PATH`. Because `mise` shims are active on `PATH`, no custom wrapper code or subshell execution is needed:
+2. **Dynamic Per-Project Mise `[env]` Synchronization (`lua/config/autocmds.lua`)**:
+   - While Mise shims resolve project-pinned binaries automatically, project-specific `[env]` variables defined in `.mise.toml` (`GOPATH`, `JAVA_HOME`, custom env vars) are not updated when switching directories inside a running Neovim session (e.g., via `Snacks.picker.projects`).
+   - Add a non-blocking `DirChanged` + `VimEnter` autocmd using `vim.system`:
      ```lua
-     -- LSP setup automatically finds mise shims in <1ms without latency
-     local lspconfig = require("lspconfig")
-     lspconfig.pyright.setup({})
-     lspconfig.ts_ls.setup({})
-     lspconfig.rust_analyzer.setup({})
-
-     -- Formatter setup via conform.nvim
-     require("conform").setup({
-       formatters_by_ft = {
-         python = { "ruff_format", "ruff_fix" },
-         javascript = { "biome", "prettier" },
-         lua = { "stylua" },
-       },
-     })
+     local mise_bin = vim.fn.exepath("mise")
+     if mise_bin ~= "" then
+       local function sync_mise_env(cwd)
+         vim.system({ mise_bin, "env", "--json" }, { cwd = cwd, text = true }, function(obj)
+           if obj.code ~= 0 or not obj.stdout or obj.stdout == "" then return end
+           vim.schedule(function()
+             local ok, env_map = pcall(vim.json.decode, obj.stdout)
+             if not ok or type(env_map) ~= "table" then return end
+             for k, v in pairs(env_map) do
+               if k ~= "PATH" and type(v) == "string" then
+                 vim.env[k] = v
+               end
+             end
+           end)
+         end)
+       end
+       vim.api.nvim_create_autocmd({ "DirChanged", "VimEnter" }, {
+         group = vim.api.nvim_create_augroup("mise_env_sync", { clear = true }),
+         callback = function() sync_mise_env(vim.fn.getcwd()) end,
+       })
+     end
      ```
 
 3. **Unified Maintenance Chain (`topgrade` -> `mise` -> `neovim`)**:
    - When workstation maintenance runs via `topgrade`:
      1. Topgrade executes the `[mise]` update step with `bump = true`, updating language servers, linters, and formatters to latest upstream stable releases.
      2. Topgrade executes `mise reshim` via `[post_commands]`.
-     3. Neovim automatically picks up updated language servers upon next launch or `:LspRestart`, eliminating the need to run headless Mason updates or manual `:MasonUpdate`.
-
+     3. Neovim automatically picks up updated language servers upon next launch or `:LspRestart`, while `MasonUpdateAll` only needs to check the 2–3 remaining editor-only adapters.
 ### Syntax Pager & Fuzzy Finder (`bat` + `fzf`)
 - **`bat` Tuning (`%APPDATA%\bat\config` / `~/.config/bat/config`)**:
   - *Performance*: Set `--paging=never` when used as a sub-pager for lazygit or git diff; pre-cache themes with `bat cache --build`.
@@ -986,7 +1086,7 @@ system-optimizer full
    - **`bash`**: Sanitize `$PATH`, set safe umask, configure history deduplication, and pre-cache static prompt hooks.
 
 5. **Tier 5: Developer & Media Toolchain**:
-   - **`neovim` (`nvim`)**: Verify byte-compiled Lua loader (`vim.loader.enable()` in `init.lua`), configure mise shims PATH safety guard, integrate single-source polyglot LSP & formatters via `mise` (`pyright`, `ruff`, `biome`, `rust-analyzer`), configure `mason.nvim` with `PATH = "append"` to prevent shadowing project-pinned tools, persistent undo (`undofile`), clipboard provider, telescope integration with `ripgrep`/`fzf`, and disable insecure modelines (`vim.opt.modeline = false`).
+   - **`neovim` (`nvim`)**: Verify byte-compiled Lua loader (`vim.loader.enable()` in `init.lua`), prepend mise shims and append Mason bin on `vim.env.PATH`, migrate LSPs/formatters/linters/DAPs from Mason to `mise` (`aqua:`/`go:`/`npm:`/`github:` backends), lock `mason.nvim` (`PATH = "append"`, `opts_extend = {}`, `automatic_installation = false`, `mason = false` on Mise LSPs, prune duplicate Mason packages on disk), add async `DirChanged`/`VimEnter` `mise env --json` sync, enforce LazyVim v15+ compatibility (`nvim-treesitter` `main` branch without `nvim-treesitter.configs`, `lazydev.nvim` in `.neoconf.json`, `ai.sidekick`, `crates.nvim` `cmp.enabled = false` with `blink.cmp`, retain `matchit`/`matchparen`), rotate oversized `lsp.log`, and disable insecure modelines (`vim.opt.modeline = false`, `vim.opt.exrc = false`).
    - **`lazygit`**: Configure `%APPDATA%\lazygit\config.yml` with `git.autoFetch: false` (eliminates background git processes triggering Defender scans), Neovim RPC remote-tab editing (`nvim --server "$NVIM" --remote-tab "$FILE"`), and terminal-synchronized theme palette.
    - **`ripgrep` (`rg`)**: Configure `RIPGREP_CONFIG_PATH` with threads dynamically aligned to detected CPU logical cores (`--threads=$(nproc)`), `--smart-case`, `--max-columns=300` preview, `--mmap` for NVMe SSDs, and global ignore globs (`!.git`, `!node_modules`, `!target`).
    - **`zoxide`**: Configure fast directory jumping (`z`, `zi`), set `_ZO_EXCLUDE_DIRS` for system/temp roots, initialize shell hooks in `$PROFILE` and `.bashrc`, and prune stale directories.
@@ -1009,7 +1109,7 @@ system-optimizer full
      - `mpv` + `yt-dlp` + GPU HWDEC: Web stream hardware passthrough — stream web video directly to mpv via yt-dlp, using native hardware decoding (`nvdec-copy` on NVIDIA RTX, `vaapi` on Intel/AMD, `d3d11va` on Windows) and D3D11/Vulkan color management (`vo=gpu-next`), bypassing heavy browser CPU/RAM consumption.
      - `winget` + `wsl` + `windows-terminal`: Windows 11 unified subsystem & terminal acceleration — align WinGet download concurrency, WSL2 mirrored networking / memory bounding (`autoMemoryReclaim=dropcache`, `sparseVhd=true`), and Windows Terminal Atlas GPU text rendering engine (`useAtlasEngine=true`).
      - `gh` + `git` + `lazygit` + `topgrade`: Seamless credential helper & PR review synergy — `gh auth setup-git` registers GitHub CLI as Git's credential helper across CLI and LazyGit; LazyGit custom commands trigger `gh pr checkout` and `gh pr view`; `gh` pager delegates to `bat` for zero-latency syntax-highlighted code reviews; and Topgrade automates `gh extension upgrade --all` during workstation maintenance.
-     - `neovim` + `mise`: Single-source polyglot LSP & formatter runtime — Neovim consumes language servers (`pyright`, `ruff`, `biome`, `rust-analyzer`, `gopls`) and formatters directly from mise shims without Mason duplication; Mason `PATH = "append"` ensures project-pinned tools take precedence; Topgrade automatically updates runtimes and syncs shims via `[post_commands]` `mise reshim`.
+     - `neovim` + `mise`: Single-source polyglot LSP, formatter, linter & DAP runtime — Neovim consumes language servers (`lua_ls`, `vtsls`, `jsonls`, `eslint`, `pyright`, `ruff`, `rust_analyzer`, `gopls`, `marksman`, `taplo`), formatters (`stylua`, `shfmt`, `gofumpt`, `goimports`, `markdownlint-cli2`, `markdown-toc`), linters (`shellcheck`, `golangci-lint`), and debuggers (`netcoredbg`, `dlv`) directly from mise shims without Mason duplication; `mason.nvim` is locked (`PATH = "append"`, `opts_extend = {}`, `mason = false`) to editor-only adapters (`codelldb`, `js-debug-adapter`, `roslyn`); an async `DirChanged` hook runs `mise env --json` to sync per-project `[env]` variables; and Topgrade automatically updates runtimes and syncs shims via `[post_commands]` `mise reshim`.
      - `windows-terminal` + `pwsh` + `starship` + `zoxide` + `fzf`: Instant prompt rendering, fuzzy path completion, and interactive history navigation.
      - `topgrade` + `mise`: Unified workstation maintenance orchestration — strict separation of OS package managers (`pacman`/`yay`/`winget`) from user polyglot toolchains (`node`, `python`, `rust`, `uv`); hardware CPU thread budget alignment; collision prevention by disabling redundant standalone updaters in Topgrade (`disable = ["uv"]`); automated cache and old version reclamation via Topgrade `cleanup = true` and `mise prune`; and instantaneous binary shim and language server synchronization via Topgrade `[post_commands]` executing `mise reshim`.
      - `mise` + `starship` + `bash`/`pwsh`: Zero-latency prompt integration — native `[mise]` module in `starship.toml` displays active toolchain without spawning slow per-language subshell queries; mise `env_cache = true` (`1h` TTL) guarantees sub-millisecond shell prompt redraws on directory transitions.
@@ -1043,7 +1143,7 @@ Evaluates host CPU thread concurrency and bounds both tools to `$(nproc)`, confi
 ```bash
 system-optimizer mise neovim
 ```
-Configures Neovim with `vim.loader.enable()` for sub-100ms startup, ensures `mise` shims are active on `PATH`, configures `mason.nvim` with `PATH = "append"` to prevent shadowing project-pinned tools, and routes all language servers (`pyright`, `ruff`, `biome`, `rust-analyzer`) through `mise` with automated `topgrade` upgrade synchronization.
+Configures Neovim with `vim.loader.enable()` for sub-65ms startup, prepends `mise` shims and appends Mason bin on `vim.env.PATH`, migrates polyglot LSPs/formatters/linters from Mason to `mise` (`aqua:`/`go:`/`npm:`/`github:`), locks `mason.nvim` (`PATH = "append"`, `opts_extend = {}`, `mason = false`) to editor-only adapters while pruning duplicate Mason packages on disk, adds an async `DirChanged` `mise env --json` hook for project environment variables, validates LazyVim v15+ compatibility (`nvim-treesitter` `main` branch, `ai.sidekick`, `lazydev`), and coordinates automated upgrades via `topgrade`.
 
 
 ### Example 7: Zero-Latency Prompt & Shell Integration (mise + starship)
