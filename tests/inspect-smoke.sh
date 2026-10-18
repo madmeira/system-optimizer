@@ -66,6 +66,11 @@ EOF
 cat > "$WORK/home/.config/nvim/.neoconf.json" <<'EOF'
 {"neodev": {}}
 EOF
+mkdir -p "$WORK/home/.config/mise"
+cat > "$WORK/home/.config/mise/config.toml" <<'EOF'
+[tools]
+rust = { version = "latest", components = "rust-analyzer" }
+EOF
 
 nv_out="$(env -i PATH="$WORK/bin:$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/scripts/target-inspect.sh" neovim)"
 for expected in \
@@ -74,6 +79,7 @@ for expected in \
   "Treesitter Config Compatibility: [WARNING]" \
   "Neoconf Schema (.neoconf.json): [DEPRECATED KEY]" \
   "Dynamic Project Env Sync (DirChanged -> mise env --json): [ACTIVE]" \
+  "Mise Rust Analyzer Component: [CONFIGURED]" \
   "Mason LazyVim Extra Lock (opts_extend = {} & mason = false): [LOCKED]"; do
   if [[ "$nv_out" != *"$expected"* ]]; then
     echo "FAIL - neovim synergy check missing: $expected" >&2
