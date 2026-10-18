@@ -36,6 +36,7 @@ The skill is **100% generic** and contains **no hardcoded hardware values**. Whe
 
 - **`topgrade` + `mise`**: Workstation maintenance orchestration, separating OS package managers from user polyglot runtimes, disabling redundant updaters, and auto-reshimming.
 - **`mise` + `starship`**: Zero-latency prompt version indication via native `[mise]` module, eliminating per-language subshell query delays.
+- **`neovim` + `mise`**: Single-source polyglot LSPs, formatters, linters, and debuggers via `mise` (`aqua:`/`go:`/`npm:`/`github:` backends), Mason locked strictly to editor-only adapters (`PATH = "append"`, `opts_extend = {}`, `mason = false`), and async `DirChanged` `mise env --json` project environment synchronization.
 - **`topgrade` + `cargo` + `mise`**: Rust binary pre-compilation via `cargo.binstall = true`, disabling redundant from-source `cargo-update` builds in Topgrade.
 - **`lazygit` + `neovim` + `bat`**: Remote tab editing via `nvim --server` to prevent nested editor spawns, with `bat --style=changes` syntax diff paging.
 - **`ripgrep` + `fzf` + `bat`**: High-performance fuzzy finding with line-numbered, syntax-highlighted previews.
@@ -63,6 +64,8 @@ system-optimizer/
 └── tests/
     ├── backup-smoke.sh               # Backup, list, restore and safety checks (temp dir only)
     ├── probe-fallback.sh             # Probes say "unknown" when PowerShell fails
+    ├── inspect-smoke.sh              # Smoke test: all 41 targets of target-inspect.sh in a clean env
+    ├── inspect-windows.sh            # Smoke test: Windows targets on a Windows host
     ├── json-escape.sh                # JSON stays valid for quotes, backslashes, newlines
     └── windows-baseline.sh           # Manual helper: run the probes on a Windows host (Git Bash)
 ```

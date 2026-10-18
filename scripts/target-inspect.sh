@@ -911,7 +911,17 @@ case "$target" in
       done
       echo "  - Neovim Binary Detected: $nv_bin"
       echo "  - Config: ${nv_cfg:-Not found}"
-      echo "  - LSP Provisioning: Mise shims serve as single-source polyglot LSP & formatter runtime"
+      echo "  - LSP Provisioning: Mise shims serve as single-source polyglot LSP, formatter, linter & DAP runtime"
+      if [[ -n "$nv_cfg" ]]; then
+        nv_dir=$(dirname "$nv_cfg")
+        mason_file=$(find "$nv_dir" -name "*mason*.lua" 2>/dev/null | head -n 1 || echo "")
+        if [[ -n "$mason_file" ]] && grep -qE 'opts_extend[[:space:]]*=[[:space:]]*\{\}' "$mason_file" 2>/dev/null && grep -qE 'mason[[:space:]]*=[[:space:]]*false' "$mason_file" 2>/dev/null; then
+          echo "  - Mason De-duplication: [LOCKED] (opts_extend = {} & mason = false prevent duplicate Mason installs)"
+        fi
+        if grep -rq "mise_env_sync" "$nv_dir/lua" 2>/dev/null; then
+          echo "  - Dynamic Project Env Sync: [ACTIVE] (DirChanged -> mise env --json)"
+        fi
+      fi
     else
       echo "  - Neovim not installed on this system."
     fi
@@ -1141,7 +1151,7 @@ case "$target" in
 
     echo "Discovered Configuration Files:"
     nv_init=""
-    for f in "$local_app_data/nvim/init.lua" "$HOME/.config/nvim/init.lua" "$local_app_data/nvim/lazy-lock.json" "$HOME/.config/nvim/lazy-lock.json"; do
+    for f in "$local_app_data/nvim/init.lua" "$HOME/.config/nvim/init.lua" "$local_app_data/nvim/lazy-lock.json" "$HOME/.config/nvim/lazy-lock.json" "$local_app_data/nvim/lazyvim.json" "$HOME/.config/nvim/lazyvim.json"; do
       if [[ -f "$f" ]]; then
         echo "  - [EXISTS] $f"
         [[ -z "$nv_init" && "$f" == *init.lua ]] && nv_init="$f"
@@ -1150,11 +1160,39 @@ case "$target" in
 
     if [[ -n "$nv_init" ]]; then
       nv_dir=$(dirname "$nv_init")
-      echo "Neovim Performance Checks in $nv_init:"
+      echo "Neovim Performance & Hygiene Checks in $nv_dir:"
       if grep -q "vim.loader.enable" "$nv_init" 2>/dev/null; then
         echo "  * Bytecode Loader (vim.loader.enable): [ENABLED] (Fast startup cached)"
       else
         echo "  * Bytecode Loader: [NOT FOUND] (Add 'if vim.loader then vim.loader.enable() end' at top of init.lua)"
+      fi
+
+      if grep -rq "loaded_node_provider[[:space:]]*=[[:space:]]*0" "$nv_dir" 2>/dev/null; then
+        echo "  * Legacy Remote Providers (node/python3/perl/ruby): [DISABLED] (Startup overhead eliminated)"
+      else
+        echo "  * Legacy Remote Providers: [ENABLED] (Set vim.g.loaded_{node,python3,perl,ruby}_provider = 0)"
+      fi
+
+      if grep -rq "nvim-treesitter\.configs" "$nv_dir/lua" 2>/dev/null; then
+        echo "  * Treesitter Config Compatibility: [WARNING] ('nvim-treesitter.configs' found — removed in nvim-treesitter main branch / LazyVim v15+)"
+      else
+        echo "  * Treesitter Config Compatibility: [CLEAN] (Compatible with nvim-treesitter main branch)"
+      fi
+
+      if [[ -f "$nv_dir/.neoconf.json" ]] && grep -q '"neodev"' "$nv_dir/.neoconf.json" 2>/dev/null; then
+        echo "  * Neoconf Schema (.neoconf.json): [DEPRECATED KEY] ('neodev' found; replace with 'lazydev')"
+      fi
+
+      bak_count=$(find "$nv_dir" -name "*.bak*" 2>/dev/null | wc -l | tr -d ' ' || echo 0)
+      if [[ "$bak_count" -gt 0 ]]; then
+        echo "  * Leftover Backup Files in Config: [WARNING] ($bak_count *.bak* files found inside $nv_dir)"
+      fi
+
+      lsp_log="${XDG_STATE_HOME:-$HOME/.local/state}/nvim/lsp.log"
+      [[ ! -f "$lsp_log" && -n "$local_app_data" ]] && lsp_log="$local_app_data/nvim-data/lsp.log"
+      if [[ -f "$lsp_log" ]]; then
+        lsp_log_kb=$(( $(wc -c < "$lsp_log" 2>/dev/null || echo 0) / 1024 ))
+        echo "  * LSP Log Size ($lsp_log): ${lsp_log_kb} KB $(if [[ "$lsp_log_kb" -gt 1024 ]]; then echo "[LARGE — consider truncating]"; else echo "[HEALTHY]"; fi)"
       fi
 
       echo "Mise Companion & Toolchain Integration in Neovim:"
@@ -1162,18 +1200,35 @@ case "$target" in
       if [[ -n "$mise_bin" ]]; then
         echo "  * Mise Binary Detected: $mise_bin"
         has_shims_in_path=false
-        if echo "$PATH" | grep -qE "(\.local/share/mise/shims|mise/shims)"; then
+        if echo "$PATH" | grep -qE "(\.local/share/mise/shims|mise/shims)" || grep -rq "mise/shims" "$nv_dir" 2>/dev/null; then
           has_shims_in_path=true
         fi
-        echo "  * Mise Shims in PATH: $(if [[ "$has_shims_in_path" == "true" ]]; then echo "[ACTIVE] (LSPs and formatters discoverable via PATH)"; else echo "[CAUTION] (Add ~/.local/share/mise/shims to PATH or init.lua)"; fi)"
+        echo "  * Mise Shims in PATH: $(if [[ "$has_shims_in_path" == "true" ]]; then echo "[ACTIVE] (LSPs and formatters discoverable via PATH)"; else echo "[CAUTION] (Prepend ~/.local/share/mise/shims to vim.env.PATH in options.lua)"; fi)"
+
+        if grep -rq "mise_env_sync" "$nv_dir/lua" 2>/dev/null || grep -rq '"env".*"--json"' "$nv_dir/lua" 2>/dev/null; then
+          echo "  * Dynamic Project Env Sync (DirChanged -> mise env --json): [ACTIVE]"
+        else
+          echo "  * Dynamic Project Env Sync (DirChanged -> mise env --json): [MISSING] (Add DirChanged autocmd in autocmds.lua to sync project [env] vars)"
+        fi
 
         mason_file=$(find "$nv_dir" -name "*mason*.lua" 2>/dev/null | head -n 1 || echo "")
         if [[ -n "$mason_file" ]]; then
           mason_path_opt=$(grep -E '^[[:space:]]*PATH[[:space:]]*=' "$mason_file" 2>/dev/null | cut -d= -f2- | tr -d ' ",' || echo "default (prepend)")
-          echo "  * Mason.nvim Detected: $mason_file"
-          echo "  * Mason PATH Precedence: $mason_path_opt $(if [[ "$mason_path_opt" =~ append|skip ]]; then echo "[OPTIMIZED] (Mise project tools take precedence)"; else echo "(Consider PATH = 'append' to avoid shadowing project-pinned tools in mise)"; fi)"
+          has_opts_extend_lock=$(grep -E 'opts_extend[[:space:]]*=[[:space:]]*\{\}' "$mason_file" 2>/dev/null || true)
+          has_mason_false=$(grep -E 'mason[[:space:]]*=[[:space:]]*false' "$mason_file" 2>/dev/null || true)
+          echo "  * Mason.nvim Config: $mason_file"
+          echo "  * Mason PATH Precedence: $mason_path_opt $(if [[ "$mason_path_opt" =~ append|skip ]]; then echo "[OPTIMIZED] (Mise project tools take precedence)"; else echo "(Set PATH = 'append' to avoid shadowing project-pinned tools in mise)"; fi)"
+          echo "  * Mason LazyVim Extra Lock (opts_extend = {} & mason = false): $(if [[ -n "$has_opts_extend_lock" && -n "$has_mason_false" ]]; then echo "[LOCKED] (LazyVim extras prevented from re-installing Mise tools)"; else echo "[UNLOCKED] (Set opts_extend = {} on mason.nvim and mason = false on Mise LSPs)"; fi)"
         else
-          echo "  * Mason.nvim: Not explicitly detected (Mise shims serve as primary tool source)"
+          echo "  * Mason.nvim: Not explicitly configured (Mise shims serve as primary tool source)"
+        fi
+
+        mason_pkg_dir="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/mason/packages"
+        [[ ! -d "$mason_pkg_dir" && -n "$local_app_data" ]] && mason_pkg_dir="$local_app_data/nvim-data/mason/packages"
+        if [[ -d "$mason_pkg_dir" ]]; then
+          mason_pkgs=$(ls -1 "$mason_pkg_dir" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+          mason_cnt=$(ls -1 "$mason_pkg_dir" 2>/dev/null | wc -l | tr -d ' ')
+          echo "  * Installed Mason Packages ($mason_cnt): ${mason_pkgs:-none}"
         fi
 
         tg_cfg=""
@@ -1189,9 +1244,9 @@ case "$target" in
     fi
 
     echo "Triad Checkpoints (Performance, Configuration, Security):"
-    echo "  * Performance: Enable vim.loader.enable() for sub-100ms startup; discover LSPs via mise shims without spawning synchronous subshells"
-    echo "  * Configuration: Set mason.nvim PATH = 'append' to prevent shadowing project mise tools; manage LSPs/formatters via mise (pyright, ruff, biome, rust-analyzer)"
-    echo "  * Security: Disable modelines (vim.opt.modeline = false); pin plugin commit hashes in lazy-lock.json; enforce 0600 on init.lua and lua/ files"
+    echo "  * Performance: Enable vim.loader.enable() for sub-65ms startup; disable legacy remote providers; discover LSPs via mise shims; rotate lsp.log >1MB"
+    echo "  * Configuration: Migrate LSPs/formatters/linters from Mason to mise (aqua:/go:/npm:/github:); lock mason.nvim (PATH='append', opts_extend={}, mason=false) to editor-only adapters; add DirChanged 'mise env --json' sync; ensure LazyVim v15+ compatibility"
+    echo "  * Security: Disable modelines (vim.opt.modeline = false, vim.opt.exrc = false); pin plugin commit hashes in lazy-lock.json; enforce 0600 on config files"
     echo "====================================="
     exit 0
     ;;
