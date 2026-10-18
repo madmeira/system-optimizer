@@ -1211,6 +1211,18 @@ case "$target" in
           echo "  * Dynamic Project Env Sync (DirChanged -> mise env --json): [MISSING] (Add DirChanged autocmd in autocmds.lua to sync project [env] vars)"
         fi
 
+        mise_cfg=""
+        for mf in "$HOME/.config/mise/config.toml" "$local_app_data/mise/config.toml"; do
+          [[ -f "$mf" ]] && mise_cfg="$mf" && break
+        done
+        if [[ -n "$mise_cfg" ]] && grep -qE '^[[:space:]]*rust[[:space:]]*=' "$mise_cfg" 2>/dev/null; then
+          if grep -E '^[[:space:]]*rust[[:space:]]*=' "$mise_cfg" 2>/dev/null | grep -q "rust-analyzer"; then
+            echo "  * Mise Rust Analyzer Component: [CONFIGURED] (rust components = 'rust-analyzer' prevents rustup shim recursion)"
+          else
+            echo "  * Mise Rust Analyzer Component: [WARNING] (Set rust = { version = '...', components = 'rust-analyzer' } in mise/config.toml to prevent rustup <-> mise/shims infinite recursion)"
+          fi
+        fi
+
         mason_file=$(find "$nv_dir" -name "*mason*.lua" 2>/dev/null | head -n 1 || echo "")
         if [[ -n "$mason_file" ]]; then
           mason_path_opt=$(grep -E '^[[:space:]]*PATH[[:space:]]*=' "$mason_file" 2>/dev/null | cut -d= -f2- | tr -d ' ",' || echo "default (prepend)")

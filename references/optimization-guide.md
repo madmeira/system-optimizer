@@ -348,7 +348,7 @@ appendWindowsPath=true
   node = "lts"
   python = "latest"
   uv = "latest"
-  rust = "stable"
+  rust = { version = "stable", components = "rust-analyzer" }
   go = "latest"
 
   # Single-source Neovim LSPs, formatters, linters & debuggers
@@ -556,7 +556,7 @@ The integration between Neovim and Mise establishes a unified, reproducible deve
      - *Go Backend*: `go:golang.org/x/tools/gopls`, `go:golang.org/x/tools/cmd/goimports` (plus `dlv` via Go/system).
      - *NPM Backend*: `npm:@vtsls/language-server`, `npm:vscode-langservers-extracted` (`vscode-json-language-server`, `vscode-eslint-language-server`), `npm:pyright`, `npm:bash-language-server`, `npm:markdownlint-cli2`, `npm:markdown-toc`.
      - *GitHub Releases Backend*: `github:Samsung/netcoredbg` (C#/.NET debugger).
-     - *Toolchain Built-ins*: `rust-analyzer` (bundled with `mise` `rust` toolchain).
+     - *Toolchain Built-ins*: `rust = { version = "latest", components = "rust-analyzer" }` (IMPORTANT: `rustup`'s default profile only installs `cargo`/`clippy`/`rustfmt` and creates a proxy symlink `~/.cargo/bin/rust-analyzer -> rustup`; without `components = "rust-analyzer"`, invoking `~/.local/share/mise/shims/rust-analyzer` triggers `rust-analyzer is unavailable for the active toolchain -> falling back to mise/shims/rust-analyzer -> error: infinite recursion detected`).
    - **Editor-Only Packages Retained in Mason**: Reserve Mason strictly for VSIX bundles or custom-registry editor adapters that do not belong in global CLI toolchains: `codelldb` (C/C++/Rust LLDB VSIX), `js-debug-adapter` (VSCode JS DAP bundle), and `roslyn` (from `github:Crashdummyy/mason-registry`). Uninstall all migrated packages from `~/.local/share/nvim/mason/packages/`.
    - **Recommended `lua/plugins/mason.lua` Configuration**:
      ```lua
