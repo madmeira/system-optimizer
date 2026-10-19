@@ -18,7 +18,7 @@ Install it with the [`skills`](https://github.com/vercel-labs/skills) CLI:
 npx skills@latest add madmeira/system-optimizer
 ```
 
-The CLI finds `SKILL.md` at the root of the repository and installs the skill for the agents you pick (`-a <agent>` to name one, `-g` to install for every project instead of the current one). Later:
+The CLI finds `SKILL.md` at the root of the repository, then asks which agents to install for, whether the install is global (every project) or only for the current project, and whether to symlink (recommended) or copy. Agents that read `.agents/skills` (Pi, Codex, Cursor, Gemini CLI and others) share one copy in `~/.agents/skills/system-optimizer`; Claude Code is linked to it from `~/.claude/skills/system-optimizer`. The installer warns when it overwrites an existing skill of the same name. `-a <agent>` and `-g` answer the first two questions on the command line. Later:
 
 ```bash
 npx skills list      # what is installed
