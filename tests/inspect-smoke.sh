@@ -118,4 +118,11 @@ for expected in \
   fi
 done
 echo "ok   - multi-target batch inspection, starship format check, mpv TLS warning, and pi stale session count verified"
+
+# a bare "--icons" in a recommended alias breaks "ls <path>" on recent eza (the path becomes the option's value)
+if grep -rnE -- '--icons([^=a-z]|$)' "$ROOT/scripts" "$ROOT/references" "$ROOT/SKILL.md" "$ROOT/README.md" >&2; then
+  echo "FAIL - a recommendation uses --icons without a value; write --icons=auto" >&2
+  exit 1
+fi
+echo "ok   - eza aliases are recommended as --icons=auto"
 echo "inspect-smoke: $count targets passed"
