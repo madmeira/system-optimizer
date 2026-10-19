@@ -10,6 +10,26 @@ A hardware-aware, cross-platform system, runtime, and developer toolchain optimi
 
 All scripts are plain bash and run on their own; script paths in the docs are relative to the skill folder.
 
+## Installation
+
+Install it with the [`skills`](https://github.com/vercel-labs/skills) CLI:
+
+```bash
+npx skills@latest add madmeira/system-optimizer
+```
+
+The CLI finds `SKILL.md` at the root of the repository, then asks which agents to install for, whether the install is global (every project) or only for the current project, and whether to symlink (recommended) or copy. Agents that read `.agents/skills` (Pi, Codex, Cursor, Gemini CLI and others) share one copy in `~/.agents/skills/system-optimizer`; Claude Code is linked to it from `~/.claude/skills/system-optimizer`. The installer warns when it overwrites an existing skill of the same name. `-a <agent>` and `-g` answer the first two questions on the command line. Later:
+
+```bash
+npx skills list      # what is installed
+npx skills update    # fetch the latest version of the installed skills
+npx skills remove    # uninstall
+```
+
+`update` is a manual step: nothing refreshes the skill in the background.
+
+To install by hand instead, copy the whole skill folder (see [Repository Structure](#repository-structure)); every probe script needs `scripts/lib.sh` next to it.
+
 ## Overview
 
 `system-optimizer` inspects, configures, hardens, and coordinates your workstation environment across three fundamental pillars: **Performance**, **Configuration**, and **Security**.
