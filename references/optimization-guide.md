@@ -448,10 +448,11 @@ The combination of `topgrade` and `mise` forms the foundational modern workstati
 - **Triad Tuning**:
   - *Performance*: Avoid default `--git` scanning on deep directory trees or network shares; bind `--git` strictly to the detailed long listing alias (`ll`).
   - *Configuration*: Standard ergonomic aliases in `pwsh` and `bash`:
-    - `ls='eza --icons'`
-    - `ll='eza -l --icons --git --header --time-style=relative'`
-    - `la='eza -la --icons --git --header'`
-    - `lt='eza --tree --level=2 --icons'`
+    - `ls='eza --icons=auto'`
+    - `ll='eza -l --icons=auto --git --header --time-style=relative'`
+    - `la='eza -la --icons=auto --git --header'`
+    - `lt='eza --tree --level=2 --icons=auto'`
+    - Keep the `=auto`: recent eza versions take an optional value for this option, so without it `ls /sys` reads the path as that value and fails with `invalid value '/sys'`.
   - *Security*: Keep `--no-dereference` active by default so symlinks are never traversed into restricted directories.
 
 ### Git Terminal UI (`lazygit`)
