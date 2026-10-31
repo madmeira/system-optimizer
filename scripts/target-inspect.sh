@@ -1139,7 +1139,7 @@ case "$target" in
 
     echo "Triad Checkpoints (Performance, Configuration, Security):"
     echo "  * Performance: Avoid default --git scanning on large repositories or deep tree walks; bind --git only to detailed alias ('ll')"
-    echo "  * Configuration: Set ergonomic aliases in pwsh & bash: ls='eza --icons', ll='eza -l --icons --git --header', lt='eza --tree --level=2'"
+    echo "  * Configuration: Set ergonomic aliases in pwsh & bash: ls='eza --icons=auto', ll='eza -l --icons=auto --git --header', lt='eza --tree --level=2'"
     echo "  * Security: Maintain --no-dereference by default to avoid unintended symlink traversal"
     echo "====================================="
     exit 0
