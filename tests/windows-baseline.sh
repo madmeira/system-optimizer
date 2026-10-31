@@ -7,9 +7,14 @@
 #   REPO=https://github.com/<you>/system-optimizer REF=my-branch bash -s < tests/windows-baseline.sh
 # Deliberately no `set -e`/pipefail: keep going so every probe is reported even if one fails.
 set -u
+
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) ;;
+  *) echo "SKIP - windows-baseline (needs a Windows host)"; exit 0 ;;
+esac
+
 REPO="${REPO:-https://github.com/madmeira/system-optimizer}"
 WORK="/c/Windows/Temp/so-baseline"
-
 rm -rf "$WORK"
 git clone -q ${REF:+--branch "$REF"} "$REPO" "$WORK" || { echo "clone failed"; exit 1; }
 cd "$WORK" || exit 1

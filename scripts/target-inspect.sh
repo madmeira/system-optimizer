@@ -13,12 +13,49 @@ source "$LIB"
 target="${1:-}"
 
 if [[ -z "$target" ]]; then
-  echo "Usage: $0 <target-domain-tool-or-package>" >&2
+  echo "Usage: $0 <target-domain-tool-or-package> [target2 ...]" >&2
   exit 1
 fi
 
 local_app_data="${LOCALAPPDATA:-$HOME/AppData/Local}"
 roaming_app_data="${APPDATA:-$HOME/AppData/Roaming}"
+
+# Dynamic hardware detection (cached across multi-target batch runs via env)
+detected_threads="${_SO_DETECTED_THREADS:-$(nproc 2>/dev/null || echo "${NUMBER_OF_PROCESSORS:-4}")}"
+if [[ -n "${_SO_DETECTED_GPU+x}" ]]; then
+  detected_gpu="$_SO_DETECTED_GPU"
+elif is_windows; then
+  detected_gpu=$(run_ps '(@(Get-CimInstance Win32_VideoController | Where-Object { $_.AdapterRAM -gt 0 -or ($_.Name -notmatch "Virtual|Remote|Basic") }) | Select-Object -First 1 -ExpandProperty Name) 2>$null' 2>/dev/null || echo "")
+elif command -v lspci >/dev/null 2>&1; then
+  detected_gpu=$(lspci 2>/dev/null | grep -Ei "vga|3d|display" | head -n 1 | sed 's/.*: //' || echo "")
+else
+  detected_gpu=""
+fi
+
+if [[ $# -gt 1 ]]; then
+  export _SO_DETECTED_THREADS="$detected_threads"
+  export _SO_DETECTED_GPU="$detected_gpu"
+  for batch_target in "$@"; do
+    bash "$0" "$batch_target"
+  done
+  exit 0
+fi
+
+# Format file permissions on Linux (POSIX modes are ignored on Windows/Git Bash)
+cfg_perm_tag() {
+  local f="$1" p
+  if is_windows || [[ ! -f "$f" ]]; then
+    return 0
+  fi
+  p=$(stat -c "%a" "$f" 2>/dev/null || echo "")
+  if [[ -n "$p" ]]; then
+    if [[ "$p" == "600" || "$p" == "400" || "$f" == /etc/* ]]; then
+      printf ' (mode: %s)' "$p"
+    else
+      printf ' (mode: %s -> recommend 0600)' "$p"
+    fi
+  fi
+}
 
 # Print a browser found on Linux (empty $1 = not installed).
 browser_report_linux() {
@@ -65,10 +102,6 @@ browser_report_win() {
   echo "Managed Policies: ${managed:-unknown}"
 }
 
-# Dynamic hardware detection
-detected_threads=$(nproc 2>/dev/null || echo "${NUMBER_OF_PROCESSORS:-4}")
-detected_gpu=$(run_ps '(@(Get-CimInstance Win32_VideoController | Where-Object { $_.AdapterRAM -gt 0 -or ($_.Name -notmatch "Virtual|Remote|Basic") }) | Select-Object -First 1 -ExpandProperty Name) 2>$null' 2>/dev/null || echo "")
-
 # Dynamic theme inference helper
 infer_theme() {
   local wt_cfg
@@ -88,21 +121,33 @@ infer_theme() {
       return 0
     fi
   fi
-  local hdr_cfg="$roaming_app_data/herdr/config.toml"
-  if [[ -f "$hdr_cfg" ]]; then
-    local hdr_theme
-    hdr_theme=$(grep -E '^[[:space:]]*name[[:space:]]*=' "$hdr_cfg" 2>/dev/null | cut -d= -f2- | tr -d ' "' || echo "")
-    if [[ -n "$hdr_theme" && "$hdr_theme" != "default" ]]; then
-      echo "$hdr_theme"
-      return 0
+  local hdr_cfg
+  for hdr_cfg in "$roaming_app_data/herdr/config.toml" "$HOME/.config/herdr/config.toml"; do
+    if [[ -f "$hdr_cfg" ]]; then
+      local hdr_theme
+      hdr_theme=$(grep -E '^[[:space:]]*name[[:space:]]*=' "$hdr_cfg" 2>/dev/null | cut -d= -f2- | tr -d ' "' || echo "")
+      if [[ -n "$hdr_theme" && "$hdr_theme" != "default" ]]; then
+        echo "$hdr_theme"
+        return 0
+      fi
     fi
-  fi
-  local nv_json="$local_app_data/nvim/lazyvim.json"
-  if [[ -f "$nv_json" ]]; then
-    local nv_theme
-    nv_theme=$(grep -E '"colorscheme"[[:space:]]*:' "$nv_json" 2>/dev/null | head -n 1 | awk -F: '{print $2}' | tr -d ' ,"' || echo "")
-    if [[ -n "$nv_theme" ]]; then
-      echo "$nv_theme"
+  done
+  local nv_json
+  for nv_json in "$local_app_data/nvim/lazyvim.json" "$HOME/.config/nvim/lazyvim.json"; do
+    if [[ -f "$nv_json" ]]; then
+      local nv_theme
+      nv_theme=$(grep -E '"colorscheme"[[:space:]]*:' "$nv_json" 2>/dev/null | head -n 1 | awk -F: '{print $2}' | tr -d ' ,"' || echo "")
+      if [[ -n "$nv_theme" ]]; then
+        echo "$nv_theme"
+        return 0
+      fi
+    fi
+  done
+  if [[ -f "$HOME/.config/btop/btop.conf" ]]; then
+    local btop_theme
+    btop_theme=$(grep -E '^[[:space:]]*color_theme[[:space:]]*=' "$HOME/.config/btop/btop.conf" 2>/dev/null | head -n 1 | cut -d= -f2- | tr -d ' "' || echo "")
+    if [[ -n "$btop_theme" && "$btop_theme" != "Default" ]]; then
+      echo "$btop_theme"
       return 0
     fi
   fi
@@ -629,9 +674,10 @@ case "$target" in
     echo "Performance & Storage Metrics:"
     sessions_dir="$HOME/.pi/agent/sessions"
     if [[ -d "$sessions_dir" ]]; then
-      sess_count=$(find "$sessions_dir" -type f -name "*.jsonl" 2>/dev/null | wc -l || true)
+      sess_count=$(find "$sessions_dir" -type f -name "*.jsonl" 2>/dev/null | wc -l | tr -d ' ' || true)
+      stale_sess_count=$(find "$sessions_dir" -type f -name "*.jsonl" -mtime +30 2>/dev/null | wc -l | tr -d ' ' || true)
       sess_size=$(du -sh "$sessions_dir" 2>/dev/null | awk '{print $1}' || echo "0")
-      echo "  * Saved Sessions: $sess_count session files ($sess_size disk usage)"
+      echo "  * Saved Sessions: $sess_count session files ($sess_size disk usage, $stale_sess_count stale >30d)"
     fi
     cache_dir="$HOME/.pi/web-search-cache"
     if [[ -d "$cache_dir" ]]; then
@@ -745,6 +791,9 @@ case "$target" in
       grep -E '^(vo|gpu-api|hwdec|profile|target-colorspace-hint|interpolation|scale|ytdl-format|tone-mapping)=' "$mpv_cfg" 2>/dev/null | while read -r line; do
         echo "  * $line"
       done || true
+      if grep -qiE '^[[:space:]]*[^#]*no-check-certificate' "$mpv_cfg" 2>/dev/null; then
+        echo "  * [SECURITY WARNING] 'no-check-certificates' found in $mpv_cfg (disables TLS verification)"
+      fi
     fi
 
     echo "MPV + yt-dlp + GPU HWDEC Companion Synergy:"
@@ -757,20 +806,25 @@ case "$target" in
     fi
 
     hwdec_choice="hwdec=auto-safe"
+    vo_choice="vo=gpu-next, gpu-api=d3d11 (Windows) or vulkan (Linux)"
     if [[ "$detected_gpu" =~ (NVIDIA|GeForce|RTX|GTX) ]]; then
       hwdec_choice="hwdec=nvdec-copy (NVIDIA RTX / discrete GPU)"
     elif [[ "$detected_gpu" =~ (AMD|Radeon) ]]; then
       hwdec_choice="hwdec=vaapi (Linux) / d3d11va (Windows AMD Radeon)"
+    elif [[ "$detected_gpu" =~ (Haswell|Ivy[[:space:]]Bridge|Sandy[[:space:]]Bridge|HD[[:space:]]Graphics[[:space:]]4[0-9]{3}) ]]; then
+      hwdec_choice="hwdec=auto-safe (Legacy Intel iGPU VA-API)"
+      vo_choice="vo=gpu, gpu-api=opengl (Conservative pipeline for legacy Intel iGPU)"
     elif [[ "$detected_gpu" =~ (Intel) ]]; then
       hwdec_choice="hwdec=vaapi (Linux) / d3d11va (Windows Intel Graphics)"
     fi
     echo "  * Hardware Decoder: $hwdec_choice"
+    echo "  * Recommended Video Output: $vo_choice"
     echo "  * Browser Bypass: Direct mpv streaming bypasses heavy Chromium/browser CPU and RAM consumption"
 
     echo "Triad Checkpoints (Performance, Configuration, Security):"
-    echo "  * Performance: Stream web video directly to mpv via yt-dlp; use 'vo=gpu-next', 'gpu-api=d3d11' (Windows) or 'vulkan' (Linux), $hwdec_choice"
-    echo "  * Configuration: HDR passthrough ('target-colorspace-hint=yes'), BT.2446a tone-mapping, EWA Lanczos scaling, ytdl-format bound to 1080p/best"
-    echo "  * Security: Safe ytdl options, restrict untrusted lua scripts"
+    echo "  * Performance: Stream web video directly to mpv via yt-dlp; use $vo_choice, $hwdec_choice"
+    echo "  * Configuration: HDR passthrough ('target-colorspace-hint=yes') or SDR tone-mapping ('tone-mapping=bt.2446a'), ytdl-format bound to 1080p/best"
+    echo "  * Security: Enforce TLS certificate verification (never pass no-check-certificates), restrict untrusted lua scripts"
     echo "====================================="
     exit 0
     ;;
@@ -1379,7 +1433,7 @@ case "$target" in
       echo "  * Native [mise] Prompt Module: $(if [[ -n "$has_mise_mod" && "$mise_mod_dis" != "true" ]]; then echo "[ENABLED] (Unified polyglot tool status)"; else echo "[DISABLED / UNCONFIGURED] (Add [mise] module to starship.toml)"; fi)"
 
       lang_mods_status=()
-      for l_mod in nodejs python rust golang ruby; do
+      for l_mod in nodejs python rust golang ruby dotnet bun package; do
         if grep -A 4 "^[[:space:]]*\[$l_mod\]" "$ss_cfg" 2>/dev/null | grep -q "disabled = true"; then
           lang_mods_status+=("$l_mod:disabled")
         elif grep -q "^[[:space:]]*\[$l_mod\]" "$ss_cfg" 2>/dev/null; then
@@ -1391,7 +1445,12 @@ case "$target" in
       else
         echo "  * Language Modules Status: Using starship defaults (Per-language modules active by default)"
       fi
-
+      if [[ -n "$has_mise_mod" && "$mise_mod_dis" != "true" ]]; then
+        fmt_langs=$(grep -E '^[[:space:]]*format[[:space:]]*=' "$ss_cfg" 2>/dev/null | grep -oE '\$(nodejs|python|rust|golang|ruby|dotnet|bun|package)' | tr '\n' ' ' || true)
+        if [[ -n "$fmt_langs" ]]; then
+          echo "  * [WARNING] Redundant Language Tokens in 'format': ${fmt_langs}(Remove from format when [mise] is enabled)"
+        fi
+      fi
       bash_has_mise=$(grep -E '(eval "\$\(mise activate bash\)"|mise activate bash)' "$HOME/.bashrc" 2>/dev/null || true)
       bash_has_ss=$(grep -E '(eval "\$\(starship init bash\)"|starship init bash)' "$HOME/.bashrc" 2>/dev/null || true)
       echo "  * Shell Integration (.bashrc): $(if [[ -n "$bash_has_ss" ]]; then echo "starship init [YES]"; else echo "starship init [NO]"; fi), $(if [[ -n "$bash_has_mise" ]]; then echo "mise activate [YES]"; else echo "mise activate [NO]"; fi)"
@@ -1772,6 +1831,27 @@ case "$target" in
   pacman|yay|paru|makepkg)
     config_candidates+=("/etc/pacman.conf" "/etc/makepkg.conf" "$HOME/.config/yay/config.json")
     ;;
+  kde|kde-plasma)
+    config_candidates+=("$HOME/.config/kdeglobals" "$HOME/.config/kwinrc" "$HOME/.config/baloofilerc")
+    ;;
+  bash)
+    config_candidates+=("$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile")
+    ;;
+  podman|lazydocker)
+    config_candidates+=("$HOME/.config/containers/containers.conf" "$HOME/.config/containers/registries.conf" "$HOME/.config/containers/storage.conf" "$HOME/.config/lazydocker/config.yml")
+    ;;
+  fd)
+    config_candidates+=("$HOME/.config/fd/ignore" "$HOME/.config/fd/config")
+    ;;
+  btop|htop)
+    config_candidates+=("$HOME/.config/btop/btop.conf" "$HOME/.config/htop/htoprc")
+    ;;
+  syncthing)
+    config_candidates+=("$HOME/.local/state/syncthing/config.xml" "$HOME/.config/syncthing/config.xml")
+    ;;
+  sqlite3)
+    config_candidates+=("$HOME/.sqliterc")
+    ;;
 esac
 
 echo "Discovered Config Locations:"
@@ -1781,7 +1861,7 @@ for cfg in "${config_candidates[@]}"; do
   [[ -n "${seen_paths[$cfg]:-}" ]] && continue
   seen_paths["$cfg"]=1
   if [[ -e "$cfg" ]]; then
-    echo "  - [EXISTS] $cfg"
+    echo "  - [EXISTS] $cfg$(cfg_perm_tag "$cfg")"
     found_configs=$((found_configs + 1))
   fi
 done
@@ -1789,6 +1869,51 @@ done
 if [[ $found_configs -eq 0 ]]; then
   echo "  - None of standard candidate paths exist yet."
 fi
+
+# Target-specific state inspection for Linux & cross-platform tools
+case "$target" in
+  pacman|yay|paru|makepkg)
+    echo "Active Arch Linux Package & Build Settings:"
+    if [[ -f /etc/pacman.conf ]]; then
+      echo "  * ParallelDownloads (/etc/pacman.conf): $(grep -E '^[[:space:]]*ParallelDownloads' /etc/pacman.conf 2>/dev/null | awk -F= '{print $2}' | tr -d ' ' || echo 'commented/disabled')"
+      echo "  * SigLevel (/etc/pacman.conf): $(grep -E '^[[:space:]]*SigLevel' /etc/pacman.conf 2>/dev/null | head -n 1 | awk -F= '{print $2}' | sed 's/^[[:space:]]*//' || echo 'default')"
+    fi
+    if [[ -f /etc/makepkg.conf ]]; then
+      echo "  * MAKEFLAGS (/etc/makepkg.conf): $(grep -E '^[[:space:]]*MAKEFLAGS=' /etc/makepkg.conf 2>/dev/null | tail -n 1 || echo "commented (Recommend MAKEFLAGS=\"-j${detected_threads}\")")"
+    fi
+    echo "  * paccache.timer: $(first_line_or inactive systemctl is-active paccache.timer)"
+    ;;
+  kde|kde-plasma)
+    echo "Active KDE Plasma & KWin Parameters:"
+    if [[ -f "$HOME/.config/kdeglobals" ]]; then
+      echo "  * AnimationDurationFactor: $(grep -E '^AnimationDurationFactor=' "$HOME/.config/kdeglobals" 2>/dev/null | cut -d= -f2 || echo 'default (1.0)')"
+    fi
+    if [[ -f "$HOME/.config/baloofilerc" ]]; then
+      echo "  * Baloo Indexing-Enabled: $(grep -E '^Indexing-Enabled=' "$HOME/.config/baloofilerc" 2>/dev/null | cut -d= -f2 || echo 'default (true)')"
+    fi
+    ;;
+  bash)
+    if [[ -f "$HOME/.bashrc" ]]; then
+      echo "Active .bashrc Ergonomics & Integrations:"
+      echo "  * HISTCONTROL: $(grep -E '^[[:space:]]*(export[[:space:]]+)?HISTCONTROL=' "$HOME/.bashrc" 2>/dev/null | tail -n 1 || echo 'unset')"
+      echo "  * Mise / Starship / Zoxide / FZF: $(grep -oE '(mise activate|starship init|zoxide init|fzf --bash)' "$HOME/.bashrc" 2>/dev/null | sort -u | tr '\n' ' ' || echo 'none detected')"
+    fi
+    ;;
+  podman|lazydocker)
+    if [[ -f "$HOME/.config/containers/containers.conf" ]]; then
+      echo "Active Rootless Podman Limits:"
+      grep -E '^[[:space:]]*(pids_limit|log_size_max|runtime)[[:space:]]*=' "$HOME/.config/containers/containers.conf" 2>/dev/null | sed 's/^/  * /' || true
+    fi
+    ;;
+  syncthing)
+    st_cfg="$HOME/.local/state/syncthing/config.xml"
+    [[ ! -f "$st_cfg" ]] && st_cfg="$HOME/.config/syncthing/config.xml"
+    if [[ -f "$st_cfg" ]]; then
+      echo "Active Syncthing GUI & Relay Settings:"
+      echo "  * GUI Listen Address: $(grep -A 4 '<gui ' "$st_cfg" 2>/dev/null | grep -oE '<address>[^<]+</address>' | sed -E 's/<\/?address>//g' || echo 'unknown')"
+    fi
+    ;;
+esac
 
 # Tool Security & Hardening Check
 echo "Triad Checkpoints (Performance, Configuration, Security):"
@@ -1807,6 +1932,46 @@ case "$target" in
     echo "  * Performance: Match build.jobs = \$(nproc 2>/dev/null || echo 4); ensure protocol = 'sparse'; enable net.git-fetch-with-cli = true; prefer mise cargo.binstall"
     echo "  * Configuration: Disable 'cargo' in topgrade.toml (disable = ['cargo']) when managing CLIs via mise to eliminate from-source rebuilds"
     echo "  * Security: Cargo audit supply-chain scanning, enforce Cargo.lock checksums, restrict ~/.cargo/config.toml permissions (0600)"
+    ;;
+  pacman|yay|paru|makepkg)
+    echo "  * Performance: Set ParallelDownloads = 5 in /etc/pacman.conf; set MAKEFLAGS=\"-j${detected_threads}\" in /etc/makepkg.conf; use zstd -T0 compression"
+    echo "  * Configuration: Enable Color, ILoveCandy, VerbosePkgLists; enable paccache.timer for automated cache pruning; set yay cleanAfter = true"
+    echo "  * Security: Enforce SigLevel = Required DatabaseOptional; keep archlinux-keyring-wkd-sync.timer active; audit PKGBUILDs before building"
+    ;;
+  kde|kde-plasma)
+    echo "  * Performance: Reduce or disable AnimationDurationFactor on low-power iGPUs; disable Baloo file indexing when using ripgrep/fd"
+    echo "  * Configuration: Wayland session with adaptive TearFree compositing; consistent dark color scheme"
+    echo "  * Security: KScreenLocker lock-on-resume enabled; restrict KWallet and ~/.config permissions"
+    ;;
+  bash)
+    echo "  * Performance: Fast non-blocking prompt & directory jump hooks (mise activate, starship init, zoxide init, fzf --bash)"
+    echo "  * Configuration: Set HISTCONTROL=ignoreboth:erasedups, shopt -s histappend, bounded HISTSIZE/HISTFILESIZE, eza/bat aliases"
+    echo "  * Security: Enforce 0600 on ~/.bashrc and ~/.bash_history; scrub tokens from history"
+    ;;
+  podman|lazydocker)
+    echo "  * Performance: Use crun lightweight OCI runtime, bound log_size_max (10MB), native overlayfs storage driver"
+    echo "  * Configuration: Pair rootless podman socket with lazydocker TUI; prune dangling images periodically"
+    echo "  * Security: Rootless container execution, enforce pids_limit (2048), restrict containers.conf permissions to 0600"
+    ;;
+  fd)
+    echo "  * Performance: Bound worker threads (-j${detected_threads}); exclude heavy build/cache trees (.git, node_modules, target, .venv)"
+    echo "  * Configuration: Shared ignore patterns in ~/.config/fd/ignore paired with ripgrep and fzf"
+    echo "  * Security: Enforce 0600 on ~/.config/fd/ignore"
+    ;;
+  btop|htop)
+    echo "  * Performance: Set update_ms = 2000 (btop) / delay = 15 (htop) to minimize monitor CPU overhead on low-core hosts"
+    echo "  * Configuration: Show CPU frequency/temperature, per-core graphs, and zram/swap usage; unify theme (tokyo-night)"
+    echo "  * Security: Run unprivileged without CAP_SYS_PTRACE/sudo unless inspecting root processes; enforce 0600 on config"
+    ;;
+  syncthing)
+    echo "  * Performance: Bound maxFolderConcurrency and hashing threads to host CPU/RAM tier; disable NAT/global discovery when LAN-only"
+    echo "  * Configuration: Enable local discovery and filesystem watcher (fsWatcherEnabled=true)"
+    echo "  * Security: Bind GUI strictly to 127.0.0.1:8384 with TLS + bcrypt authentication; enforce 0600 on config.xml"
+    ;;
+  sqlite3)
+    echo "  * Performance: Default PRAGMA journal_mode=WAL, synchronous=NORMAL, temp_store=MEMORY, bounded cache_size"
+    echo "  * Configuration: Set .headers on and .mode box in ~/.sqliterc for readable interactive queries"
+    echo "  * Security: Enforce 0600 on ~/.sqliterc; avoid loading untrusted SQLite extensions"
     ;;
   yt-dlp)
     echo "  * Performance: Stream web video directly to mpv via yt-dlp, bypassing heavy browser CPU/RAM consumption"

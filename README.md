@@ -64,7 +64,7 @@ system-optimizer/
 └── tests/
     ├── backup-smoke.sh               # Backup, list, restore and safety checks (temp dir only)
     ├── probe-fallback.sh             # Probes say "unknown" when PowerShell fails
-    ├── inspect-smoke.sh              # Smoke test: all 41 targets of target-inspect.sh in a clean env
+    ├── inspect-smoke.sh              # Smoke test: all 44 targets of target-inspect.sh in a clean env
     ├── inspect-windows.sh            # Smoke test: Windows targets on a Windows host
     ├── json-escape.sh                # JSON stays valid for quotes, backslashes, newlines
     └── windows-baseline.sh           # Manual helper: run the probes on a Windows host (Git Bash)

@@ -155,4 +155,13 @@ if bash "$BACKUP" --list '../..' > "$WORK/out" 2> "$WORK/err"; then fail "--list
 [[ "$(find "$WORK" -type d | wc -l)" -eq "$before" ]] || fail "a rejected target name still created folders"
 ok "target names with slashes or dots are rejected before anything is written"
 
+# --- multi-file batch backup: backs up several files for one target in a single call
+mkdir -p "$WORK/batch"
+printf 'one\n' > "$WORK/batch/f1.conf"
+printf 'two\n' > "$WORK/batch/f2.conf"
+batch_out="$(bash "$BACKUP" "$WORK/batch/f1.conf" "$WORK/batch/f2.conf" batchtarget "Multi-file batch backup test")"
+[[ "$(grep -c 'BACKUP CREATED' <<< "$batch_out")" -eq 2 ]] || fail "multi-file batch did not create 2 backups"
+[[ "$(find "$STORE/batchtarget" -type f -name '*.bak' | wc -l)" -eq 2 ]] || fail "multi-file batch store does not have 2 .bak files"
+ok "multi-file batch backup creates distinct backups with shared target and description"
+
 echo "backup-smoke: $pass passed, $skipped skipped"

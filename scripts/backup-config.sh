@@ -127,7 +127,7 @@ validate_target_name() {
 usage() {
   cat <<EOF
 Usage:
-  $0 <config-path> <target-name> [description]   Create a timestamped backup before editing
+  $0 [--no-in-place] <config-path> [config-path2 ...] <target-name> [description]  Create timestamped backup(s)
   $0 --list [target-name]                         List available backups
   $0 --restore <backup-path> [dest-path]          Restore a configuration from backup
   $0 --diff <backup-path> [current-path]          Show diff between backup and current file
@@ -267,17 +267,52 @@ if [[ "$cmd" == "--restore" ]]; then
   exit 0
 fi
 
-# Backup mode: $1 is config-path, $2 is target-name, $3 is description
+# Backup mode: [--no-in-place] <config-path> <target-name> [description]
+skip_in_place=false
+if [[ "$cmd" == "--no-in-place" ]]; then
+  skip_in_place=true
+  shift
+  cmd="${1:-}"
+  if [[ -z "$cmd" ]]; then
+    usage >&2
+    exit 2
+  fi
+fi
+
 if [[ "$cmd" == -* ]]; then
   echo "Error: unknown option '$cmd'" >&2
   usage >&2
   exit 2
 fi
+
+# Multi-file batch mode:
+#   backup-config.sh [--no-in-place] <file1> <file2> [file3 ...] <target-name> <description>
+#   backup-config.sh [--no-in-place] <file1> <file2> <target-name>
+if [[ $# -gt 3 ]] || { [[ $# -eq 3 ]] && { [[ "$2" == */* ]] || [[ -e "$2" ]]; } && validate_target_name "$3" 2>/dev/null; }; then
+  args=("$@")
+  n=${#args[@]}
+  if validate_target_name "${args[$((n-1))]}" 2>/dev/null && { [[ "${args[$((n-2))]}" == */* ]] || [[ -e "${args[$((n-2))]}" ]]; }; then
+    batch_target="${args[$((n-1))]}"
+    batch_desc="Auto-backup before optimization"
+    file_count=$((n - 1))
+  else
+    batch_target="${args[$((n-2))]}"
+    batch_desc="${args[$((n-1))]}"
+    file_count=$((n - 2))
+  fi
+  validate_target_name "$batch_target" || exit 1
+  extra_flags=()
+  [[ "$skip_in_place" == true ]] && extra_flags+=("--no-in-place")
+  for ((i = 0; i < file_count; i++)); do
+    bash "$0" "${extra_flags[@]}" "${args[$i]}" "$batch_target" "$batch_desc"
+  done
+  exit 0
+fi
+
 config_path=$(normalize_path "$1")
 target_name="${2:-general}"
 validate_target_name "$target_name" || exit 1
 desc="${3:-Auto-backup before optimization}"
-
 if [[ ! -e "$config_path" ]]; then
   echo "Warning: Target config '$config_path' does not exist yet. No backup needed."
   exit 0
@@ -320,11 +355,16 @@ Permissions: $file_perms
 Description: $desc
 EOF
 
-# In-place backup if directory is writable
+# In-place backup if directory is writable and not a scanned/drop-in config directory
 in_place_backup="${config_path}.bak.${timestamp}"
 in_place_created=false
+in_place_reason="Skipped (directory not user-writable)"
 config_dir=$(dirname "$config_path")
-if [[ -w "$config_dir" ]]; then
+if [[ "$skip_in_place" == true ]]; then
+  in_place_reason="Skipped (--no-in-place)"
+elif [[ "$config_dir" =~ (/nvim(/|$)|\.d(/|$)|/systemd(/|$)) ]]; then
+  in_place_reason="Skipped (scanned/drop-in config directory)"
+elif [[ -w "$config_dir" ]]; then
   if cp -p "$config_path" "$in_place_backup" 2>/dev/null; then
     in_place_created=true
   fi
@@ -338,6 +378,6 @@ Source File:  $config_path
 Central Bak:  $central_backup
 SHA256:       $sha256_hash
 Timestamp:    $timestamp
-In-place Bak: $(if [[ "$in_place_created" == true ]]; then echo "$in_place_backup"; else echo "Skipped (directory not user-writable)"; fi)
+In-place Bak: $(if [[ "$in_place_created" == true ]]; then echo "$in_place_backup"; else echo "$in_place_reason"; fi)
 Description:  $desc
 EOF
