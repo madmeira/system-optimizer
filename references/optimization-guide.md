@@ -615,7 +615,9 @@ The integration between Neovim and Mise establishes a unified, reproducible deve
              local ok, env_map = pcall(vim.json.decode, obj.stdout)
              if not ok or type(env_map) ~= "table" then return end
              for k, v in pairs(env_map) do
-               if k ~= "PATH" and type(v) == "string" then
+               if k ~= "PATH" and k ~= "SHLVL" and k ~= "_" and k ~= "PWD" and k ~= "OLDPWD"
+                 and not k:match("^__MISE_") and not k:match("^MISE_")
+                 and type(v) == "string" then
                  vim.env[k] = v
                end
              end
@@ -687,6 +689,7 @@ The integration between Neovim and Mise establishes a unified, reproducible deve
   style = "bold yellow"
 
   # Disable individual per-language version modules to eliminate 50-200ms prompt lag
+  # (Also remove $nodejs, $python, $rust, $golang, $dotnet, $bun, $package from custom format strings when [mise] is enabled)
   [nodejs]
   disabled = true
 
@@ -708,6 +711,14 @@ The integration between Neovim and Mise establishes a unified, reproducible deve
   [java]
   disabled = true
 
+  [dotnet]
+  disabled = true
+
+  [bun]
+  disabled = true
+
+  [package]
+  disabled = true
   [character]
   success_symbol = "[❯](bold green)"
   error_symbol = "[❯](bold red)"
@@ -747,16 +758,13 @@ The integration between Neovim and Mise establishes a unified, reproducible deve
   - *Security*: Avoid executing arbitrary remote network queries in custom prompt modules (`[custom.*]`); restrict `starship.toml` permissions to `0600`.
 ### Media Player (`mpv`)
 - **Configuration**: `%APPDATA%\mpv\mpv.conf` (Windows) or `~/.config/mpv/mpv.conf` (Linux).
-- **Windows Triad Tuning (Discrete GPU / NVIDIA RTX + HDR Display)**:
-  - `vo=gpu-next`: Modern libplacebo-based renderer.
-  - `gpu-api=d3d11`: Rock-solid Direct3D 11 API on Windows 11 with native HDR presentation.
-  - `hwdec=nvdec-copy`: Hardware decoder tailored to detected GPU (NVDEC copy-back on NVIDIA, d3d11va on AMD/Intel).
-  - `target-colorspace-hint=yes`: Native HDR passthrough to Windows DWM when HDR is active.
-  - `hdr-compute-peak=yes`, `tone-mapping=bt.2446a`: Dynamic peak detection HDR tone-mapping to SDR when HDR display mode is off.
-  - `interpolation=yes`, `video-sync=display-resample`: Smooth motion eliminating judder on high-refresh displays (144Hz).
-  - `scale=ewa_lanczossharp`, `cscale=spline36`: Sharp high-quality upscaling for compressed web streams.
-  - `deband=yes`: Eliminates color banding gradients in web video.
-
+- **Triad Tuning**:
+  - *Performance*:
+    - Discrete GPU / modern iGPU: `vo=gpu-next` with `gpu-api=d3d11` (Windows) or `gpu-api=vulkan` (Linux), paired with hardware decoding tailored to detected GPU (`hwdec=nvdec-copy` on NVIDIA RTX, `hwdec=d3d11va` on AMD/Intel Windows, `hwdec=vaapi` on Linux).
+    - Legacy Intel iGPU (Haswell / Ivy Bridge / HD Graphics 4xxx): conservative `vo=gpu`, `gpu-api=opengl`, and `hwdec=auto-safe` to avoid Vulkan/shader pipeline stalls.
+    - `interpolation=yes`, `video-sync=display-resample`: Smooth motion on high-refresh displays; `scale=ewa_lanczossharp`, `cscale=spline36`, `deband=yes` on capable GPUs.
+  - *Configuration*: Native HDR passthrough (`target-colorspace-hint=yes`) or dynamic SDR tone-mapping (`hdr-compute-peak=yes`, `tone-mapping=bt.2446a`); bound `ytdl-format` to `1080p/best`.
+  - *Security*: Enforce TLS certificate verification (never pass `no-check-certificates` in `ytdl-raw-options`); restrict untrusted Lua scripts; enforce `0600` on `mpv.conf`.
 ### Media Downloader (`yt-dlp`)
 - **Configuration**: `%APPDATA%\yt-dlp\config` or `~/.config/yt-dlp/config`.
 - **Triad Tuning**:
@@ -885,13 +893,13 @@ Every file edited or overwritten by `system-optimizer` MUST be backed up using `
      - `Size` & `Permissions`: File size in bytes and permissions.
      - `Description`: Rationale for modification.
 2. **In-Place Adjacent Backup**: `<config_path>.bak.<timestamp>`
-   - Created in the parent directory when user write permissions allow (e.g. `settings.json.bak.20260905-143000`).
+   - Created in the parent directory when user write permissions allow (e.g. `settings.json.bak.20260905-143000`), and automatically skipped inside scanned/drop-in config directories (`/nvim/`, `*.d/`, `/systemd/`) or when `--no-in-place` is passed so tools do not accidentally load `.bak` files.
    - A plain copy with no `.meta`: `--restore` only accepts central-vault backups (it verifies their SHA256), so restore an in-place copy with `cp`.
 
 ### 2. Backup CLI Commands
-- Create backup:
+- Create backup (single file or multi-file batch):
   ```bash
-  scripts/backup-config.sh <config-path> <target> "Reason"
+  scripts/backup-config.sh [--no-in-place] <config-path> [config-path2 ...] <target> "Reason"
   ```
 - List backups:
   ```bash

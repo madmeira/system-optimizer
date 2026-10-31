@@ -1,6 +1,6 @@
 ---
 name: system-optimizer
-description: Inspects, configures, hardens, and optimizes the system, tools, desktop/terminal environments, and software packages across Performance, Configuration, and Security. Native support for Windows (winget, windows-terminal, wsl, pwsh, powertoys, defender, storage/trim) and Linux (pacman, yay, flatpak, systemd, sysctl, kde-plasma), as well as cross-platform tools (git, topgrade, mise, neovim, ripgrep, starship, bat, fzf, lazygit, mpv, yt-dlp, rustdesk, controld, pi, bash, herdr, gh). Tailored to host hardware (CPU threads, RAM tier, GPU, disk type) and upstream standards. When called without arguments, probes the system and presents numbered tuning options. Maintains persistent memory in ~/.config/system-optimizer/<target>/MEMORY.md and cross-system ~/.config/system-optimizer/MASTER_MEMORY.md.
+description: Inspects, configures, hardens, and optimizes the system, tools, desktop/terminal environments, and software packages across Performance, Configuration, and Security. Native support for Windows (winget, windows-terminal, wsl, pwsh, powertoys, defender, storage/trim) and Linux (pacman, yay, makepkg, flatpak, podman, lazydocker, systemd, sysctl, kde-plasma), as well as cross-platform tools (git, topgrade, mise, cargo, neovim, ripgrep, fd, zoxide, eza, starship, bat, fzf, lazygit, mpv, yt-dlp, btop, htop, syncthing, sqlite3, rustdesk, controld, pi, bash, herdr, gh). Tailored to host hardware (CPU threads, RAM tier, GPU, disk type) and upstream standards. When called without arguments, probes the system and presents numbered tuning options. Maintains persistent memory in ~/.config/system-optimizer/<target>/MEMORY.md and cross-system ~/.config/system-optimizer/MASTER_MEMORY.md.
 ---
 
 # System & Tool Optimizer
@@ -41,10 +41,10 @@ Script paths below (`scripts/...`, `references/...`) are relative to the skill f
 |---|---|
 | Domains | `system`, `security`, `storage`, `full` |
 | Windows | `winget`, `windows-terminal`, `wsl`, `pwsh`, `powertoys`, `defender` |
-| Linux | `pacman`, `yay`, `kde-plasma` |
+| Linux | `pacman`, `yay`, `makepkg`, `kde-plasma` |
 | Runtimes & orchestration | `mise`, `topgrade`, `cargo`, `podman`, `lazydocker` |
-| Editor, shell & git | `neovim`, `starship`, `bat`, `fzf`, `ripgrep`, `zoxide`, `eza`, `bash`, `git`, `gh`, `lazygit` |
-| Media & remote | `mpv`, `yt-dlp`, `rustdesk`, `controld` |
+| Editor, shell & git | `neovim`, `starship`, `bat`, `fzf`, `ripgrep`, `fd`, `zoxide`, `eza`, `sqlite3`, `bash`, `git`, `gh`, `lazygit` |
+| Media, sync & remote | `mpv`, `yt-dlp`, `syncthing`, `rustdesk`, `controld` |
 | Agents | `pi`, `herdr` |
 | Monitors | `htop`, `btop` |
 
@@ -73,7 +73,7 @@ When invoked **without arguments**:
    - **Option 5: Developer & CLI Tools**:
      - Cross-platform: `pwsh`, `bash`, `topgrade`, `git`, `neovim`, `starship`, `bat`, `fzf`, `ripgrep`, `fd`, `lazygit`, `ffmpeg`, `mpv`, `yt-dlp`, `rustdesk`, `controld`, `pi`, `herdr`.
    - **Option 6: Curated Top Balanced Recommendations** (High-impact cross-cutting set combining System, Security, and Tools).
-   - **Option 7: Full System Optimization (Comprehensive)** (Full evaluation and optimization across ALL detected system domains, security posture, and developer toolchain: `storage`, `defender`, `firewall`, `winget`, `wsl`, `windows-terminal`, `pwsh`, `bash`, `topgrade`, `mise`, `ripgrep`, `zoxide`, `eza`, `pi`, `lazygit`, `neovim`, `bat`, `fzf`, `starship`, `git`, `mpv`, `yt-dlp`, `powertoys`, `herdr`).
+   - **Option 7: Full System Optimization (Comprehensive)** (Full evaluation and optimization across ALL detected system domains, security posture, and developer toolchain: `storage`, `system`, `security`, `defender`, `firewall`, `winget`, `pacman`, `yay`, `makepkg`, `wsl`, `podman`, `lazydocker`, `windows-terminal`, `kde-plasma`, `pwsh`, `bash`, `topgrade`, `mise`, `cargo`, `ripgrep`, `fd`, `zoxide`, `eza`, `pi`, `lazygit`, `neovim`, `bat`, `fzf`, `starship`, `git`, `gh`, `mpv`, `yt-dlp`, `btop`, `htop`, `syncthing`, `sqlite3`, `rustdesk`, `controld`, `powertoys`, `herdr`).
    - **Option 8: Custom Selection** (User enters specific domains or tool names).
    - **Option 9: None / Cancel**.
 3. **Audit Selected Set**: Run the 6-phase pipeline for each chosen target as an audit, then present numbered proposals and apply only what the user approves (see Safety Contract).
@@ -86,11 +86,11 @@ When **Full Optimization** is selected, the skill systematically orchestrates th
 
 | Tier | Scope | Targets |
 |---|---|---|
-| 1. System core & OS baseline | TRIM, memory compression, power plan, startup audit | `storage`, `system` |
-| 2. Security hardening | Firewall, Defender/PUA, execution policy, package integrity | `security`, `defender` |
-| 3. Subsystems & package orchestration | Package managers, WSL, runtimes, update coordination | `winget`, `wsl`, `mise`, `cargo`, `topgrade` |
-| 4. Terminal & shell | Terminal engine, shell profiles, history | `windows-terminal`, `pwsh`, `bash` |
-| 5. Developer & media toolchain | Editor, search, git, media, agents, remote tools | `neovim`, `lazygit`, `ripgrep`, `zoxide`, `eza`, `bat`, `fzf`, `starship`, `git`, `gh`, `mpv`, `yt-dlp`, `pi`, `herdr`, `rustdesk`, `controld`, `powertoys` |
+| 1. System core & OS baseline | TRIM, memory compression / zram, power plan / CPU governor, sysctl, startup audit | `storage`, `system` |
+| 2. Security hardening | Firewall (`ufw`/`nftables`/Defender), Defender/PUA, sysctl hardening, execution policy, package integrity | `security`, `defender` |
+| 3. Subsystems & package orchestration | Package managers, WSL, containers, runtimes, update coordination | `winget`, `pacman`, `yay`, `makepkg`, `wsl`, `podman`, `lazydocker`, `mise`, `cargo`, `topgrade` |
+| 4. Terminal, desktop & shell | Terminal engine, desktop compositor, browsers, shell profiles, history | `windows-terminal`, `kde-plasma`, `pwsh`, `bash` |
+| 5. Developer, media & monitor toolchain | Editor, search, git, media, agents, monitors, sync & remote tools | `neovim`, `lazygit`, `ripgrep`, `fd`, `zoxide`, `eza`, `bat`, `fzf`, `starship`, `git`, `gh`, `mpv`, `yt-dlp`, `pi`, `herdr`, `btop`, `htop`, `syncthing`, `sqlite3`, `rustdesk`, `controld`, `powertoys` |
 
 **Cross-tool synergies** (settings per pipeline in `references/optimization-guide.md` §10):
 
@@ -166,7 +166,7 @@ Extract host boundaries:
 ### Phase 2: Target Inspection & Security Auditing
 
 For each target domain or tool:
-1. Run `scripts/target-inspect.sh <target>` and `scripts/security-audit.sh`.
+1. Run `scripts/target-inspect.sh <target> [target2 ...]` (supports batching multiple targets in a single invocation) and `scripts/security-audit.sh`.
 2. Determine:
    - For **System domains**: Current storage TRIM state, volume health, power scheme, firewall profile states (Domain/Private/Public), Defender real-time & PUA protection, listening network sockets.
    - For **Tools/Packages**: Binary path, version, config file locations (`%APPDATA%`, `%LOCALAPPDATA%`, `~/.config`, `/etc`), origin package manager, active security/sandboxing posture.
@@ -196,10 +196,10 @@ Propose improvements across all three pillars, and apply only the items the user
 
 #### 2. Configuration & Mandatory Pre-Modification Backups
 - **Mandatory Safety Backups**:
-  - BEFORE modifying or overwriting ANY existing configuration file, the skill **MUST** execute `scripts/backup-config.sh <config_file> <target> [description]`.
+  - BEFORE modifying or overwriting ANY existing configuration file, the skill **MUST** execute `scripts/backup-config.sh <config_file> [config_file2 ...] <target> [description]` (supports single-file or multi-file batch backups for a target).
   - Backups are preserved in two locations:
     1. Central backup store (private, mode 700): `~/.config/system-optimizer/backups/<target>/<filename>.<timestamp>.bak` with a `.meta` companion record (SHA256, original path, timestamp).
-    2. Local in-place backup: `<config_file>.bak.<timestamp>` when the directory is user-writable.
+    2. Local in-place backup: `<config_file>.bak.<timestamp>` when the directory is user-writable (skipped automatically in scanned/drop-in config directories such as `/nvim/`, `*.d/`, `/systemd/`, or with `--no-in-place`).
   - The backup path, timestamp, and SHA256 checksum must be recorded in the per-target `MEMORY.md` under `## Backups & Rollback Ledger`.
   - Rollback is supported on demand via `scripts/backup-config.sh --restore <backup-path>`.
 - **Modern Defaults**:

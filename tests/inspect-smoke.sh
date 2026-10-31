@@ -16,10 +16,9 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/home"
 
-targets="bash bat btop cargo controld defender eza full fzf gh git herdr htop kde-plasma lazydocker lazygit
-mise mpv neovim pacman pi podman powertoys pwsh ripgrep rustdesk security starship storage system topgrade
+targets="bash bat btop cargo controld defender eza fd full fzf gh git herdr htop kde-plasma lazydocker lazygit
+mise mpv neovim pacman pi podman powertoys pwsh ripgrep rustdesk security sqlite3 starship storage syncthing system topgrade
 windows-terminal winget wsl yay yt-dlp zoxide network chrome edge python"
-
 failed=0; count=0
 for t in $targets; do
   count=$((count + 1))
@@ -87,4 +86,36 @@ for expected in \
   fi
 done
 echo "ok   - neovim + mise synergy and LazyVim v15 checks verified"
+
+# Multi-target batch inspection + starship redundant format token + mpv TLS warning + pi stale sessions
+mkdir -p "$WORK/home/.config/mpv" "$WORK/home/.pi/agent/sessions"
+cat > "$WORK/home/.config/starship.toml" <<'EOF'
+format = "$directory$nodejs$rust$mise$character"
+[mise]
+disabled = false
+[nodejs]
+disabled = true
+EOF
+cat > "$WORK/home/.config/mpv/mpv.conf" <<'EOF'
+vo=gpu
+ytdl-raw-options=no-check-certificates=
+EOF
+touch "$WORK/home/.pi/agent/sessions/recent.jsonl"
+touch -d "40 days ago" "$WORK/home/.pi/agent/sessions/stale.jsonl"
+
+batch_out="$(env -i PATH="$WORK/bin:$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/scripts/target-inspect.sh" starship mpv pi)"
+for expected in \
+  "=== Target Inspection: starship ===" \
+  "[WARNING] Redundant Language Tokens in 'format': \$nodejs \$rust" \
+  "=== Target Inspection: mpv ===" \
+  "[SECURITY WARNING] 'no-check-certificates' found" \
+  "=== Target Inspection: pi ===" \
+  "Saved Sessions: 2 session files" \
+  "1 stale >30d)"; do
+  if [[ "$batch_out" != *"$expected"* ]]; then
+    echo "FAIL - multi-target / starship / mpv / pi check missing: $expected" >&2
+    exit 1
+  fi
+done
+echo "ok   - multi-target batch inspection, starship format check, mpv TLS warning, and pi stale session count verified"
 echo "inspect-smoke: $count targets passed"
