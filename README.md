@@ -178,7 +178,7 @@ Every script in `scripts/` can be run directly without an AI agent for diagnosti
 ./scripts/host-diff.sh myserver
 ```
 
-`remote-run.sh` copies `scripts/` to a temporary folder on the host, runs the script from there and deletes the folder (the scripts find `lib.sh` next to themselves, so they cannot be piped to `bash -s`). `host-diff.sh` compares shell startup files and tool configs between this machine and the host, with keys, tokens and passwords redacted. Both use SSH keys only (`BatchMode`) and never run `sudo`.
+`remote-run.sh` copies `scripts/` to a temporary folder on the host, runs the script from there and deletes the folder (the scripts find `lib.sh` next to themselves, so they cannot be piped to `bash -s`). `host-diff.sh` compares shell startup files and tool configs between this machine and the host, with best-effort redaction: export values are hidden except for paths and tool settings, and keys, tokens and URL credentials are masked. Review the output before sharing it. Both use SSH keys only (`BatchMode`) and never run `sudo`.
 
 ## Persistent Memory Architecture
 

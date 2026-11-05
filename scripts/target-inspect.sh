@@ -821,7 +821,7 @@ case "$target" in
       [[ -f "$f" ]] || continue
       echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
       if grep -qE "verification-method[[:space:]]*=[[:space:]]*['\"]use-permanent-password" "$f" 2>/dev/null; then
-        echo "  * [WARNING] $f accepts the permanent password only (prefer temporary or both, plus approve-mode click)"
+        echo "  * [NOTE] $f accepts the permanent password only (a preference: temporary or both passwords, plus approve-mode click, exposes less)"
       fi
     done
     if [[ -n "$rd_bin" ]] && ! is_windows; then
@@ -1212,9 +1212,9 @@ case "$target" in
     done
 
     echo "Aliases in shell startup files:"
-    if rc_lines 'eza'; then
+    if rc_lines '(^|[^A-Za-z0-9_])eza([^A-Za-z0-9_]|$)'; then
       # An icons flag without a value takes the next word as its value on recent eza, so "ls /path" fails.
-      if rc_lines "eza[^#]*--icon[s]([^=]|\$)" >/dev/null; then
+      if rc_lines "(^|[^A-Za-z0-9_])eza[^#]*--icon[s]([^=]|\$)" >/dev/null; then
         echo "  * Icons flag: [MISCONFIGURED] icons flag without a value (Use =auto: it also keeps icons out of pipes)"
       else
         echo "  * Icons flag: [OK]"
@@ -1423,12 +1423,14 @@ case "$target" in
     echo "  * core.autocrlf: $(git config --get core.autocrlf 2>/dev/null || echo 'unset')"
     echo "  * credential.helper: $(git config --get credential.helper 2>/dev/null || echo 'unset')"
     echo "  * diff.algorithm: $(git config --get diff.algorithm 2>/dev/null || echo 'unset')"
-    echo "Git Findings:"
-    git_check credential.helper "" "gh auth setup-git, or a credential manager"
-    git_check diff.algorithm histogram "git config --global diff.algorithm histogram"
-    git_check push.autoSetupRemote true "git config --global push.autoSetupRemote true"
-    if git config --get-all safe.directory 2>/dev/null | grep -qx '\*'; then
-      echo "  * safe.directory: [WARNING] '*' turns off the repository ownership check"
+    if [[ -n "$git_bin" ]]; then
+      echo "Git Findings:"
+      git_check credential.helper "" "gh auth setup-git, or a credential manager"
+      git_check diff.algorithm histogram "git config --global diff.algorithm histogram"
+      git_check push.autoSetupRemote true "git config --global push.autoSetupRemote true"
+      if git config --get-all safe.directory 2>/dev/null | grep -qx '\*'; then
+        echo "  * safe.directory: [WARNING] '*' turns off the repository ownership check"
+      fi
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
@@ -1991,7 +1993,7 @@ case "$target" in
     py_ext=$("$bin_path" -c 'import os, sysconfig; print(os.path.exists(os.path.join(sysconfig.get_path("stdlib"), "EXTERNALLY-MANAGED")))' 2>/dev/null || echo unknown)
     case "$py_ext" in
       True)  echo "  * System pip protected (EXTERNALLY-MANAGED): [OK]" ;;
-      False) echo "  * System pip protected (EXTERNALLY-MANAGED): [WARNING] pip can modify the system environment (Use venv, uv or pipx)" ;;
+      False) echo "  * System pip protected (EXTERNALLY-MANAGED): [NOTE] this Python has no marker, so pip can change it (fine for pyenv or a virtualenv; otherwise use venv, uv or pipx)" ;;
       *)     echo "  * System pip protected (EXTERNALLY-MANAGED): unknown" ;;
     esac
     echo "  * Virtualenv active: ${VIRTUAL_ENV:-no}"
