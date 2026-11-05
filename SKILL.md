@@ -20,6 +20,7 @@ A comprehensive optimization skill for Windows and Linux systems, package manage
 3. **Back up before editing.** Run `scripts/backup-config.sh <file> <target> "<why>"` before touching any existing file.
 4. **Never run privileged commands yourself.** For `sudo`, root-owned files or passwords, give the user the exact command to run.
 5. **Ask before anything outward-facing** (pushes, PRs, messages, installs from the network).
+6. **Say what was checked, per host.** Never write "no problem found" for a host, file or setting you did not read. Name each host and what was inspected on it; list what was not covered.
 
 ---
 
@@ -171,6 +172,16 @@ For each target domain or tool:
    - For **System domains**: Current storage TRIM state, volume health, power scheme, firewall profile states (Domain/Private/Public), Defender real-time & PUA protection, listening network sockets.
    - For **Tools/Packages**: Binary path, version, config file locations (`%APPDATA%`, `%LOCALAPPDATA%`, `~/.config`, `/etc`), origin package manager, active security/sandboxing posture.
 
+**Reading the output (the audit is only as good as what it reads):**
+- **Findings vs advice.** Only tagged lines (`[OK]`, `[MISCONFIGURED]`, `[NOT CONFIGURED]`, `[WARNING]`...) and quoted `file:line:text` lines are findings. The block headed `Recommendations (advice only...)` is static text printed for every host. Never present it as an audit result.
+- **Read the whole output.** Do not filter it by keywords such as `warn` or `recommend`: a wrong setting that carries no such word is lost. A target whose output has no tagged line was not audited. Read its config by hand (`grep` the shell startup files, `git config --list`, the tool's own `--show-config`) before saying it is fine.
+- **Batches must fail loudly.** `target-inspect.sh a b c` prints `ERROR: target 'x' failed` on stderr and exits 1 if any target fails. Treat that as an unfinished audit, not as a result.
+
+**More than one host** (the user says "here and on `<host>`"):
+1. Run Phase 1 and 2 on every host. `scripts/remote-run.sh <host> <script.sh> [args]` runs a skill script over SSH (the scripts cannot be piped to `bash -s`: they find `lib.sh` through `BASH_SOURCE`).
+2. Run `scripts/host-diff.sh <host>`. It compares shell startup files and tool configs between the hosts, with secrets redacted. A setting that differs between hosts is a finding on the weaker one, even when each host looks fine alone.
+3. Report per host (Safety Contract 6). Anything asked for "on both" and done on only one is called out.
+
 ---
 
 ### Phase 3: Research Upstream & Security Standards
@@ -269,6 +280,7 @@ The unified system-wide orchestrator:
 Conclude every run with:
 - **Triad Summary Table**: Detailed breakdown of Performance, Configuration, and Security improvements per target.
 - **Verification Status**: Results of dry-runs, syntax checks, and service status.
+- **Coverage**: Per host, which targets and files were actually read, and which were not (see Safety Contract 6).
 - **Persistent Memory Confirmation**: Notification of updated records in `~/.config/system-optimizer/`.
 - **Actionable Recommendations**: Next steps (e.g. terminal reload, PowerShell session restart, optional companion packages, security updates).
 

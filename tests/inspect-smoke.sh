@@ -125,4 +125,27 @@ if grep -rnE -- '--icons([^=a-z]|$)' "$ROOT/scripts" "$ROOT/references" "$ROOT/S
   exit 1
 fi
 echo "ok   - eza aliases are recommended as --icons=auto"
+
+# the eza inspector must read the user's real aliases, not only print advice
+eza_check() { # <alias line or empty> <expected text>
+  if [[ -n "$1" ]]; then printf '%s\n' "$1" > "$WORK/home/.zshrc"; else rm -f "$WORK/home/.zshrc"; fi
+  out="$(env -i PATH="$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/scripts/target-inspect.sh" eza)"
+  if [[ "$out" != *"$2"* ]]; then
+    echo "FAIL - eza alias check: for '${1:-<no .zshrc>}' expected: $2" >&2
+    exit 1
+  fi
+}
+eza_check "alias ls='eza --icons'"       "Icons flag: [MISCONFIGURED]"
+eza_check "alias ls='eza --icons=auto'"  "Icons flag: [OK]"
+eza_check "# alias ls='eza --icons'"     "eza alias: [NOT CONFIGURED]"
+eza_check ""                             "eza alias: [NOT CONFIGURED]"
+rm -f "$WORK/home/.zshrc"
+echo "ok   - eza alias check reads shell startup files"
+
+# remote-run.sh must refuse anything that is not a plain script name, before it touches ssh
+if bash "$ROOT/scripts/remote-run.sh" somehost '../x.sh; id' >/dev/null 2>&1; then
+  echo "FAIL - remote-run.sh accepted a script name with a path or shell characters" >&2
+  exit 1
+fi
+echo "ok   - remote-run.sh validates the script name"
 echo "inspect-smoke: $count targets passed"
