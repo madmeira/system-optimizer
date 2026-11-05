@@ -53,7 +53,7 @@ RC_FILES=("$HOME/.zshrc" "$HOME/.zshenv" "$HOME/.bashrc" "$HOME/.bash_profile" "
 rc_read() {
   local f out=""
   for f in "${RC_FILES[@]}"; do [[ -f "$f" ]] && out+="$f "; done
-  echo "${out:-no startup file found}"
+  echo "${out:-no startup file found }"
 }
 rc_lines() {
   local pat="$1" f hit=1
@@ -89,6 +89,9 @@ git_check() {
   fi
   if { [[ -z "$2" && -n "$v" ]]; } || { [[ -n "$2" && "$v" == "$2" ]]; }; then
     echo "  * $1: ${v:-set} [OK]"
+  elif [[ "$2" == true && -z "$v" && -n "$(git config --get "$1" 2>/dev/null || true)" ]]; then
+    # set, but not a valid boolean: git itself rejects it
+    echo "  * $1: invalid value '$(git config --get "$1")' [NOT CONFIGURED] (Recommend: $3)"
   else
     echo "  * $1: ${v:-unset} [NOT CONFIGURED] (Recommend: $3)"
   fi

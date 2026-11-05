@@ -37,7 +37,7 @@ compare() {
   case "$rc" in
     0) r=$(printf '%s\n' "$r" | redact | $filter) ;;
     3) r="@@missing@@" ;;
-    *) echo "Error: ssh to $host failed (exit $rc) while reading $f" >&2; exit 1 ;;
+    *) echo "Error: could not read ~/$f on $host (exit $rc: ssh failed, or the file is unreadable)" >&2; exit 1 ;;
   esac
   if [[ "$l" == "@@missing@@" && "$r" == "@@missing@@" ]]; then return 0; fi
   if [[ "$l" == "$r" ]]; then echo "[SAME]      $f"; return 0; fi

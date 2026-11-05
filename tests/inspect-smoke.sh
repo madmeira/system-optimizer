@@ -243,5 +243,10 @@ echo "ok   - host-diff hides secrets, keeps different words apart and stops on s
 eza_check "source ~/.zsh_aliases" "files they source are not followed"
 rm -f "$WORK/home/.zshrc"
 cfg_check git .gitconfig $'[push]\n\tautoSetupRemote = yes' "push.autoSetupRemote: true [OK]"
+cfg_check git .gitconfig $'[push]\n\tautoSetupRemote = maybe' "push.autoSetupRemote: invalid value 'maybe'"
+# no startup file at all: the sentence must not run into the next one
+empty_home="$WORK/empty"; mkdir -p "$empty_home"
+out="$(env -i PATH="$PATH" HOME="$empty_home" LANG=C bash "$ROOT/scripts/target-inspect.sh" eza)"
+[[ "$out" == *"no startup file found (files they source"* ]] || { echo "FAIL - eza not-found message is glued together" >&2; exit 1; }
 echo "ok   - not-found messages name the files read; git booleans are normalised"
 echo "inspect-smoke: $count targets passed"
