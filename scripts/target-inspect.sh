@@ -59,6 +59,30 @@ rc_lines() {
   return "$hit"
 }
 
+# Print "  * <sysctl>: <value> [OK]" or "[WARNING] (Recommended: <hint>)". $2 is a regex of acceptable values.
+sysctl_check() {
+  local v
+  v=$(sysctl -n "$1" 2>/dev/null || echo unknown)
+  if [[ "$v" == unknown ]]; then
+    echo "  * $1: unknown [NOT READABLE]"
+  elif [[ "$v" =~ ^($2)$ ]]; then
+    echo "  * $1: $v [OK]"
+  else
+    echo "  * $1: $v [WARNING] (Recommended: $3)"
+  fi
+}
+
+# Print "  * <git key>: [OK]" when the key has the wanted value (any value when $2 is empty), else [NOT CONFIGURED].
+git_check() {
+  local v
+  v=$(git config --get "$1" 2>/dev/null || true)
+  if { [[ -z "$2" && -n "$v" ]]; } || { [[ -n "$2" && "$v" == "$2" ]]; }; then
+    echo "  * $1: ${v:-set} [OK]"
+  else
+    echo "  * $1: ${v:-unset} [NOT CONFIGURED] (Recommend: $3)"
+  fi
+}
+
 # Format file permissions on Linux (POSIX modes are ignored on Windows/Git Bash)
 cfg_perm_tag() {
   local f="$1" p
@@ -86,6 +110,19 @@ browser_report_linux() {
   echo "Status: INSTALLED"
   echo "Executable: $exe"
   echo "Version: ${ver:-unknown}"
+}
+
+# List managed-policy files of a Linux browser: policies are what turn Safe Browsing and update settings from a default into a rule.
+browser_policy_linux() {
+  local d n=0 f
+  for d in "$@"; do
+    for f in "$d"/*.json; do
+      [[ -f "$f" ]] || continue
+      echo "Policy file: [MANAGED] $f"
+      n=$((n + 1))
+    done
+  done
+  [[ "$n" -gt 0 ]] || echo "Policy files: [UNMANAGED] none (browser defaults apply)"
 }
 
 # Print a browser found on Windows: <app exe name> <user data folder> <policy registry key>.
@@ -200,13 +237,13 @@ case "$target" in
       echo "Current Key Parameters:"
       echo "  * vm.swappiness: $(sysctl -n vm.swappiness 2>/dev/null || echo unknown)"
       echo "  * vm.vfs_cache_pressure: $(sysctl -n vm.vfs_cache_pressure 2>/dev/null || echo unknown)"
-      echo "  * kernel.kptr_restrict: $(sysctl -n kernel.kptr_restrict 2>/dev/null || echo unknown)"
-      echo "  * kernel.dmesg_restrict: $(sysctl -n kernel.dmesg_restrict 2>/dev/null || echo unknown)"
-      echo "  * kernel.unprivileged_bpf_disabled: $(sysctl -n kernel.unprivileged_bpf_disabled 2>/dev/null || echo unknown)"
-      echo "  * fs.protected_hardlinks: $(sysctl -n fs.protected_hardlinks 2>/dev/null || echo unknown)"
-      echo "  * fs.protected_symlinks: $(sysctl -n fs.protected_symlinks 2>/dev/null || echo unknown)"
-      echo "  * fs.protected_fifos: $(sysctl -n fs.protected_fifos 2>/dev/null || echo unknown)"
-      echo "  * fs.protected_regular: $(sysctl -n fs.protected_regular 2>/dev/null || echo unknown)"
+      sysctl_check kernel.kptr_restrict '1|2' '1 or 2'
+      sysctl_check kernel.dmesg_restrict '1' '1'
+      sysctl_check kernel.unprivileged_bpf_disabled '1|2' '1 or 2'
+      sysctl_check fs.protected_hardlinks '1|2' '1'
+      sysctl_check fs.protected_symlinks '1|2' '1'
+      sysctl_check fs.protected_fifos '2' '2'
+      sysctl_check fs.protected_regular '2' '2'
       echo "  * net.ipv4.tcp_congestion_control: $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo unknown)"
       echo "  * net.core.default_qdisc: $(sysctl -n net.core.default_qdisc 2>/dev/null || echo unknown)"
     fi
@@ -338,7 +375,12 @@ case "$target" in
       echo "  * Security: Verify Secure Boot status (Confirm-SecureBootUEFI)"
     else
       echo "Startup Time: $(systemd-analyze 2>/dev/null | head -n 1 || echo unknown)"
-      echo "Failed Units: $(systemctl --failed --no-legend 2>/dev/null | wc -l || true) unit(s)"
+      failed_units=$(systemctl --failed --no-legend 2>/dev/null | sed 's/^[^A-Za-z0-9_@.-]*//' | awk '{print $1}' || true)
+      if [[ -n "$failed_units" ]]; then
+        echo "Failed Units: [WARNING] $(printf '%s\n' "$failed_units" | wc -l) unit(s): $(tr '\n' ' ' <<< "$failed_units")"
+      else
+        echo "Failed Units: [OK] none"
+      fi
       echo "Journal Usage: $(journalctl --disk-usage 2>/dev/null || echo unknown)"
     fi
     echo "====================================="
@@ -746,8 +788,15 @@ case "$target" in
       "$roaming_app_data/controld/ctrld.toml" \
       "/c/ProgramData/ControlD/ctrld.toml" \
       "$HOME/.config/controld/ctrld.toml"; do
-      [[ -f "$f" ]] && echo "  - [EXISTS] $f"
+      [[ -f "$f" ]] || continue
+      echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
+      if grep -qE '^[[:space:]]*ip[[:space:]]*=[[:space:]]*"0\.0\.0\.0"' "$f" 2>/dev/null; then
+        echo "  * [WARNING] listener in $f binds 0.0.0.0 (use 127.0.0.1 unless this host serves the LAN)"
+      fi
     done
+    if [[ -n "$ctrld_bin" ]] && ! is_windows; then
+      echo "  * Service ctrld: $(first_line_or inactive systemctl is-active ctrld)"
+    fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: In-memory cache enabled, DoQ (DNS-over-QUIC) primary with DoH failover, LAN discovery off"
@@ -769,8 +818,15 @@ case "$target" in
       "$roaming_app_data/RustDesk/config/RustDesk2.toml" \
       "$roaming_app_data/RustDesk/config/peers.toml" \
       "/etc/rustdesk/rustdesk.toml"; do
-      [[ -f "$f" ]] && echo "  - [EXISTS] $f"
+      [[ -f "$f" ]] || continue
+      echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
+      if grep -qE "verification-method[[:space:]]*=[[:space:]]*['\"]use-permanent-password" "$f" 2>/dev/null; then
+        echo "  * [WARNING] $f accepts the permanent password only (prefer temporary or both, plus approve-mode click)"
+      fi
     done
+    if [[ -n "$rd_bin" ]] && ! is_windows; then
+      echo "  * Service rustdesk: $(first_line_or inactive systemctl is-active rustdesk)"
+    fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Hardware video acceleration (NVENC on NVIDIA RTX, D3D11/DirectX on Windows, VA-API on Linux)"
@@ -1367,6 +1423,13 @@ case "$target" in
     echo "  * core.autocrlf: $(git config --get core.autocrlf 2>/dev/null || echo 'unset')"
     echo "  * credential.helper: $(git config --get credential.helper 2>/dev/null || echo 'unset')"
     echo "  * diff.algorithm: $(git config --get diff.algorithm 2>/dev/null || echo 'unset')"
+    echo "Git Findings:"
+    git_check credential.helper "" "gh auth setup-git, or a credential manager"
+    git_check diff.algorithm histogram "git config --global diff.algorithm histogram"
+    git_check push.autoSetupRemote true "git config --global push.autoSetupRemote true"
+    if git config --get-all safe.directory 2>/dev/null | grep -qx '\*'; then
+      echo "  * safe.directory: [WARNING] '*' turns off the repository ownership check"
+    fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Set core.fscache = true (huge NTFS status/diff speedup), core.preloadIndex = true, pack memory limits"
@@ -1388,6 +1451,15 @@ case "$target" in
     for f in "$roaming_app_data/bat/config" "$HOME/.config/bat/config"; do
       [[ -f "$f" ]] && echo "  - [EXISTS] $f"
     done
+
+    echo "Bat Findings:"
+    if [[ -f "$HOME/.config/bat/config" || -f "$roaming_app_data/bat/config" ]]; then
+      echo "  * Config file: [OK]"
+    else
+      echo "  * Config file: [NOT CONFIGURED] (Recommend: --theme and --style in ~/.config/bat/config)"
+    fi
+    echo "  * Shell startup files (BAT_* variables, cat/bat aliases):"
+    rc_lines 'BAT_|alias cat=|alias bat=' || echo "    [NOT CONFIGURED] none found"
 
     inferred_thm=$(infer_theme)
     theme_desc="configure theme matching terminal (or prompt user)"
@@ -1503,9 +1575,19 @@ case "$target" in
     fi
 
     echo "Discovered Configuration Files:"
+    ytdl_cfg=0
     for f in "$roaming_app_data/yt-dlp/config" "$HOME/.config/yt-dlp/config"; do
-      [[ -f "$f" ]] && echo "  - [EXISTS] $f"
+      [[ -f "$f" ]] || continue
+      echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
+      ytdl_cfg=1
+      if grep -qE '^[[:space:]]*--no-check-certificates?' "$f" 2>/dev/null; then
+        echo "  * [SECURITY WARNING] --no-check-certificate in $f turns off TLS verification"
+      fi
+      if grep -qE '^[[:space:]]*--cookies' "$f" 2>/dev/null; then
+        echo "  * [WARNING] $f references a cookies file (keep that file at 0600)"
+      fi
     done
+    [[ "$ytdl_cfg" -eq 1 ]] || echo "  * Config file: [NOT CONFIGURED] (Recommend: ~/.config/yt-dlp/config)"
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Set --concurrent-fragments=4, integrate ffmpeg multithreading, enable aria2c download engine when available"
@@ -1697,6 +1779,7 @@ case "$target" in
       browser_report_win chrome.exe "$local_app_data/Google/Chrome/User Data" 'HKLM:\SOFTWARE\Policies\Google\Chrome'
     else
       browser_report_linux "$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || true)"
+      browser_policy_linux /etc/opt/chrome/policies/managed /etc/chromium/policies/managed
     fi
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Hardware acceleration on; trim startup extensions"
@@ -1711,6 +1794,7 @@ case "$target" in
       browser_report_win msedge.exe "$local_app_data/Microsoft/Edge/User Data" 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
     else
       browser_report_linux "$(command -v microsoft-edge-stable || command -v microsoft-edge || true)"
+      browser_policy_linux /etc/opt/edge/policies/managed
     fi
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Startup boost and background mode only if wanted; hardware acceleration on"
@@ -1902,6 +1986,25 @@ fi
 
 # Target-specific state inspection for Linux & cross-platform tools
 case "$target" in
+  python|python3)
+    echo "Active Python Environment:"
+    py_ext=$("$bin_path" -c 'import os, sysconfig; print(os.path.exists(os.path.join(sysconfig.get_path("stdlib"), "EXTERNALLY-MANAGED")))' 2>/dev/null || echo unknown)
+    case "$py_ext" in
+      True)  echo "  * System pip protected (EXTERNALLY-MANAGED): [OK]" ;;
+      False) echo "  * System pip protected (EXTERNALLY-MANAGED): [WARNING] pip can modify the system environment (Use venv, uv or pipx)" ;;
+      *)     echo "  * System pip protected (EXTERNALLY-MANAGED): unknown" ;;
+    esac
+    echo "  * Virtualenv active: ${VIRTUAL_ENV:-no}"
+    echo "  * uv: $(command -v uv 2>/dev/null || echo 'not installed')"
+    ;;
+  sqlite3)
+    if [[ -f "$HOME/.sqliterc" ]]; then
+      echo "Active ~/.sqliterc:$(cfg_perm_tag "$HOME/.sqliterc")"
+      grep -vE '^[[:space:]]*(--|$)' "$HOME/.sqliterc" 2>/dev/null | sed 's/^/    /' | head -n 10 || true
+    else
+      echo "  * ~/.sqliterc: [NOT CONFIGURED] (Recommend: .headers on, .mode box)"
+    fi
+    ;;
   pacman|yay|paru|makepkg)
     echo "Active Arch Linux Package & Build Settings:"
     if [[ -f /etc/pacman.conf ]]; then

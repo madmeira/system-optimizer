@@ -148,4 +148,25 @@ if bash "$ROOT/scripts/remote-run.sh" somehost '../x.sh; id' >/dev/null 2>&1; th
   exit 1
 fi
 echo "ok   - remote-run.sh validates the script name"
+
+# inspectors that used to print advice only must now read the config and tag what they find
+cfg_check() { # <target> <relative file> <file content> <expected text>
+  local f="$WORK/home/$2"
+  mkdir -p "$(dirname "$f")"
+  printf '%s\n' "$3" > "$f"
+  out="$(env -i PATH="$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/scripts/target-inspect.sh" "$1")"
+  rm -f "$f"
+  if [[ "$out" != *"$4"* ]]; then
+    echo "FAIL - $1 config check: for '$3' expected: $4" >&2
+    exit 1
+  fi
+}
+cfg_check yt-dlp  .config/yt-dlp/config              "--no-check-certificate"                     "[SECURITY WARNING] --no-check-certificate"
+cfg_check rustdesk .config/rustdesk/RustDesk2.toml    "verification-method = 'use-permanent-password'" "[WARNING]"
+cfg_check controld .config/controld/ctrld.toml        'ip = "0.0.0.0"'                              "binds 0.0.0.0"
+cfg_check git     .gitconfig                         $'[safe]\n\tdirectory = *'                 "safe.directory: [WARNING]"
+cfg_check git     .gitconfig                         "[user]"                                     "credential.helper: unset [NOT CONFIGURED]"
+cfg_check bat     .zshrc                             "export BAT_THEME=ansi"                      "BAT_THEME=ansi"
+cfg_check sqlite3 .sqliterc                          ".headers on"                                "Active ~/.sqliterc"
+echo "ok   - git, bat, yt-dlp, sqlite3, rustdesk and controld inspectors read the real config"
 echo "inspect-smoke: $count targets passed"

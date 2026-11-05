@@ -172,7 +172,13 @@ Every script in `scripts/` can be run directly without an AI agent for diagnosti
 ./scripts/backup-config.sh ~/.gitconfig git "Enable delta/bat pager and fsmonitor"
 ./scripts/backup-config.sh --list
 ./scripts/backup-config.sh --restore ~/.config/system-optimizer/backups/git_.gitconfig.20260331_120000.bak ~/.gitconfig
+
+# Audit another machine over SSH: run any read-only script there, then diff shell/tool configs
+./scripts/remote-run.sh myserver target-inspect.sh eza git
+./scripts/host-diff.sh myserver
 ```
+
+`remote-run.sh` copies `scripts/` to a temporary folder on the host, runs the script from there and deletes the folder (the scripts find `lib.sh` next to themselves, so they cannot be piped to `bash -s`). `host-diff.sh` compares shell startup files and tool configs between this machine and the host, with keys, tokens and passwords redacted. Both use SSH keys only (`BatchMode`) and never run `sudo`.
 
 ## Persistent Memory Architecture
 
@@ -200,6 +206,8 @@ system-optimizer/
 │   ├── detect-targets.sh             # Installed CLI tool, runtime & package manager detector
 │   ├── security-audit.sh             # OS security posture & supply-chain audit
 │   ├── backup-config.sh              # Pre-modification backup, SHA-256 ledger & restore manager
+│   ├── remote-run.sh                 # Run one of these scripts on another host over SSH
+│   ├── host-diff.sh                  # Compare shell startup files & tool configs between two hosts (secrets redacted)
 │   └── target-inspect.sh             # Per-target configuration & cross-tool synergy inspector (44 targets)
 └── tests/
     ├── backup-smoke.sh               # Backup, list, restore, and path-traversal safety tests
