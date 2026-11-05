@@ -46,11 +46,18 @@ fi
 # Print the uncommented lines of the user's shell startup files that match an extended regex, as
 # "file:line:text", so a finding quotes what is really configured. Returns 1 when nothing matches.
 # Reads only the local home: on another host, run this script there (scripts/remote-run.sh).
+RC_FILES=("$HOME/.zshrc" "$HOME/.zshenv" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.zprofile"
+          "$HOME/.config/fish/config.fish" "$HOME/.config/powershell/Microsoft.PowerShell_profile.ps1"
+          "$HOME/Documents/PowerShell/Microsoft.PowerShell_profile.ps1")
+# The startup files rc_lines can read on this host, for "not found" messages: a file they source is not followed.
+rc_read() {
+  local f out=""
+  for f in "${RC_FILES[@]}"; do [[ -f "$f" ]] && out+="$f "; done
+  echo "${out:-no startup file found}"
+}
 rc_lines() {
   local pat="$1" f hit=1
-  for f in "$HOME/.zshrc" "$HOME/.zshenv" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.zprofile" \
-           "$HOME/.config/fish/config.fish" "$HOME/.config/powershell/Microsoft.PowerShell_profile.ps1" \
-           "$HOME/Documents/PowerShell/Microsoft.PowerShell_profile.ps1"; do
+  for f in "${RC_FILES[@]}"; do
     [[ -f "$f" ]] || continue
     if grep -nE -- "$pat" "$f" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*#' | sed "s|^|    $f:|"; then
       hit=0
@@ -75,7 +82,11 @@ sysctl_check() {
 # Print "  * <git key>: [OK]" when the key has the wanted value (any value when $2 is empty), else [NOT CONFIGURED].
 git_check() {
   local v
-  v=$(git config --get "$1" 2>/dev/null || true)
+  if [[ "$2" == true ]]; then
+    v=$(git config --type=bool --get "$1" 2>/dev/null || true)   # yes, on, 1 and True all mean true
+  else
+    v=$(git config --get "$1" 2>/dev/null || true)
+  fi
   if { [[ -z "$2" && -n "$v" ]]; } || { [[ -n "$2" && "$v" == "$2" ]]; }; then
     echo "  * $1: ${v:-set} [OK]"
   else
@@ -1220,7 +1231,7 @@ case "$target" in
         echo "  * Icons flag: [OK]"
       fi
     else
-      echo "  * eza alias: [NOT CONFIGURED] (Recommend: alias ls='eza --icons=auto')"
+      echo "  * eza alias: [NOT CONFIGURED] in the files read: $(rc_read)(files they source are not followed) (Recommend: alias ls='eza --icons=auto')"
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
@@ -1461,7 +1472,7 @@ case "$target" in
       echo "  * Config file: [NOT CONFIGURED] (Recommend: --theme and --style in ~/.config/bat/config)"
     fi
     echo "  * Shell startup files (BAT_* variables, cat/bat aliases):"
-    rc_lines 'BAT_|alias cat=|alias bat=' || echo "    [NOT CONFIGURED] none found"
+    rc_lines 'BAT_|alias cat=|alias bat=' || echo "    [NOT CONFIGURED] in the files read: $(rc_read)(files they source are not followed)"
 
     inferred_thm=$(infer_theme)
     theme_desc="configure theme matching terminal (or prompt user)"

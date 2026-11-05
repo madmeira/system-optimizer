@@ -207,9 +207,9 @@ cat > "$WORK/ssh/ssh" <<'EOF'
 #!/usr/bin/env bash
 cmd="${*: -1}"
 [[ "$cmd" == true ]] && exit 0
-[[ -n "${FAKE_SSH_FAIL:-}" ]] && exit 255
+[[ -n "${FAKE_SSH_EXIT:-}" ]] && exit "$FAKE_SSH_EXIT"
 f="${cmd#test -f ~/}"; f="${f%% *}"
-[[ -f "$FAKE_REMOTE/$f" ]] || exit 1
+[[ -f "$FAKE_REMOTE/$f" ]] || exit 3
 cat "$FAKE_REMOTE/$f"
 EOF
 chmod +x "$WORK/ssh/ssh"
@@ -218,19 +218,30 @@ export OPENAI=sk-abc12345678
 export DB_URL=postgres://user:pw0rd@host/db
 export EDITOR=nvim
 alias ls='eza --icons=auto'
+alias a=task-run-alpha
 EOF
-printf "alias ls='ls --color'\n" > "$WORK/remote/.zshrc"
+printf "alias ls='ls --color'\nalias a=task-run-beta\n" > "$WORK/remote/.zshrc"
 out="$(env -i PATH="$WORK/ssh:$PATH" HOME="$WORK/home" FAKE_REMOTE="$WORK/remote" bash "$ROOT/scripts/host-diff.sh" fakehost)"
 for leaked in "sk-abc12345678" "pw0rd"; do
   [[ "$out" != *"$leaked"* ]] || { echo "FAIL - host-diff printed a secret: $leaked" >&2; exit 1; }
 done
-for expected in "[DIFFERENT] .zshrc" "export OPENAI=<value hidden>" "export EDITOR=nvim" "alias ls='eza --icons=auto'"; do
+for expected in "[DIFFERENT] .zshrc" "export OPENAI=<value hidden>" "export EDITOR=nvim" "alias ls='eza --icons=auto'" \
+                "alias a=task-run-alpha" "alias a=task-run-beta"; do
   [[ "$out" == *"$expected"* ]] || { echo "FAIL - host-diff output missing: $expected" >&2; exit 1; }
 done
-if env -i PATH="$WORK/ssh:$PATH" HOME="$WORK/home" FAKE_REMOTE="$WORK/remote" FAKE_SSH_FAIL=1 bash "$ROOT/scripts/host-diff.sh" fakehost >/dev/null 2>&1; then
-  echo "FAIL - host-diff treated a failed ssh connection as a missing file" >&2
-  exit 1
-fi
+# 255 = dead connection, 1 = the file exists but cat could not read it: neither may look like a missing file
+for code in 255 1; do
+  if env -i PATH="$WORK/ssh:$PATH" HOME="$WORK/home" FAKE_REMOTE="$WORK/remote" FAKE_SSH_EXIT="$code" bash "$ROOT/scripts/host-diff.sh" fakehost >/dev/null 2>&1; then
+    echo "FAIL - host-diff treated ssh exit $code as a missing file" >&2
+    exit 1
+  fi
+done
 rm -f "$WORK/home/.zshrc"
-echo "ok   - host-diff hides secrets and stops on an ssh failure"
+echo "ok   - host-diff hides secrets, keeps different words apart and stops on ssh or read errors"
+
+# a not-found verdict names the files it read; git booleans accept yes/on/1
+eza_check "source ~/.zsh_aliases" "files they source are not followed"
+rm -f "$WORK/home/.zshrc"
+cfg_check git .gitconfig $'[push]\n\tautoSetupRemote = yes' "push.autoSetupRemote: true [OK]"
+echo "ok   - not-found messages name the files read; git booleans are normalised"
 echo "inspect-smoke: $count targets passed"

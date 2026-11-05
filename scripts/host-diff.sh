@@ -18,7 +18,7 @@ cfg_files=(.gitconfig .config/git/config .config/starship.toml .config/ripgrep/r
 redact() {
   sed -E -e 's/((KEY|TOKEN|SECRET|PASS(WORD)?)[A-Za-z_]*[=:] *).*/\1<redacted>/I' \
          -e 's#://[^/@[:space:]]+@#://<redacted>@#g' \
-         -e 's/(sk-|gh[pousr]_|AIza|xox[abp]-)[A-Za-z0-9_-]{8,}/<redacted>/g'
+         -e 's/(^|[^A-Za-z0-9])(sk-|gh[pousr]_|AIza|xox[abp]-)[A-Za-z0-9_-]{8,}/\1<redacted>/g'
 }
 # Shell files are noisy; compare only the lines that change behaviour. An export shows its value only
 # for names that hold paths and tool settings; every other value is hidden, whatever the variable is called.
@@ -27,8 +27,8 @@ rc_filter() {
     | sed -E '/^export[[:space:]]+(PATH|EDITOR|VISUAL|PAGER|DIFFPROG|SSH_AUTH_SOCK|XDG_[A-Z_]+|FZF_[A-Z_]+|BAT_[A-Z_]+|RIPGREP_[A-Z_]+|MISE_[A-Z_]+|STARSHIP_[A-Z_]+)=/!s/^(export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*)=.*/\1=<value hidden>/' || true
 }
 
-# ssh exits 255 when the connection fails and 1 when "test -f" says the file is missing: keep them apart.
-remote_text() { ssh -o BatchMode=yes "$host" "test -f ~/$1 && cat ~/$1"; }
+# Exit 3 means the file is missing. Any other failure (ssh 255, an unreadable file making cat exit 1) is an error.
+remote_text() { ssh -o BatchMode=yes "$host" "test -f ~/$1 || exit 3; cat ~/$1"; }
 
 compare() {
   local f="$1" filter="$2" l r rc=0
@@ -36,7 +36,7 @@ compare() {
   r=$(remote_text "$f" 2>/dev/null) || rc=$?
   case "$rc" in
     0) r=$(printf '%s\n' "$r" | redact | $filter) ;;
-    1) r="@@missing@@" ;;
+    3) r="@@missing@@" ;;
     *) echo "Error: ssh to $host failed (exit $rc) while reading $f" >&2; exit 1 ;;
   esac
   if [[ "$l" == "@@missing@@" && "$r" == "@@missing@@" ]]; then return 0; fi
