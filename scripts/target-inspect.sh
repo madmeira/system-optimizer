@@ -35,11 +35,67 @@ fi
 if [[ $# -gt 1 ]]; then
   export _SO_DETECTED_THREADS="$detected_threads"
   export _SO_DETECTED_GPU="$detected_gpu"
+  batch_rc=0
   for batch_target in "$@"; do
-    bash "$0" "$batch_target"
+    # One failing target must not hide the rest, and must not pass silently.
+    bash "$0" "$batch_target" || { echo "ERROR: target '$batch_target' failed (exit $?)" >&2; batch_rc=1; }
   done
-  exit 0
+  exit "$batch_rc"
 fi
+
+# Print the uncommented lines of the user's shell startup files that match an extended regex, as
+# "file:line:text", so a finding quotes what is really configured. Returns 1 when nothing matches.
+# Reads only the local home: on another host, run this script there (scripts/remote-run.sh).
+RC_FILES=("$HOME/.zshrc" "$HOME/.zshenv" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.zprofile"
+          "$HOME/.config/fish/config.fish" "$HOME/.config/powershell/Microsoft.PowerShell_profile.ps1"
+          "$HOME/Documents/PowerShell/Microsoft.PowerShell_profile.ps1")
+# The startup files rc_lines can read on this host, for "not found" messages: a file they source is not followed.
+rc_read() {
+  local f out=""
+  for f in "${RC_FILES[@]}"; do [[ -f "$f" ]] && out+="$f "; done
+  echo "${out:-no startup file found }"
+}
+rc_lines() {
+  local pat="$1" f hit=1
+  for f in "${RC_FILES[@]}"; do
+    [[ -f "$f" ]] || continue
+    if grep -nE -- "$pat" "$f" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*#' | sed "s|^|    $f:|"; then
+      hit=0
+    fi
+  done
+  return "$hit"
+}
+
+# Print "  * <sysctl>: <value> [OK]" or "[WARNING] (Recommended: <hint>)". $2 is a regex of acceptable values.
+sysctl_check() {
+  local v
+  v=$(sysctl -n "$1" 2>/dev/null || echo unknown)
+  if [[ "$v" == unknown ]]; then
+    echo "  * $1: unknown [NOT READABLE]"
+  elif [[ "$v" =~ ^($2)$ ]]; then
+    echo "  * $1: $v [OK]"
+  else
+    echo "  * $1: $v [WARNING] (Recommended: $3)"
+  fi
+}
+
+# Print "  * <git key>: [OK]" when the key has the wanted value (any value when $2 is empty), else [NOT CONFIGURED].
+git_check() {
+  local v
+  if [[ "$2" == true ]]; then
+    v=$(git config --type=bool --get "$1" 2>/dev/null || true)   # yes, on, 1 and True all mean true
+  else
+    v=$(git config --get "$1" 2>/dev/null || true)
+  fi
+  if { [[ -z "$2" && -n "$v" ]]; } || { [[ -n "$2" && "$v" == "$2" ]]; }; then
+    echo "  * $1: ${v:-set} [OK]"
+  elif [[ "$2" == true && -z "$v" && -n "$(git config --get "$1" 2>/dev/null || true)" ]]; then
+    # set, but not a valid boolean: git itself rejects it
+    echo "  * $1: invalid value '$(git config --get "$1")' [NOT CONFIGURED] (Recommend: $3)"
+  else
+    echo "  * $1: ${v:-unset} [NOT CONFIGURED] (Recommend: $3)"
+  fi
+}
 
 # Format file permissions on Linux (POSIX modes are ignored on Windows/Git Bash)
 cfg_perm_tag() {
@@ -68,6 +124,19 @@ browser_report_linux() {
   echo "Status: INSTALLED"
   echo "Executable: $exe"
   echo "Version: ${ver:-unknown}"
+}
+
+# List managed-policy files of a Linux browser: policies are what turn Safe Browsing and update settings from a default into a rule.
+browser_policy_linux() {
+  local d n=0 f
+  for d in "$@"; do
+    for f in "$d"/*.json; do
+      [[ -f "$f" ]] || continue
+      echo "Policy file: [MANAGED] $f"
+      n=$((n + 1))
+    done
+  done
+  [[ "$n" -gt 0 ]] || echo "Policy files: [UNMANAGED] none (browser defaults apply)"
 }
 
 # Print a browser found on Windows: <app exe name> <user data folder> <policy registry key>.
@@ -182,13 +251,13 @@ case "$target" in
       echo "Current Key Parameters:"
       echo "  * vm.swappiness: $(sysctl -n vm.swappiness 2>/dev/null || echo unknown)"
       echo "  * vm.vfs_cache_pressure: $(sysctl -n vm.vfs_cache_pressure 2>/dev/null || echo unknown)"
-      echo "  * kernel.kptr_restrict: $(sysctl -n kernel.kptr_restrict 2>/dev/null || echo unknown)"
-      echo "  * kernel.dmesg_restrict: $(sysctl -n kernel.dmesg_restrict 2>/dev/null || echo unknown)"
-      echo "  * kernel.unprivileged_bpf_disabled: $(sysctl -n kernel.unprivileged_bpf_disabled 2>/dev/null || echo unknown)"
-      echo "  * fs.protected_hardlinks: $(sysctl -n fs.protected_hardlinks 2>/dev/null || echo unknown)"
-      echo "  * fs.protected_symlinks: $(sysctl -n fs.protected_symlinks 2>/dev/null || echo unknown)"
-      echo "  * fs.protected_fifos: $(sysctl -n fs.protected_fifos 2>/dev/null || echo unknown)"
-      echo "  * fs.protected_regular: $(sysctl -n fs.protected_regular 2>/dev/null || echo unknown)"
+      sysctl_check kernel.kptr_restrict '1|2' '1 or 2'
+      sysctl_check kernel.dmesg_restrict '1' '1'
+      sysctl_check kernel.unprivileged_bpf_disabled '1|2' '1 or 2'
+      sysctl_check fs.protected_hardlinks '1|2' '1'
+      sysctl_check fs.protected_symlinks '1|2' '1'
+      sysctl_check fs.protected_fifos '2' '2'
+      sysctl_check fs.protected_regular '2' '2'
       echo "  * net.ipv4.tcp_congestion_control: $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo unknown)"
       echo "  * net.core.default_qdisc: $(sysctl -n net.core.default_qdisc 2>/dev/null || echo unknown)"
     fi
@@ -212,7 +281,7 @@ case "$target" in
       sn_status=$(run_ps 'switch ((Get-ItemPropertyValue -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name NtfsDisable8dot3NameCreation)) { 0 { "Enabled on all volumes" } 1 { "Disabled on all volumes" } 2 { "Per volume setting (the default)" } 3 { "Disabled, except on the system volume" } default { "unknown" } }' 2>/dev/null || true)
       sn_status="${sn_status:-unknown}"
       echo "NTFS 8.3 Short Name Creation: $sn_status"
-      echo "Triad Checkpoints (Performance, Configuration, Security):"
+      echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
       echo "  * Performance: NVMe/SSD TRIM enabled (DisableDeleteNotify=0), weekly Optimize-Volume -ReTrim"
       echo "  * Configuration: Disable 8.3 name creation on secondary data drives (fsutil 8dot3name set <drive> 1)"
       echo "  * Security: BitLocker drive encryption status, NTFS access control lists"
@@ -247,7 +316,7 @@ case "$target" in
       echo "Total Physical RAM: ${ram_tot} GiB (${ram_free} GiB free)"
       echo "Paging File (Allocated): ${page_file} GiB"
       echo "Windows Memory Compression: $mem_comp"
-      echo "Triad Checkpoints (Performance, Configuration, Security):"
+      echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
       echo "  * Performance: Enable-MMAgent -mc (compressed in-RAM paging, eliminates SSD paging stalls)"
       echo "  * Configuration: Fixed or system-managed pagefile on fastest NVMe drive"
       echo "  * Security: Memory Integrity (HVCI) and Virtualization-Based Security (VBS)"
@@ -276,7 +345,7 @@ case "$target" in
       [[ -n "$power_scheme" ]] || power_scheme="unknown"
       echo "CPU: $cpu_name ($threads threads)"
       echo "Active Power Scheme: $power_scheme"
-      echo "Triad Checkpoints (Performance, Configuration, Security):"
+      echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
       echo "  * Performance: High Performance or Ultimate Performance scheme (powercfg /s <guid>)"
       echo "  * Configuration: Set 100% min/max processor state on AC, disable core parking on desktop"
       echo "  * Security: Hardware mitigation status (Spectre/Meltdown), AMD SVM / Intel VT-x enabled"
@@ -314,13 +383,18 @@ case "$target" in
       run_ps 'Get-CimInstance Win32_StartupCommand | ForEach-Object { "  * $($_.Name): $($_.Command)" }' 2>/dev/null || true
       echo "Stopped Automatic Services:"
       run_ps 'Get-Service | Where-Object { $_.StartType -eq "Automatic" -and $_.Status -ne "Running" } | ForEach-Object { "  * $($_.Name)" }' 2>/dev/null || true
-      echo "Triad Checkpoints (Performance, Configuration, Security):"
+      echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
       echo "  * Performance: Disable high-impact startup items (game clients, telemetry daemons, redundant updaters)"
       echo "  * Configuration: Set non-essential auto services to Delayed Start (StartType: AutomaticDelayedStart)"
       echo "  * Security: Verify Secure Boot status (Confirm-SecureBootUEFI)"
     else
       echo "Startup Time: $(systemd-analyze 2>/dev/null | head -n 1 || echo unknown)"
-      echo "Failed Units: $(systemctl --failed --no-legend 2>/dev/null | wc -l || true) unit(s)"
+      failed_units=$(systemctl --failed --no-legend 2>/dev/null | sed 's/^[^A-Za-z0-9_@.-]*//' | awk '{print $1}' || true)
+      if [[ -n "$failed_units" ]]; then
+        echo "Failed Units: [WARNING] $(printf '%s\n' "$failed_units" | wc -l) unit(s): $(tr '\n' ' ' <<< "$failed_units")"
+      else
+        echo "Failed Units: [OK] none"
+      fi
       echo "Journal Usage: $(journalctl --disk-usage 2>/dev/null || echo unknown)"
     fi
     echo "====================================="
@@ -344,7 +418,7 @@ case "$target" in
       if command -v netstat >/dev/null 2>&1; then
         netstat -ano -p tcp 2>/dev/null | grep -i "LISTENING" | awk '{print "    * " $2}' | sort -u || true
       fi
-      echo "Triad Checkpoints (Performance, Configuration, Security):"
+      echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
       echo "  * Security: All 3 profiles Enabled with BlockInbound default, Enable PUAProtection (Set-MpPreference -PUAProtection 1)"
       echo "  * Performance: Add developer folder exclusions for local git builds (target, node_modules) to avoid Defender CPU lockup"
       echo "  * Configuration: Tamper Protection active, Cloud-delivered protection level: High"
@@ -400,7 +474,7 @@ case "$target" in
         "User Account Control (EnableLUA): $($uac.EnableLUA)"
         "ConsentPromptBehaviorAdmin: $($uac.ConsentPromptBehaviorAdmin) (5 = Prompt for non-Windows, 2 = Prompt for all on Secure Desktop)"
       ' 2>/dev/null || true
-      echo "Triad Checkpoints (Performance, Configuration, Security):"
+      echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
       echo "  * Security: Enforce RemoteSigned policy to prevent arbitrary script execution from web downloads"
       echo "  * Security: Ensure UAC EnableLUA=1 with Secure Desktop prompting"
     fi
@@ -441,7 +515,7 @@ case "$target" in
     echo "Administrator settings (winget settings export, language-independent):"
     winget settings export 2>/dev/null | tr -d '\r' | grep -oE '"(BypassCertificatePinningForMicrosoftStore|InstallerHashOverride|LocalArchiveMalwareScanOverride|LocalManifestFiles)"[[:space:]]*:[[:space:]]*(true|false)' | sed -E 's/^"([^"]+)"[[:space:]]*:[[:space:]]*/  * \1: /' || echo "  (not available in this winget version)"
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Set 'source.autoUpdateIntervalInMinutes: 120' to eliminate 5-10s source sync stall on every invocation"
     echo "  * Performance: Set 'network.downloader: default' (direct WinINet bypasses Delivery Optimization freezes)"
     echo "  * Configuration: Set 'visual.progressBar: rainbow', configure portable package link directories"
@@ -481,7 +555,7 @@ case "$target" in
       echo "  - Standard settings.json not found yet."
     fi
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Hardware-accelerated Atlas text rendering engine ('useAtlasEngine: true'), set 'disableAnimations: true' for instantaneous tab/pane switching"
     echo "  * Configuration: Set pwsh (PowerShell 7) or Git Bash as default profile, 'copyFormatting: none', Nerd Font face ('Hack Nerd Font')"
     echo "  * Security: Avoid profiles that auto-elevate without prompt; review custom action command injection"
@@ -548,7 +622,7 @@ case "$target" in
       done || true
     fi
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Set 'memory = 8GB' (bound to 50% host RAM), 'autoMemoryReclaim = dropcache' (reclaims cached memory to Windows),"
     echo "                 'sparseVhd = true' (auto-compacts ext4 disk image on file deletion), processors bound to CPU cores"
     echo "  * Configuration: Set 'networkingMode = mirrored' for low latency and Windows localhost parity, 'dnsTunneling = true'"
@@ -591,7 +665,7 @@ case "$target" in
       }
     ' 2>/dev/null || true
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Deferred module loading, starship/zoxide static init caching, PATH deduplication"
     echo "  * Configuration: Set PSReadLine PredictionSource HistoryAndPlugin, PredictionViewStyle ListView, custom aliases"
     echo "  * Security: Set ExecutionPolicy RemoteSigned, scrub plaintext secrets from PSReadLine history"
@@ -612,7 +686,7 @@ case "$target" in
         }
       ' 2>/dev/null || true
     fi
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Disable unused background modules (Awake, Mouse utilities, Video Conference Mute) to save memory & thread handles"
     echo "  * Configuration: PowerToys Run hotkey & plugins, FancyZones multi-monitor window tiling"
     echo "  * Security: Restrict administrator mode elevation prompt for plugins"
@@ -649,7 +723,7 @@ case "$target" in
       echo "  * PATH Sanitation: OK (No relative or empty directories)"
     fi
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Pre-compiled static init caches for starship/fzf/zoxide, mise shims, completion caching"
     echo "  * Configuration: History deduplication, directory spell/autocd, modular ~/.config/bash/ split, aliases"
     echo "  * Security: Explicit umask, safe PATH ordering, restricted permissions on sourced credentials"
@@ -705,7 +779,7 @@ case "$target" in
       echo "  * Mise not detected on this system."
     fi
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Session file archival (>30d), cache pruning, compaction reserve tuning (16384)"
     echo "  * Configuration: Inherit mise shims on PATH for subshell execution (Node, Python, Rust, Go, UV); model router latency tuning"
     echo "  * Security: auth.json 0600 mode, path deny rules (SSH/secrets), npm package supply-chain audit"
@@ -728,10 +802,17 @@ case "$target" in
       "$roaming_app_data/controld/ctrld.toml" \
       "/c/ProgramData/ControlD/ctrld.toml" \
       "$HOME/.config/controld/ctrld.toml"; do
-      [[ -f "$f" ]] && echo "  - [EXISTS] $f"
+      [[ -f "$f" ]] || continue
+      echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
+      if grep -qE '^[[:space:]]*ip[[:space:]]*=[[:space:]]*"0\.0\.0\.0"' "$f" 2>/dev/null; then
+        echo "  * [WARNING] listener in $f binds 0.0.0.0 (use 127.0.0.1 unless this host serves the LAN)"
+      fi
     done
+    if [[ -n "$ctrld_bin" ]] && ! is_windows; then
+      echo "  * Service ctrld: $(first_line_or inactive systemctl is-active ctrld)"
+    fi
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: In-memory cache enabled, DoQ (DNS-over-QUIC) primary with DoH failover, LAN discovery off"
     echo "  * Configuration: Local loopback listener 127.0.0.1:53, adapter DNS integration, log level notice"
     echo "  * Security: Encrypted upstream transport, secure config permissions (0600)"
@@ -751,10 +832,17 @@ case "$target" in
       "$roaming_app_data/RustDesk/config/RustDesk2.toml" \
       "$roaming_app_data/RustDesk/config/peers.toml" \
       "/etc/rustdesk/rustdesk.toml"; do
-      [[ -f "$f" ]] && echo "  - [EXISTS] $f"
+      [[ -f "$f" ]] || continue
+      echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
+      if grep -qE "verification-method[[:space:]]*=[[:space:]]*['\"]use-permanent-password" "$f" 2>/dev/null; then
+        echo "  * [NOTE] $f accepts the permanent password only (a preference: temporary or both passwords, plus approve-mode click, exposes less)"
+      fi
     done
+    if [[ -n "$rd_bin" ]] && ! is_windows; then
+      echo "  * Service rustdesk: $(first_line_or inactive systemctl is-active rustdesk)"
+    fi
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Hardware video acceleration (NVENC on NVIDIA RTX, D3D11/DirectX on Windows, VA-API on Linux)"
     echo "  * Configuration: Custom ID/relay server, on-demand vs background service mode, tray minimization"
     echo "  * Security: Strong randomized temporary passwords, whitelist allowed peer IDs, restrict remote console execution"
@@ -821,7 +909,7 @@ case "$target" in
     echo "  * Recommended Video Output: $vo_choice"
     echo "  * Browser Bypass: Direct mpv streaming bypasses heavy Chromium/browser CPU and RAM consumption"
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Stream web video directly to mpv via yt-dlp; use $vo_choice, $hwdec_choice"
     echo "  * Configuration: HDR passthrough ('target-colorspace-hint=yes') or SDR tone-mapping ('tone-mapping=bt.2446a'), ytdl-format bound to 1080p/best"
     echo "  * Security: Enforce TLS certificate verification (never pass no-check-certificates), restrict untrusted lua scripts"
@@ -877,7 +965,7 @@ case "$target" in
       fi
     fi
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Enable cleanup = true (runs mise prune and cleans package caches); bound [mise] jobs to $(nproc 2>/dev/null || echo 4); disable uninstalled/redundant steps"
     echo "  * Configuration: Set [mise] bump = true for automatic tool version updates; add 'mise reshim' to post_commands; coordinate update order across winget/wsl/pacman/mise"
     echo "  * Security: Restrict untrusted custom commands, verify origin repository of third-party package managers; run mise unprivileged without sudo (allow_root = false)"
@@ -980,7 +1068,7 @@ case "$target" in
       echo "  - Neovim not installed on this system."
     fi
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Match jobs = $(nproc 2>/dev/null || echo 4); enable env_cache = true with env_cache_ttl = '1h' to eliminate subshell PATH latency; enable cargo.binstall = true"
     echo "  * Configuration: Set pin = true; configure cache_prune_age = '7d'; integrate with topgrade ([mise] bump = true, cleanup = true for mise prune, and mise reshim in post_commands)"
     echo "  * Security: Enforce supply-chain attestations (aqua.slsa, aqua.cosign, github_attestations, node.verify); restrict config permissions (0600); isolate runtime installs"
@@ -1043,7 +1131,7 @@ case "$target" in
       echo "  * Topgrade is not installed."
     fi
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Match build.jobs = $(nproc 2>/dev/null || echo 4); ensure registries.crates-io.protocol = 'sparse'; enable net.git-fetch-with-cli = true; prefer mise with cargo.binstall = true for global CLI tools"
     echo "  * Configuration: Disable 'cargo' step in topgrade.toml (disable = ['cargo']) when managing Rust CLIs via mise to eliminate hours of from-source rebuilds; tune codegen-units"
     echo "  * Security: Run cargo audit for supply-chain vulnerability audits; enforce Cargo.lock checksums; restrict ~/.cargo/config.toml permissions to 0600"
@@ -1077,7 +1165,7 @@ case "$target" in
       echo "  * Bat Previewer: [NOT FOUND]"
     fi
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Set RIPGREP_CONFIG_PATH, align threads to detected CPU cores (--threads=$detected_threads), set --max-columns=300 with preview, enable --mmap on SSDs"
     echo "  * Configuration: Enable --smart-case by default, wire rg as FZF_DEFAULT_COMMAND backend with bat syntax previews, global ignore globs (!.git, !node_modules)"
     echo "  * Security: Ignore hidden git internal files (--glob=!.git/*) to prevent credential leakage in search results"
@@ -1116,7 +1204,7 @@ case "$target" in
       echo "  * Bash: [NOT CONFIGURED] (Recommend: eval \"\$(zoxide init bash)\")"
     fi
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Statically cache or fast-init zoxide hook in shell profiles; periodically prune dead paths (zoxide remove)"
     echo "  * Configuration: Define aliases 'z' (jump) and 'zi' (interactive fzf jump); set _ZO_EXCLUDE_DIRS to skip temp and home root"
     echo "  * Security: Protect db.zo database file permissions (0600) to keep browsing history private"
@@ -1137,7 +1225,19 @@ case "$target" in
       [[ -f "$f" ]] && echo "  - [EXISTS] $f"
     done
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Aliases in shell startup files:"
+    if rc_lines '(^|[^A-Za-z0-9_])eza([^A-Za-z0-9_]|$)'; then
+      # An icons flag without a value takes the next word as its value on recent eza, so "ls /path" fails.
+      if rc_lines "(^|[^A-Za-z0-9_])eza[^#]*--icon[s]([^=]|\$)" >/dev/null; then
+        echo "  * Icons flag: [MISCONFIGURED] icons flag without a value (Use =auto: it also keeps icons out of pipes)"
+      else
+        echo "  * Icons flag: [OK]"
+      fi
+    else
+      echo "  * eza alias: [NOT CONFIGURED] in the files read: $(rc_read)(files they source are not followed) (Recommend: alias ls='eza --icons=auto')"
+    fi
+
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Avoid default --git scanning on large repositories or deep tree walks; bind --git only to detailed alias ('ll')"
     echo "  * Configuration: Set ergonomic aliases in pwsh & bash: ls='eza --icons=auto', ll='eza -l --icons=auto --git --header', lt='eza --tree --level=2'"
     echo "  * Security: Maintain --no-dereference by default to avoid unintended symlink traversal"
@@ -1187,7 +1287,7 @@ case "$target" in
     inferred_thm=$(infer_theme)
     theme_desc="synchronize theme (ask user for preferred theme)"
     [[ -n "$inferred_thm" ]] && theme_desc="synchronize theme (inferred from system/terminal: $inferred_thm)"
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Set 'git.autoFetch: false' to prevent periodic background git spawns; configure pager: 'bat --color=always --style=changes' for lightweight syntax diffs"
     echo "  * Configuration: Configure lazygit to use nvim --server / remote tab editing to prevent nested editor spawns, $theme_desc"
     echo "  * Security: Respect git safe.directory settings; prevent untrusted custom commands"
@@ -1309,7 +1409,7 @@ case "$target" in
       fi
     fi
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Enable vim.loader.enable() for sub-65ms startup; disable legacy remote providers; discover LSPs via mise shims; rotate lsp.log >1MB"
     echo "  * Configuration: Migrate LSPs/formatters/linters from Mason to mise (aqua:/go:/npm:/github:); lock mason.nvim (PATH='append', opts_extend={}, mason=false) to editor-only adapters; add DirChanged 'mise env --json' sync; ensure LazyVim v15+ compatibility"
     echo "  * Security: Disable modelines (vim.opt.modeline = false, vim.opt.exrc = false); pin plugin commit hashes in lazy-lock.json; enforce 0600 on config files"
@@ -1337,8 +1437,17 @@ case "$target" in
     echo "  * core.autocrlf: $(git config --get core.autocrlf 2>/dev/null || echo 'unset')"
     echo "  * credential.helper: $(git config --get credential.helper 2>/dev/null || echo 'unset')"
     echo "  * diff.algorithm: $(git config --get diff.algorithm 2>/dev/null || echo 'unset')"
+    if [[ -n "$git_bin" ]]; then
+      echo "Git Findings:"
+      git_check credential.helper "" "gh auth setup-git, or a credential manager"
+      git_check diff.algorithm histogram "git config --global diff.algorithm histogram"
+      git_check push.autoSetupRemote true "git config --global push.autoSetupRemote true"
+      if git config --get-all safe.directory 2>/dev/null | grep -qx '\*'; then
+        echo "  * safe.directory: [WARNING] '*' turns off the repository ownership check"
+      fi
+    fi
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Set core.fscache = true (huge NTFS status/diff speedup), core.preloadIndex = true, pack memory limits"
     echo "  * Configuration: Set core.autocrlf = input, diff.algorithm = histogram, push.autoSetupRemote = true, delta/bat pager"
     echo "  * Security: Configure safe.directory, use Git Credential Manager (credential.helper = manager) for secure OAuth tokens"
@@ -1359,10 +1468,19 @@ case "$target" in
       [[ -f "$f" ]] && echo "  - [EXISTS] $f"
     done
 
+    echo "Bat Findings:"
+    if [[ -f "$HOME/.config/bat/config" || -f "$roaming_app_data/bat/config" ]]; then
+      echo "  * Config file: [OK]"
+    else
+      echo "  * Config file: [NOT CONFIGURED] (Recommend: --theme and --style in ~/.config/bat/config)"
+    fi
+    echo "  * Shell startup files (BAT_* variables, cat/bat aliases):"
+    rc_lines 'BAT_|alias cat=|alias bat=' || echo "    [NOT CONFIGURED] in the files read: $(rc_read)(files they source are not followed)"
+
     inferred_thm=$(infer_theme)
     theme_desc="configure theme matching terminal (or prompt user)"
     [[ -n "$inferred_thm" ]] && theme_desc="configure theme matching terminal (inferred: $inferred_thm)"
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Use --paging=never when piping to pagers/tools, cache custom themes with bat cache --build"
     echo "  * Configuration: $theme_desc, set --style=\"numbers,changes,header\""
     echo "  * Security: Safe terminal escape rendering, avoid executing shell scripts from syntax highlighters"
@@ -1397,7 +1515,7 @@ case "$target" in
       echo "  * Syntax Previewer (bat): [RECOMMENDED] (Configure --preview 'bat --style=numbers --color=always --line-range :500 {}')"
     fi
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Wire rg (or fd) as backend search generator (FZF_DEFAULT_COMMAND); bound preview range (--line-range :500)"
     echo "  * Configuration: Set layout=reverse, border, preview window using bat with line-numbered syntax previews"
     echo "  * Security: Exclude credentials, .env files, and .git internals from default search index"
@@ -1456,7 +1574,7 @@ case "$target" in
       echo "  * Shell Integration (.bashrc): $(if [[ -n "$bash_has_ss" ]]; then echo "starship init [YES]"; else echo "starship init [NO]"; fi), $(if [[ -n "$bash_has_mise" ]]; then echo "mise activate [YES]"; else echo "mise activate [NO]"; fi)"
     fi
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Set command_timeout = 500ms; enable native [mise] module and disable redundant language modules ([nodejs], [python], [rust]) to eliminate 50-200ms subshell prompt lag; ensure mise env_cache = true"
     echo "  * Configuration: Clean minimal prompt layout, directory truncation length 3, consistent Nerd Font symbols"
     echo "  * Security: Avoid untrusted custom command execution in prompt modules ([custom.*]); restrict starship.toml permissions to 0600"
@@ -1473,11 +1591,21 @@ case "$target" in
     fi
 
     echo "Discovered Configuration Files:"
+    ytdl_cfg=0
     for f in "$roaming_app_data/yt-dlp/config" "$HOME/.config/yt-dlp/config"; do
-      [[ -f "$f" ]] && echo "  - [EXISTS] $f"
+      [[ -f "$f" ]] || continue
+      echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
+      ytdl_cfg=1
+      if grep -qE '^[[:space:]]*--no-check-certificates?' "$f" 2>/dev/null; then
+        echo "  * [SECURITY WARNING] --no-check-certificate in $f turns off TLS verification"
+      fi
+      if grep -qE '^[[:space:]]*--cookies' "$f" 2>/dev/null; then
+        echo "  * [WARNING] $f references a cookies file (keep that file at 0600)"
+      fi
     done
+    [[ "$ytdl_cfg" -eq 1 ]] || echo "  * Config file: [NOT CONFIGURED] (Recommend: ~/.config/yt-dlp/config)"
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Set --concurrent-fragments=4, integrate ffmpeg multithreading, enable aria2c download engine when available"
     echo "  * Configuration: Default format bestvideo+bestaudio/best, clean output template, embed metadata/subtitles"
     echo "  * Security: Restrict untrusted cookies, sanitize output filenames to prevent directory traversal"
@@ -1545,7 +1673,7 @@ case "$target" in
       echo "  * Mise not detected on this system."
     fi
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Monitor and rotate herdr-server.log; ensure default_shell starts cleanly; prune orphaned sessions"
     echo "  * Configuration: Set default_shell to pwsh (or bash); $theme_desc; configure system toast delivery; inherit mise shims in multiplexed agent panes"
     echo "  * Security: Restrict herdr.sock (0600) and workspace directories (0700); secure agent execution boundaries and API socket"
@@ -1631,7 +1759,7 @@ case "$target" in
       echo "  * Topgrade Maintenance: Configured ($topgrade_cfg)"
     fi
 
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Configure pager = 'bat --color=always --style=plain' for zero-latency syntax diff reviews; leverage gh --json queries in scripts"
     echo "  * Configuration: Set git_protocol = 'ssh'; run 'gh auth setup-git' for seamless git & lazygit credentials; configure PR workflow aliases (co, pv)"
     echo "  * Security: Restrict ~/.config/gh/hosts.yml permissions to 0600; enforce least-privilege token scopes; audit third-party extensions before installing"
@@ -1654,7 +1782,7 @@ case "$target" in
       echo "Default Queue Discipline: $(sysctl -n net.core.default_qdisc 2>/dev/null || echo unknown)"
       echo "Listening TCP Sockets: $(ss -tlnH 2>/dev/null | wc -l || true)"
     fi
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: TCP auto-tuning left at normal; BBR or CUBIC congestion control; no leftover VPN adapters"
     echo "  * Configuration: Encrypted DNS (DoH/DoT) with a local cache; static addressing only where needed"
     echo "  * Security: Close listening sockets that nothing uses; firewall limited to the local network"
@@ -1667,8 +1795,9 @@ case "$target" in
       browser_report_win chrome.exe "$local_app_data/Google/Chrome/User Data" 'HKLM:\SOFTWARE\Policies\Google\Chrome'
     else
       browser_report_linux "$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || true)"
+      browser_policy_linux /etc/opt/chrome/policies/managed /etc/chromium/policies/managed
     fi
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Hardware acceleration on; trim startup extensions"
     echo "  * Configuration: One profile per context; sync only what is needed"
     echo "  * Security: Safe Browsing on, auto-update on, audit extensions"
@@ -1681,8 +1810,9 @@ case "$target" in
       browser_report_win msedge.exe "$local_app_data/Microsoft/Edge/User Data" 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
     else
       browser_report_linux "$(command -v microsoft-edge-stable || command -v microsoft-edge || true)"
+      browser_policy_linux /etc/opt/edge/policies/managed
     fi
-    echo "Triad Checkpoints (Performance, Configuration, Security):"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Startup boost and background mode only if wanted; hardware acceleration on"
     echo "  * Configuration: One profile per context; sync only what is needed"
     echo "  * Security: SmartScreen on, auto-update on, audit extensions"
@@ -1872,6 +2002,25 @@ fi
 
 # Target-specific state inspection for Linux & cross-platform tools
 case "$target" in
+  python|python3)
+    echo "Active Python Environment:"
+    py_ext=$("$bin_path" -c 'import os, sysconfig; print(os.path.exists(os.path.join(sysconfig.get_path("stdlib"), "EXTERNALLY-MANAGED")))' 2>/dev/null || echo unknown)
+    case "$py_ext" in
+      True)  echo "  * System pip protected (EXTERNALLY-MANAGED): [OK]" ;;
+      False) echo "  * System pip protected (EXTERNALLY-MANAGED): [NOTE] this Python has no marker, so pip can change it (fine for pyenv or a virtualenv; otherwise use venv, uv or pipx)" ;;
+      *)     echo "  * System pip protected (EXTERNALLY-MANAGED): unknown" ;;
+    esac
+    echo "  * Virtualenv active: ${VIRTUAL_ENV:-no}"
+    echo "  * uv: $(command -v uv 2>/dev/null || echo 'not installed')"
+    ;;
+  sqlite3)
+    if [[ -f "$HOME/.sqliterc" ]]; then
+      echo "Active ~/.sqliterc:$(cfg_perm_tag "$HOME/.sqliterc")"
+      grep -vE '^[[:space:]]*(--|$)' "$HOME/.sqliterc" 2>/dev/null | sed 's/^/    /' | head -n 10 || true
+    else
+      echo "  * ~/.sqliterc: [NOT CONFIGURED] (Recommend: .headers on, .mode box)"
+    fi
+    ;;
   pacman|yay|paru|makepkg)
     echo "Active Arch Linux Package & Build Settings:"
     if [[ -f /etc/pacman.conf ]]; then
@@ -1916,7 +2065,7 @@ case "$target" in
 esac
 
 # Tool Security & Hardening Check
-echo "Triad Checkpoints (Performance, Configuration, Security):"
+echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
 case "$target" in
   topgrade)
     echo "  * Performance: Parallel tool steps where supported, align [mise] jobs with CPU threads (nproc), enable cleanup = true (runs mise prune)"
