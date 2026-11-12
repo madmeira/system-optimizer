@@ -119,9 +119,10 @@ confirm_sudo() {
 
 # A target name becomes a folder name inside the backup store: one plain segment, no separators.
 validate_target_name() {
-  case "$1" in
-    ""|.|..|*/*|*\\*) echo "Error: invalid target name '$1' (use a plain name, no slashes)" >&2; return 1 ;;
-  esac
+  if [[ -z "$1" || "$1" == "." || "$1" == ".." || ! "$1" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "Error: invalid target name '$1' (use letters, digits, '.', '_' or '-'; no slashes or spaces)" >&2
+    return 1
+  fi
 }
 
 usage() {
@@ -264,6 +265,11 @@ if [[ "$cmd" == "--restore" ]]; then
     sudo cp -p "$backup_file" "$dest_file"
     echo "Successfully restored with sudo: $backup_file -> $dest_file"
   fi
+  orig_perms=$(grep -E '^Permissions:' "$meta_file" 2>/dev/null | head -n 1 | cut -d: -f2- || true)
+  orig_perms=$(trim "$orig_perms")
+  if [[ "$orig_perms" =~ ^[0-7]{3,4}$ ]]; then
+    chmod "$orig_perms" "$dest_file" 2>/dev/null || true
+  fi
   exit 0
 fi
 
@@ -288,10 +294,10 @@ fi
 # Multi-file batch mode:
 #   backup-config.sh [--no-in-place] <file1> <file2> [file3 ...] <target-name> <description>
 #   backup-config.sh [--no-in-place] <file1> <file2> <target-name>
-if [[ $# -gt 3 ]] || { [[ $# -eq 3 ]] && { [[ "$2" == */* ]] || [[ -e "$2" ]]; } && validate_target_name "$3" 2>/dev/null; }; then
+if [[ $# -gt 3 ]] || { [[ $# -eq 3 ]] && { [[ "$2" == */* ]] || [[ -f "$2" ]]; } && validate_target_name "$3" 2>/dev/null; }; then
   args=("$@")
   n=${#args[@]}
-  if validate_target_name "${args[$((n-1))]}" 2>/dev/null && { [[ "${args[$((n-2))]}" == */* ]] || [[ -e "${args[$((n-2))]}" ]]; }; then
+  if validate_target_name "${args[$((n-1))]}" 2>/dev/null && { [[ "${args[$((n-2))]}" == */* ]] || [[ -f "${args[$((n-2))]}" ]]; }; then
     batch_target="${args[$((n-1))]}"
     batch_desc="Auto-backup before optimization"
     file_count=$((n - 1))
@@ -328,6 +334,7 @@ umask 077
 base_filename=$(basename "$config_path")
 target_backup_dir="$BACKUP_ROOT/$target_name"
 mkdir -p "$target_backup_dir"
+chmod 700 "$BACKUP_ROOT" "$target_backup_dir" 2>/dev/null || true
 
 central_backup=$(unique_path "$target_backup_dir/${base_filename}.$(make_timestamp)" ".bak")
 # the prefix is quoted so a file name with [ ] * ? is matched literally, not as a pattern
@@ -343,6 +350,7 @@ file_perms=$(stat -c "%a" "$config_path" 2>/dev/null || echo "644")
 
 # Copy with preserved attributes
 cp -p "$config_path" "$central_backup"
+chmod 600 "$central_backup" 2>/dev/null || true
 
 # Write metadata companion file
 cat <<EOF > "$central_meta"

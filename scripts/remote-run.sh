@@ -15,6 +15,11 @@ shift 2
 dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ -f "$dir/$script" ]] || { echo "Error: $dir/$script not found" >&2; exit 1; }
 
-printf -v qargs '%q ' "$@"
+sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+remote_args="$(sq "$script")"
+for arg in "$@"; do
+  remote_args+=" $(sq "$arg")"
+done
+
 tar -C "$dir/.." -cf - scripts | ssh -o BatchMode=yes "$host" \
-  "d=\$(mktemp -d) && trap 'rm -rf \"\$d\"' EXIT && tar -C \"\$d\" -xf - && bash \"\$d/scripts/$script\" $qargs"
+  "bash -c 'd=\$(mktemp -d) && trap \"rm -rf -- \\\"\\\$d\\\"\" EXIT && tar -C \"\$d\" -xf - && bash \"\$d/scripts/\$1\" \"\${@:2}\"' _ $remote_args"

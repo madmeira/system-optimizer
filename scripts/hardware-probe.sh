@@ -20,10 +20,19 @@ if is_windows; then
   ps_data=$(run_ps '
     $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1 Name, NumberOfCores, NumberOfLogicalProcessors
     $os = Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber, TotalVisibleMemorySize, FreePhysicalMemory
-    $gpus = @(Get-CimInstance Win32_VideoController | Where-Object { $_.AdapterRAM -gt 0 -or ($_.Name -notmatch "Virtual|Remote|Basic") })
-    $gpuName = if ($gpus.Count -gt 0) { $gpus[0].Name } else { "None detected" }
-    $gpuRam = if ($gpus.Count -gt 0 -and $gpus[0].AdapterRAM) { "$([math]::Round($gpus[0].AdapterRAM / 1GB, 2)) GB" } else { "" }
-    $gpuStr = if ($gpuRam) { "$gpuName ($gpuRam)" } else { $gpuName }
+    $vramMap = @{}
+    Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0*" -ErrorAction SilentlyContinue | ForEach-Object {
+      if ($_.DriverDesc -and $_."HardwareInformation.qwMemorySize") {
+        $vramMap[$_.DriverDesc.Trim()] = [int64]$_."HardwareInformation.qwMemorySize"
+      }
+    }
+    $gpus = @(Get-CimInstance Win32_VideoController | Where-Object { $_.Name -and ($_.AdapterRAM -gt 0 -or $_.Name -notmatch "Virtual|Remote|Basic|Indirect") })
+    $gpuList = @($gpus | ForEach-Object {
+      $n = $_.Name.Trim()
+      $bytes = if ($vramMap.ContainsKey($n)) { $vramMap[$n] } elseif ($_.AdapterRAM) { [int64]$_.AdapterRAM } else { 0 }
+      if ($bytes -gt 0) { "$n ($([math]::Round($bytes / 1GB, 2)) GB)" } else { $n }
+    })
+    $gpuStr = if ($gpuList.Count -gt 0) { ($gpuList -join "; ") } else { "None detected" }
 
     $disks = try { @(Get-PhysicalDisk | Select-Object -ExpandProperty MediaType -Unique) } catch { @() }
     $diskType = if ($disks.Count -gt 0) { ($disks -join "/") } else { "unknown" }
@@ -52,25 +61,25 @@ if is_windows; then
   ' 2>/dev/null || true)
 
   if [[ -n "$ps_data" ]]; then
-    cpu_model=$(echo "$ps_data" | grep -oE '"CPUModel":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
-    cpu_cores=$(echo "$ps_data" | grep -oE '"Threads":[0-9]+' | cut -d: -f2 || echo "unknown")
-    cpu_arch=$(echo "$ps_data" | grep -oE '"Arch":"[^"]+"' | cut -d: -f2 | tr -d '"' || echo "unknown")
-    power_raw=$(echo "$ps_data" | grep -oE '"PowerScheme":"[^"]+"' | cut -d: -f2- | tr -d '"' || true)
+    cpu_model=$(ps_json_str "$ps_data" "CPUModel" "unknown")
+    cpu_cores=$(ps_json_num "$ps_data" "Threads" "unknown")
+    cpu_arch=$(ps_json_str "$ps_data" "Arch" "unknown")
+    power_raw=$(ps_json_str "$ps_data" "PowerScheme" "")
     # keep only the plan name; without one in parentheses the GUID is not shown
     cpu_governor="$(power_plan_name "$power_raw")"
     if [[ -z "$cpu_governor" || "$cpu_governor" == "$power_raw" ]]; then cpu_governor="unknown"; fi
     microcode_rev="N/A (Managed by Windows/UEFI)"
-    ram_total_gb=$(echo "$ps_data" | grep -oE '"RAMTotalGB":[0-9.]+' | cut -d: -f2 || echo "unknown")
-    swap_total_gb=$(echo "$ps_data" | grep -oE '"SwapTotalGB":[0-9.]+' | cut -d: -f2 || echo "unknown")
+    ram_total_gb=$(ps_json_num "$ps_data" "RAMTotalGB" "unknown")
+    swap_total_gb=$(ps_json_num "$ps_data" "SwapTotalGB" "unknown")
     zram_active=false
     zram_size="0"
     zram_algorithm="none"
-    mem_compression=$(echo "$ps_data" | grep -oE '"MemoryCompression":(true|false)' | cut -d: -f2 || echo "unknown")
-    gpu_info=$(echo "$ps_data" | grep -oE '"GPU":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
-    rotational=$(echo "$ps_data" | grep -oE '"StorageType":"[^"]+"' | cut -d: -f2 | tr -d '"' || echo "unknown")
+    mem_compression=$(ps_json_bool "$ps_data" "MemoryCompression" "unknown")
+    gpu_info=$(ps_json_str "$ps_data" "GPU" "unknown")
+    rotational=$(ps_json_str "$ps_data" "StorageType" "unknown")
     root_device="C:"
-    os_name=$(echo "$ps_data" | grep -oE '"OSName":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
-    kernel=$(echo "$ps_data" | grep -oE '"Kernel":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
+    os_name=$(ps_json_str "$ps_data" "OSName" "unknown")
+    kernel=$(ps_json_str "$ps_data" "Kernel" "unknown")
   else
     # PowerShell failed: report only what the environment really tells us, everything else is unknown
     cpu_model="unknown"
@@ -165,9 +174,9 @@ fi
 safe_concurrency=$cpu_cores
 if [[ ! "$ram_total_gb" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   memory_tier="unknown"
-elif (( $(awk "BEGIN {print ($ram_total_gb < 4.0)}") )); then
+elif (( $(awk "BEGIN {print ($ram_total_gb <= 4.0)}") )); then
   memory_tier="low"
-elif (( $(awk "BEGIN {print ($ram_total_gb < 16.0)}") )); then
+elif (( $(awk "BEGIN {print ($ram_total_gb <= 16.0)}") )); then
   memory_tier="medium"
 else
   memory_tier="high"

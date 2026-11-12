@@ -10,8 +10,10 @@ host="${1:-}"
 [[ -n "$host" ]] || { echo "Usage: $0 <ssh-host>" >&2; exit 1; }
 
 rc_files=(.zshrc .zshenv .bashrc .bash_profile .profile)
-cfg_files=(.gitconfig .config/git/config .config/starship.toml .config/ripgrep/ripgreprc \
-           .config/btop/btop.conf .config/topgrade.toml .config/mise/config.toml .config/bat/config)
+cfg_files=(.gitconfig .config/git/config .config/starship.toml \
+           .config/ripgrep/config .config/ripgrep/ripgreprc .ripgreprc .config/fd/ignore \
+           .config/btop/btop.conf .config/topgrade.toml .config/mise/config.toml .config/bat/config \
+           .config/lazygit/config.yml .config/gh/config.yml .pi/agent/settings.json)
 
 # Best-effort redaction, so review the output before sharing it: values after KEY/TOKEN/SECRET/PASSWORD names,
 # user:password@ inside URLs, and common token shapes (sk-, ghp_, AIza, xox*).

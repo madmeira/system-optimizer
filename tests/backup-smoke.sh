@@ -31,9 +31,12 @@ ok "backup created with .meta"
 if is_windows_shell; then
   skip "store permissions (NTFS ignores POSIX modes on Git Bash)"
 else
+  chmod 644 "$cfg"
+  bak_perm_test="$(bash "$BACKUP" "$cfg" smokeperm "perm test" | sed -n 's/^Central Bak: *//p')"
   [[ "$(stat -c %a "$STORE")" == "700" && "$(stat -c %a "$STORE/smoke")" == "700" ]] || fail "backup store is not mode 700"
+  [[ "$(stat -c %a "$bak_perm_test")" == "600" ]] || fail ".bak is not mode 600"
   [[ "$(stat -c %a "$bak.meta")" == "600" ]] || fail ".meta is not mode 600"
-  ok "backup store is private (700) and .meta is 600"
+  ok "backup store is private (700) and .bak/.meta are 600"
 fi
 
 # capture first: "cmd | grep -q" can end in SIGPIPE (status 141) under pipefail, e.g. on Git Bash
@@ -147,21 +150,32 @@ ok "an unknown option is rejected with exit 2"
 
 # --- the target name is one plain folder name, never a path
 before="$(find "$WORK" -type d | wc -l)"
-for bad in '../escape' 'a/b' '..' '.'; do
+for bad in '../escape' 'a/b' '..' '.' 'target with spaces'; do
   if bash "$BACKUP" "$WORK/opt/a.conf" "$bad" > "$WORK/out" 2> "$WORK/err"; then fail "backup accepted target name '$bad'"; fi
   grep -q "invalid target name" "$WORK/err" || fail "target name '$bad': no clear error"
 done
 if bash "$BACKUP" --list '../..' > "$WORK/out" 2> "$WORK/err"; then fail "--list accepted target '../..'"; fi
 [[ "$(find "$WORK" -type d | wc -l)" -eq "$before" ]] || fail "a rejected target name still created folders"
-ok "target names with slashes or dots are rejected before anything is written"
+ok "target names with slashes, dots, or spaces are rejected before anything is written"
 
-# --- multi-file batch backup: backs up several files for one target in a single call
+# --- CWD directory collision: a folder named after <target> in CWD must not trigger batch mode
+mkdir -p "$WORK/cwd/pi"
+printf '{"compaction":true}\n' > "$WORK/cwd/settings.json"
+cwd_out="$(cd "$WORK/cwd" && bash "$BACKUP" "$WORK/cwd/settings.json" pi "Tune compaction settings")"
+grep -q 'BACKUP CREATED' <<< "$cwd_out" || fail "single-file backup failed when CWD had a folder matching target name"
+[[ -n "$(find "$STORE/pi" -type f -name 'settings.json.*.bak')" ]] || fail "backup was not stored under target 'pi'"
+ok "single-file backup succeeds when CWD contains a directory named after <target>"
+
+# --- multi-file batch backup (positional and explicit --batch): backs up several files for one target
 mkdir -p "$WORK/batch"
 printf 'one\n' > "$WORK/batch/f1.conf"
 printf 'two\n' > "$WORK/batch/f2.conf"
 batch_out="$(bash "$BACKUP" "$WORK/batch/f1.conf" "$WORK/batch/f2.conf" batchtarget "Multi-file batch backup test")"
 [[ "$(grep -c 'BACKUP CREATED' <<< "$batch_out")" -eq 2 ]] || fail "multi-file batch did not create 2 backups"
 [[ "$(find "$STORE/batchtarget" -type f -name '*.bak' | wc -l)" -eq 2 ]] || fail "multi-file batch store does not have 2 .bak files"
-ok "multi-file batch backup creates distinct backups with shared target and description"
+ebatch_out="$(bash "$BACKUP" "$WORK/batch/f1.conf" "$WORK/batch/f2.conf" batchtarget3)"
+[[ "$(grep -c 'BACKUP CREATED' <<< "$ebatch_out")" -eq 2 ]] || fail "3-arg multi-file batch did not create 2 backups"
+[[ "$(find "$STORE/batchtarget3" -type f -name '*.bak' | wc -l)" -eq 2 ]] || fail "3-arg multi-file batch store does not have 2 .bak files"
+ok "multi-file batch backup (with and without description) creates distinct backups"
 
 echo "backup-smoke: $pass passed, $skipped skipped"

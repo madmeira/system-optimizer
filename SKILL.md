@@ -1,6 +1,8 @@
 ---
 name: system-optimizer
-description: Inspects, configures, hardens, and optimizes the system, tools, desktop/terminal environments, and software packages across Performance, Configuration, and Security. Native support for Windows (winget, windows-terminal, wsl, pwsh, powertoys, defender, storage/trim) and Linux (pacman, yay, makepkg, flatpak, podman, lazydocker, systemd, sysctl, kde-plasma), as well as cross-platform tools (git, topgrade, mise, cargo, neovim, ripgrep, fd, zoxide, eza, starship, bat, fzf, lazygit, mpv, yt-dlp, btop, htop, syncthing, sqlite3, rustdesk, controld, pi, bash, herdr, gh). Tailored to host hardware (CPU threads, RAM tier, GPU, disk type) and upstream standards. When called without arguments, probes the system and presents numbered tuning options. Maintains persistent memory in ~/.config/system-optimizer/<target>/MEMORY.md and cross-system ~/.config/system-optimizer/MASTER_MEMORY.md.
+description: Audits, tunes, hardens, and speeds up Windows and Linux systems, shells, terminals, browsers, package managers, runtimes, and CLI tools across Performance, Configuration, and Security. Use when the user wants to inspect or optimize OS settings (storage/TRIM, memory/zram, CPU/power, network, boot), security posture (Defender/PUA, firewall, sysctl, SSH, ExecutionPolicy), Windows/Linux environments (winget, windows-terminal, wsl, pwsh, powertoys, pacman, yay, makepkg, flatpak, podman, lazydocker, systemd, kde-plasma), browsers (brave, chrome, edge, firefox, librewolf), or developer tools (git, gh, lazygit, topgrade, mise, cargo, python, neovim, ripgrep, fd, zoxide, eza, starship, bat, fzf, mpv, yt-dlp, btop, htop, syncthing, sqlite3, rustdesk, controld, pi, bash, herdr). Run without arguments to probe hardware and present numbered tuning options.
+license: MIT
+compatibility: Requires bash >= 4.0; PowerShell 5.1+ or pwsh on Windows
 ---
 
 # System & Tool Optimizer
@@ -40,10 +42,11 @@ Script paths below (`scripts/...`, `references/...`) are relative to the skill f
 
 | Kind | Targets |
 |---|---|
-| Domains | `system`, `security`, `storage`, `full` |
+| Domains | `system`, `security`, `storage`, `network`, `full` |
 | Windows | `winget`, `windows-terminal`, `wsl`, `pwsh`, `powertoys`, `defender` |
 | Linux | `pacman`, `yay`, `makepkg`, `kde-plasma` |
-| Runtimes & orchestration | `mise`, `topgrade`, `cargo`, `podman`, `lazydocker` |
+| Browsers | `brave`, `chrome`, `edge`, `firefox`, `librewolf` |
+| Runtimes & orchestration | `mise`, `topgrade`, `cargo`, `python`, `podman`, `lazydocker` |
 | Editor, shell & git | `neovim`, `starship`, `bat`, `fzf`, `ripgrep`, `fd`, `zoxide`, `eza`, `sqlite3`, `bash`, `git`, `gh`, `lazygit` |
 | Media, sync & remote | `mpv`, `yt-dlp`, `syncthing`, `rustdesk`, `controld` |
 | Agents | `pi`, `herdr` |
@@ -87,10 +90,10 @@ When **Full Optimization** is selected, the skill systematically orchestrates th
 
 | Tier | Scope | Targets |
 |---|---|---|
-| 1. System core & OS baseline | TRIM, memory compression / zram, power plan / CPU governor, sysctl, startup audit | `storage`, `system` |
+| 1. System core & OS baseline | TRIM, memory compression / zram, power plan / CPU governor, network, sysctl, startup audit | `storage`, `network`, `system` |
 | 2. Security hardening | Firewall (`ufw`/`nftables`/Defender), Defender/PUA, sysctl hardening, execution policy, package integrity | `security`, `defender` |
-| 3. Subsystems & package orchestration | Package managers, WSL, containers, runtimes, update coordination | `winget`, `pacman`, `yay`, `makepkg`, `wsl`, `podman`, `lazydocker`, `mise`, `cargo`, `topgrade` |
-| 4. Terminal, desktop & shell | Terminal engine, desktop compositor, browsers, shell profiles, history | `windows-terminal`, `kde-plasma`, `pwsh`, `bash` |
+| 3. Subsystems & package orchestration | Package managers, WSL, containers, runtimes, update coordination | `winget`, `pacman`, `yay`, `makepkg`, `wsl`, `podman`, `lazydocker`, `mise`, `cargo`, `python`, `topgrade` |
+| 4. Terminal, desktop, browsers & shell | Terminal engine, desktop compositor, browsers, shell profiles, history | `windows-terminal`, `kde-plasma`, `pwsh`, `bash`, `brave`, `chrome`, `edge`, `firefox`, `librewolf` |
 | 5. Developer, media & monitor toolchain | Editor, search, git, media, agents, monitors, sync & remote tools | `neovim`, `lazygit`, `ripgrep`, `fd`, `zoxide`, `eza`, `bat`, `fzf`, `starship`, `git`, `gh`, `mpv`, `yt-dlp`, `pi`, `herdr`, `btop`, `htop`, `syncthing`, `sqlite3`, `rustdesk`, `controld`, `powertoys` |
 
 **Cross-tool synergies** (settings per pipeline in `references/optimization-guide.md` §10):
@@ -213,33 +216,15 @@ Propose improvements across all three pillars, and apply only the items the user
     2. Local in-place backup: `<config_file>.bak.<timestamp>` when the directory is user-writable (skipped automatically in scanned/drop-in config directories such as `/nvim/`, `*.d/`, `/systemd/`, or with `--no-in-place`).
   - The backup path, timestamp, and SHA256 checksum must be recorded in the per-target `MEMORY.md` under `## Backups & Rollback Ledger`.
   - Rollback is supported on demand via `scripts/backup-config.sh --restore <backup-path>`.
-- **Modern Defaults**:
-  - `winget`: Set rainbow progress bar, direct WinINet downloader, 2-hour source sync.
-  - `windows-terminal`: Default profile to PowerShell 7 (`pwsh`) or WSL, `disableAnimations: true`, `copyFormatting: none`, Hack Nerd Font.
-  - `pwsh`: PSReadLine `PredictiveSource HistoryAndPlugin`, `PredictionViewStyle ListView`, completion menus, starship/zoxide integration.
-  - `wsl`: `networkingMode=mirrored`, `dnsTunneling=true`, `systemd=true`.
-  - `topgrade`: Coordinated updates across `pacman`/`yay`/`winget`, `wsl`, `git`, `cargo`, `mise`; dedicated `[mise]` table (`bump = true`, jobs bound to `$(nproc)`); `cleanup = true` (triggers `mise prune`); post-command `mise reshim`; collision avoidance via `disable = ["uv", "cargo"]` when Rust CLIs are managed via mise binstall.
-  - `mise`: Version pinning (`pin = true`), storage hygiene (`cache_prune_age = "7d"`, `always_keep_download = false`), runtime ergonomics (`node.corepack = true`, `python.uv_venv_auto = "source"`), pre-compiled Rust binaries (`cargo.binstall = true`), and companion integration with Topgrade.
-  - `cargo`: Concurrency bound to `build.jobs = $(nproc)`, `registries.crates-io.protocol = "sparse"`, `net.git-fetch-with-cli = true`, global CLI utilities delegated to `mise` with `cargo.binstall = true`, and Topgrade from-source rebuild step disabled (`disable = ["cargo"]`).
-  - `neovim`: Bytecode loader (`vim.loader.enable()`), mise shims prepended + Mason bin appended on `vim.env.PATH`, Mason de-duplication (`PATH = "append"`, `opts_extend = {}`, `automatic_installation = false`, `mason = false` on Mise LSPs, pruning duplicate Mason packages on disk), async `DirChanged`/`VimEnter` `mise env --json` synchronization, LazyVim v15+ compatibility (`nvim-treesitter` `main` branch without `nvim-treesitter.configs`, `lazydev.nvim` in `.neoconf.json`, `ai.sidekick`, `crates.nvim` `cmp.enabled = false` with `blink.cmp`, `matchit`/`matchparen` retained), and `lsp.log` rotation.
-  - `pi`: Toolchain shim inheritance via active `mise` shims on subshell PATH, session lifecycle hygiene (>30d pruning), compaction reserve boundaries (`16384`), thinking budget alignment, and strict permission deny rules (`0600` `auth.json`, SSH/secrets deny).
-  - `herdr`: Multiplexed AI workspace panes with persistent session resumption (`resume_agents_on_restore = true`), default shell bound to `/bin/bash` or `pwsh`, theme synchronization, system toast delivery, `mise` shims inheritance, and local UNIX socket security (`0600`).
-  - `gh`: Set `git_protocol = "ssh"`, `pager = "bat --color=always --style=plain"`, `prompt = "enabled"`, configure `gh auth setup-git` for Git credential delegation, and automate extension upgrades via Topgrade.
+- **Modern Defaults & Synergies** *(read `references/optimization-guide.md` §3–§5 and §10 on demand for per-target config templates)*:
+  - Align update orchestration (`topgrade` + `mise` + `winget`/`pacman`) so OS packages and user runtimes never duplicate rebuilds (`cargo.binstall = true`, `disable = ["uv", "cargo"]`, post-command `mise reshim`).
+  - Eliminate nested processes and subshell lag (`lazygit` → `nvim --server`, `starship` native `[mise]` module with integer `command_timeout = 500`, `fzf` backed by `fd` or `rg` with `bat` previews, `neovim` `vim.loader.enable()` + Mason de-duplication).
+  - Ensure non-interactive AI agent subshells (`pi`, `herdr`) inherit `mise` shims on `PATH` and prune stale session logs (>30d).
 
 #### 3. Security
-- **System Hardening**:
-  - *Windows*: Enable Microsoft Defender Potentially Unwanted Application (PUA) Protection (`Set-MpPreference -PUAProtection 1`), enforce all 3 Firewall profiles enabled with default BlockInbound, verify UAC `EnableLUA=1`.
-  - *Linux*: Kernel attack surface reduction via `/etc/sysctl.d/99-system-hardening.conf` (`kernel.kptr_restrict=2`, `kernel.dmesg_restrict=1`, `net.ipv4.conf.all.rp_filter=1`).
-- **Execution & Shell Security**: Enforce PowerShell `ExecutionPolicy RemoteSigned` to block downloaded unsigned scripts; scrub sensitive tokens from shell history.
-- **Supply Chain & Package Integrity**:
-  - `mise`: Enforce cryptographic provenance verification (`aqua.slsa = true`, `aqua.cosign = true`, `github_attestations = true`, `node.verify = true`), enforce `allow_root = false` to block root execution, protect `config.toml` permissions (`0600`).
-  - `winget`: Ensure `InstallerHashOverride` and `BypassCertificatePinningForMicrosoftStore` remain `Disabled`, disable backend telemetry.
-  - `pacman`: Ensure `SigLevel = Required DatabaseOptional`.
-  - `cargo`: Enforce `Cargo.lock` checksum verification, `cargo-audit` and `cargo-vet` integration, `0600` config permissions.
-  - `pi` / `herdr`: Enforce `0600` permissions on `auth.json`, `config.toml`, and socket files (`herdr.sock`), restrict workspace directory permissions (`0700`), and enforce path deny rules on private credential stores.
-  - `gh`: Restrict `~/.config/gh/hosts.yml` permissions to `0600`, enforce least-privilege OAuth scopes, and audit installed extensions against supply-chain vulnerabilities.
-- **SSH & Credential Security**: Restrict permissions on `~/.ssh` and private keys; ensure Windows OpenSSH Server is only active when explicitly required.
-
+- **Privileged Changes (Safety Contract #4)**: Elevated Windows commands (`Enable-MMAgent -mc`, `Set-MpPreference -PUAProtection 1`, `Optimize-Volume -ReTrim`, `fsutil 8dot3name set`) and root-owned Linux configs (`/etc/sysctl.d/*`, `/etc/pacman.conf`, `/etc/ssh/sshd_config`) MUST NEVER be executed directly by the agent — present the exact command for the user to run.
+- **System & Shell Hardening**: Verify all Firewall profiles active with BlockInbound default, Defender Real-Time & PUA protection, Linux sysctl kernel hardening (`kptr_restrict`, `dmesg_restrict`, `unprivileged_bpf_disabled`, `protected_fifos`/`regular`), PowerShell `RemoteSigned`, sanitized `PATH` (no `.` or empty entries), and scrubbed shell history.
+- **Supply Chain & Least Privilege** *(details in `references/optimization-guide.md` §2 & §5)*: Enforce cryptographic verification (`mise` SLSA/cosign/attestations + `allow_root = false`, `winget` hash/cert checks enabled, `pacman` `SigLevel = Required DatabaseOptional`, `cargo` lockfile checksums) and `0600` permissions on credentials/sockets (`~/.ssh`, `gh/hosts.yml`, `pi/agent/auth.json`, `herdr.sock`).
 ---
 
 ### Phase 5: Verification & Health Checks

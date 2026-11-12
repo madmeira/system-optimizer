@@ -102,7 +102,14 @@ for label in 'Power Scheme' 'SSD TRIM Status' 'NTFS 8.3 Name Creation' 'Memory C
 done
 ok "system-probe reports unknown and valid JSON when PowerShell fails"
 
-# ---- case 2: PowerShell answers but Defender/UAC data is missing (null), PUA in audit mode
+run_probe target-inspect.sh memory > "$WORK/mem1.txt"
+grep -q '^Windows Memory Compression: unknown$' "$WORK/mem1.txt" || fail "target-inspect memory invented compression state: $(grep 'Memory Compression' "$WORK/mem1.txt")"
+if grep -qE '16\.0|8\.0|Memory Compression: true' "$WORK/mem1.txt"; then fail "target-inspect memory printed invented fallback numbers"; fi
+run_probe target-inspect.sh boot > "$WORK/boot1.txt"
+grep -q '^Fast Startup (Hiberboot): unknown$' "$WORK/boot1.txt" || fail "target-inspect boot invented Fast Startup state: $(grep 'Fast Startup' "$WORK/boot1.txt")"
+ok "target-inspect memory and boot report unknown when PowerShell fails"
+
+# ---- case 2: PowerShell answers but Defender/UAC data is missing (unknown), PUA in audit mode
 export PS_STUB_OUT='{"FirewallAllActive":null,"FirewallSummary":"Domain:Active","RealTimeProtection":null,"AntivirusEnabled":null,"PUAProtection":2,"UACEnabled":null,"ExecutionPolicy":"Restricted","SSHDService":"NotInstalled"}'
 run_probe security-audit.sh --json > "$WORK/sec2.json"
 "$PY" -m json.tool "$WORK/sec2.json" > /dev/null || fail "security-audit JSON is invalid with partial data"
@@ -133,24 +140,34 @@ else
 fi
 
 # ---- case 5: canned PowerShell hardware data -> clean governor name, concurrency = logical cores, no blank line
-export PS_STUB_OUT='{"CPUModel":"Test CPU","Cores":4,"Threads":8,"Arch":"x86_64","RAMTotalGB":16,"SwapTotalGB":2,"GPU":"Test GPU","StorageType":"SSD","OSName":"Windows 11","Kernel":"10.0","PowerScheme":"Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)","MemoryCompression":true}'
+export PS_STUB_OUT='{"CPUModel":"Test CPU","Cores":4,"Threads":8,"Arch":"x86_64","RAMTotalGB":16,"SwapTotalGB":2,"GPU":"NVIDIA \"RTX\" \\ 3070 (8 GB)","StorageType":"SSD","OSName":"Windows 11","Kernel":"10.0","PowerScheme":"Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)","MemoryCompression":true}'
 run_probe hardware-probe.sh --json > "$WORK/hw5.json"
+"$PY" -m json.tool "$WORK/hw5.json" > /dev/null || fail "hardware-probe JSON is invalid with quotes/backslashes in GPU"
+expect "$WORK/hw5.json" gpu '"NVIDIA \"RTX\" \\ 3070 (8 GB)"' "escaped quotes and backslashes in GPU"
 expect "$WORK/hw5.json" cpu.governor '"Balanced"' "canned hardware data"
 expect "$WORK/hw5.json" cpu.cores 8 "canned hardware data"
 expect "$WORK/hw5.json" recommended_concurrency 8 "canned hardware data"
-expect "$WORK/hw5.json" ram.tier '"high"' "canned hardware data"
+expect "$WORK/hw5.json" ram.tier '"medium"' "16 GB RAM tier (<= 16 GB is medium)"
 run_probe hardware-probe.sh > "$WORK/hw5.txt"
 if grep -q '^$' "$WORK/hw5.txt"; then fail "hardware-probe text output has an empty line"; fi
 grep -q 'Power/Governor: Balanced' "$WORK/hw5.txt" || fail "text output does not show the plan name"
-ok "power plan shows only its name; concurrency equals logical cores; no blank line in text output"
 
-# ---- case 6: system-probe shows only the power plan name (JSON and text)
-export PS_STUB_OUT='{"OS":"Windows 11 Pro (10.0, Build 22631)","Uptime":"0d 1h 2m","PowerScheme":"Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)","Volumes":"C: (NTFS, 10 GB free / 20 GB total)","TRIM":"Enabled (TRIM active)","ShortNames8dot3":"Disabled","MemoryCompression":true,"TcpAutoTuning":"normal","FastStartup":true,"StartupAppsCount":0,"StartupApps":"","StoppedAutoServicesCount":0,"StoppedAutoServices":""}'
+export PS_STUB_OUT='{"CPUModel":"Test CPU","Cores":8,"Threads":16,"Arch":"x86_64","RAMTotalGB":32,"SwapTotalGB":4,"GPU":"Test GPU","StorageType":"SSD","OSName":"Windows 11","Kernel":"10.0","PowerScheme":"Balanced","MemoryCompression":true}'
+run_probe hardware-probe.sh --json > "$WORK/hw5_high.json"
+expect "$WORK/hw5_high.json" ram.tier '"high"' "32 GB RAM tier (> 16 GB is high)"
+export PS_STUB_OUT='{"CPUModel":"Test CPU","Cores":2,"Threads":4,"Arch":"x86_64","RAMTotalGB":4,"SwapTotalGB":1,"GPU":"Test GPU","StorageType":"SSD","OSName":"Windows 11","Kernel":"10.0","PowerScheme":"Balanced","MemoryCompression":true}'
+run_probe hardware-probe.sh --json > "$WORK/hw5_low.json"
+expect "$WORK/hw5_low.json" ram.tier '"low"' "4 GB RAM tier (<= 4 GB is low)"
+ok "power plan shows only its name; RAM tiers match <=4 / <=16 / >16; quotes in GPU round-trip cleanly"
+
+# ---- case 6: system-probe shows only the power plan name and preserves quoted StartupApps in valid JSON
+export PS_STUB_OUT='{"OS":"Windows 11 Pro (10.0, Build 22631)","Uptime":"0d 1h 2m","PowerScheme":"Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)","Volumes":"C: (NTFS, 10 GB free / 20 GB total)","TRIM":"Enabled (TRIM active)","ShortNames8dot3":"Disabled","MemoryCompression":true,"TcpAutoTuning":"normal","FastStartup":true,"StartupAppsCount":1,"StartupApps":"App (\"C:\\\\Users\\\\x\\\\App.exe\")","StoppedAutoServicesCount":0,"StoppedAutoServices":""}'
 run_probe system-probe.sh --json > "$WORK/sys6.json"
+"$PY" -m json.tool "$WORK/sys6.json" > /dev/null || fail "system-probe JSON is invalid with quoted StartupApps path"
 expect "$WORK/sys6.json" PowerScheme '"Balanced"' "system-probe power plan"
 run_probe system-probe.sh > "$WORK/sys6.txt"
 grep -q 'Power Scheme: Balanced' "$WORK/sys6.txt" || fail "system-probe text does not show the plan name only: $(grep 'Power Scheme' "$WORK/sys6.txt")"
-ok "system-probe shows only the power plan name"
+ok "system-probe shows only the power plan name and keeps quoted StartupApps valid"
 
 # ---- case 7: PowerShell CRLF output and the target-inspect cpu power plan line
 export PS_STUB_OUT=$'Power Scheme GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (Balanced)\r\n'
@@ -179,10 +196,27 @@ run_probe target-inspect.sh edge > "$WORK/edge8.txt"
 grep -q '^Status: INSTALLED' "$WORK/edge8.txt" || fail "edge found by the registry is not reported as installed"
 if grep -q 'NOT FOUND IN PATH\|Winget package search' "$WORK/edge8.txt"; then fail "edge still falls into the package search"; fi
 no_cr "$WORK/edge8.txt" "edge"
+run_probe target-inspect.sh brave > "$WORK/brave8.txt"
+grep -q '^Status: INSTALLED' "$WORK/brave8.txt" || fail "brave found by the registry is not reported as installed"
+if grep -q 'NOT FOUND IN PATH\|Winget package search' "$WORK/brave8.txt"; then fail "brave fell into the package search"; fi
+no_cr "$WORK/brave8.txt" "brave"
+run_probe target-inspect.sh firefox > "$WORK/firefox8.txt"
+grep -q '^Status: INSTALLED' "$WORK/firefox8.txt" || fail "firefox found by the registry is not reported as installed"
+if grep -q 'NOT FOUND IN PATH\|Winget package search' "$WORK/firefox8.txt"; then fail "firefox fell into the package search"; fi
+no_cr "$WORK/firefox8.txt" "firefox"
 unset PS_STUB_OUT
-run_probe target-inspect.sh chrome > "$WORK/chrome8b.txt"
-grep -q '^Status: NOT INSTALLED' "$WORK/chrome8b.txt" || fail "chrome without a registry entry or data folder is not reported as not installed"
-ok "chrome and edge are inspected from the registry, installed or not"
+for b in chrome brave firefox; do
+  run_probe target-inspect.sh "$b" > "$WORK/${b}8b.txt"
+  grep -q '^Status: NOT INSTALLED' "$WORK/${b}8b.txt" || fail "$b without a registry entry or data folder is not reported as not installed"
+  if grep -q 'NOT FOUND IN PATH\|Winget package search' "$WORK/${b}8b.txt"; then fail "$b fell into the package search when uninstalled"; fi
+  no_cr "$WORK/${b}8b.txt" "$b-uninstalled"
+done
+for dom in system security; do
+  run_probe target-inspect.sh "$dom" > "$WORK/${dom}8.txt"
+  if grep -q 'NOT FOUND IN PATH\|Winget package search' "$WORK/${dom}8.txt"; then fail "$dom fell into the package search"; fi
+  no_cr "$WORK/${dom}8.txt" "$dom"
+done
+ok "chrome, edge, brave, firefox, system, and security are inspected natively without package-search fallthrough"
 
 export PS_STUB_OUT=$'Running\r\n'
 run_probe target-inspect.sh ssh > "$WORK/ssh8.txt"
@@ -228,10 +262,10 @@ run_probe target-inspect.sh chrome > /dev/null
 grep -q 'HKCU' "$WORK/ps-cmds.txt" || fail "chrome lookup does not try the per-user registry key"
 ok "chrome lookup tries the machine-wide and the per-user registry keys"
 
-# one browser target = one PowerShell call for the browser itself (plus the GPU lookup at the top)
+# one browser target = one PowerShell call (lazy GPU detection does not run unless mpv is inspected)
 launches=$(grep -c '^CALL ' "$WORK/ps-cmds.txt" || true)
-[[ "$launches" -le 2 ]] || fail "chrome target started PowerShell $launches times (expected at most 2)"
-ok "a browser target starts PowerShell at most twice"
+[[ "$launches" -eq 1 ]] || fail "chrome target started PowerShell $launches times (expected 1)"
+ok "a browser target starts PowerShell once (GPU lookup is lazy)"
 unset PS_STUB_LOG
 
 # wsl: a translated "no distribution" message with the Store link is not a distribution list, even at exit 0

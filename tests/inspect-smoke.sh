@@ -16,9 +16,10 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/home"
 
-targets="bash bat btop cargo controld defender eza fd full fzf gh git herdr htop kde-plasma lazydocker lazygit
-mise mpv neovim pacman pi podman powertoys pwsh ripgrep rustdesk security sqlite3 starship storage syncthing system topgrade
-windows-terminal winget wsl yay yt-dlp zoxide network chrome edge python"
+targets="bash bat brave btop cargo chrome controld defender edge eza fd firefox full fzf gh git herdr htop kde-plasma lazydocker lazygit
+mise mpv neovim network pacman pi podman powertoys pwsh python ripgrep rustdesk security sqlite3 starship storage syncthing system topgrade
+windows-terminal winget wsl yay yt-dlp zoxide"
+domain_and_browser_targets=" system security full storage network defender chrome edge brave firefox "
 failed=0; count=0
 for t in $targets; do
   count=$((count + 1))
@@ -26,6 +27,9 @@ for t in $targets; do
   if [[ "$rc" -ne 0 || -s "$WORK/err" ]]; then
     failed=$((failed + 1))
     echo "FAIL - target '$t': exit $rc, stderr: $(head -n 2 "$WORK/err" | cut -c1-200)" >&2
+  elif [[ "$domain_and_browser_targets" == *" $t "* ]] && grep -q 'Status: NOT FOUND IN PATH' "$WORK/out"; then
+    failed=$((failed + 1))
+    echo "FAIL - target '$t' fell through to generic NOT FOUND IN PATH" >&2
   fi
 done
 
@@ -33,7 +37,7 @@ if [[ "$failed" -ne 0 ]]; then
   echo "inspect-smoke: $failed of $count targets failed" >&2
   exit 1
 fi
-echo "ok   - all $count targets run to the end without errors"
+echo "ok   - all $count targets run to the end without errors or domain fallthrough"
 
 # Neovim + Mise synergy checks: verify target-inspect.sh neovim detects LazyVim v15 issues and Mason lock state
 mkdir -p "$WORK/home/.config/nvim/lua/plugins" "$WORK/home/.config/nvim/lua/config" "$WORK/bin"
@@ -249,4 +253,21 @@ empty_home="$WORK/empty"; mkdir -p "$empty_home"
 out="$(env -i PATH="$PATH" HOME="$empty_home" LANG=C bash "$ROOT/scripts/target-inspect.sh" eza)"
 [[ "$out" == *"no startup file found (files they source"* ]] || { echo "FAIL - eza not-found message is glued together" >&2; exit 1; }
 echo "ok   - not-found messages name the files read; git booleans are normalised"
+
+# starship command_timeout must be an integer (500), never 500ms
+if grep -rnF 'command_timeout = 500ms' "$ROOT/scripts" "$ROOT/references" "$ROOT/SKILL.md" "$ROOT/README.md" >&2; then
+  echo "FAIL - starship command_timeout uses '500ms' instead of integer 500" >&2
+  exit 1
+fi
+# ripgrep accepts fd in FZF_DEFAULT_COMMAND; gh respects git credential.helper
+printf '#!/usr/bin/env bash\necho "ripgrep 14.1.0"\n' > "$WORK/bin/rg"
+printf '#!/usr/bin/env bash\necho "gh version 2.60.0"\n' > "$WORK/bin/gh"
+chmod +x "$WORK/bin/rg" "$WORK/bin/gh"
+rg_out="$(env -i PATH="$WORK/bin:$PATH" HOME="$WORK/home" FZF_DEFAULT_COMMAND="fd --type f" LANG=C bash "$ROOT/scripts/target-inspect.sh" ripgrep)"
+[[ "$rg_out" == *"FZF Backend: [CONFIGURED] (fd is active in FZF_DEFAULT_COMMAND; rg serves content search)"* ]] || { echo "FAIL - ripgrep did not recognize fd in FZF_DEFAULT_COMMAND" >&2; exit 1; }
+printf '[credential]\n\thelper = manager\n' > "$WORK/home/.gitconfig"
+gh_out="$(env -i PATH="$WORK/bin:$PATH" HOME="$WORK/home" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$WORK/home/.gitconfig" LANG=C bash "$ROOT/scripts/target-inspect.sh" gh)"
+[[ "$gh_out" == *"Git Credential Helper: [CONFIGURED]"* ]] || { echo "FAIL - gh ignored configured git credential.helper" >&2; exit 1; }
+rm -f "$WORK/home/.gitconfig"
+echo "ok   - starship integer timeout, ripgrep+fd synergy, and gh+git credential helper verified"
 echo "inspect-smoke: $count targets passed"

@@ -20,7 +20,7 @@ This reference guide provides engineering heuristics, hardening standards, upstr
 - **Low RAM (<= 4GB)**:
   - Keep application worker pools bounded strictly to logical thread count.
   - Enforce strict per-process memory limits (e.g. Git `pack.windowMemory = 256m`, `pack.packSizeLimit = 512m`).
-  - *Windows*: Enable Memory Compression (`Enable-MMAgent -mc`) to compress idle pages in RAM instead of incurring disk paging latency.
+  - *Windows*: Enable Memory Compression (`Enable-MMAgent -mc` — *elevated PowerShell; provide command for user to run per Safety Contract #4*) to compress idle pages in RAM instead of incurring disk paging latency.
   - *Linux*: Enable `zram-generator` with `zstd` algorithm and `vm.swappiness = 150-180`.
   - Bound WSL2 VM memory strictly to 1.5GB-2GB in `~/.wslconfig`.
 - **Medium RAM (4GB - 16GB)**:
@@ -34,8 +34,8 @@ This reference guide provides engineering heuristics, hardening standards, upstr
 ### Storage & Filesystem
 - **Windows (NTFS / NVMe / SSD)**:
   - *TRIM Verification*: Ensure `fsutil behavior query DisableDeleteNotify` returns `0` (TRIM operations enabled for SSDs).
-  - *Periodic Optimization*: Run weekly volume re-trim via PowerShell (`Optimize-Volume -DriveLetter C -ReTrim -Verbose`).
-  - *NTFS 8.3 Short Names*: Disable 8.3 name generation on secondary data volumes (`fsutil 8dot3name set D: 1`) to eliminate directory enumeration overhead on large repositories (e.g. `node_modules`).
+  - *Periodic Optimization*: Run weekly volume re-trim via elevated PowerShell (`Optimize-Volume -DriveLetter C -ReTrim -Verbose` — *user-run admin command*).
+  - *NTFS 8.3 Short Names*: Disable 8.3 name generation on secondary data volumes (`fsutil 8dot3name set D: 1` — *user-run admin command*) to eliminate directory enumeration overhead on large repositories (e.g. `node_modules`).
   - *WSL Disk Compaction*: Set `sparseVhd = true` in `~/.wslconfig` so Windows automatically reclaims unallocated space from `ext4.vhdx` when files are deleted inside WSL.
 - **Linux (Ext4 / Btrfs / NVMe / SSD)**:
   - *Mount Flags*: Ensure `noatime` is enabled to eliminate write overhead on file reads.
@@ -94,7 +94,7 @@ The skill NEVER hardcodes theme palettes (such as Tokyo Night or Catppuccin). In
 ### Windows Security Hardening
 - **Windows Defender Antivirus & Exploit Guard**:
   - Verify Real-Time Protection and Antivirus engine are active (`Get-MpComputerStatus`).
-  - *PUA Protection*: Enable Potentially Unwanted Application blocking via `Set-MpPreference -PUAProtection 1` (blocks adware, coinminers, browser hijackers).
+  - *PUA Protection*: Enable Potentially Unwanted Application blocking via `Set-MpPreference -PUAProtection 1` *(elevated PowerShell; provide command for user to run per Safety Contract #4 — blocks adware, coinminers, browser hijackers)*.
   - *Developer Exclusions*: To prevent Windows Defender from locking up CPU threads during intensive compilation, add process or folder exclusions for local workspace build artifacts (`node_modules`, `target`, `.git`), while keeping system-wide file scanning active.
 - **Windows Defender Firewall**:
   - Verify all three profiles (`Domain`, `Private`, `Public`) are enabled (`Get-NetFirewallProfile`).
@@ -642,7 +642,7 @@ The integration between Neovim and Mise establishes a unified, reproducible deve
   - *Performance*: Set `--paging=never` when used as a sub-pager for lazygit or git diff; pre-cache themes with `bat cache --build`.
   - *Configuration*: Synchronize `--theme` with the inferred terminal/editor theme (or prompt user), set `--style="numbers,changes,header"`.
 - **`fzf` Tuning (`FZF_DEFAULT_COMMAND`, `FZF_DEFAULT_OPTS`)**:
-  - *Performance*: Set `FZF_DEFAULT_COMMAND='fd --type f --hidden --exclude .git'` for multithreaded directory traversal.
+  - *Performance*: Set `FZF_DEFAULT_COMMAND` to multithreaded `fd --type f --hidden --exclude .git` or `rg --files --hidden --glob '!.git/*'`.
   - *Configuration*: Set layout to reverse, border, preview window using bat with line preview limits (`--preview 'bat --color=always --line-range :300 {}'`).
   - *Security*: Exclude sensitive files (`.git/`, `.env*`, `id_rsa*`) from the default search index.
 
@@ -751,7 +751,7 @@ The integration between Neovim and Mise establishes a unified, reproducible deve
 
 - **Triad Tuning**:
   - *Performance*:
-    - Set `command_timeout = 500ms`.
+    - Set `command_timeout = 500` (integer milliseconds in `starship.toml`).
     - Disable redundant per-language modules (`[nodejs]`, `[python]`, `[rust]`, `[golang]`). In traditional setups, each active language module spawns a separate binary (`node --version`, `python --version`) through shims on every prompt draw.
     - Enable the native `[mise]` module, which queries the current environment directly in a single pass.
     - Enable `env_cache = true` with `env_cache_ttl = "1h"` in `mise/config.toml` to guarantee sub-millisecond directory transitions.
@@ -849,7 +849,7 @@ The integration between Neovim and Mise establishes a unified, reproducible deve
 | Synergy Pair / Trio | Architectural Benefit & Triad Rationale | Configuration Integration Pattern |
 |---|---|---|
 | **`lazygit` + `neovim` + `bat`** | Configure lazygit to use `nvim --server` / remote tab editing to prevent nested editor spawns, and configure pager: `"bat --color=always --style=changes"` for fast syntax-highlighted diffs without extra pager dependencies. | In `lazygit/config.yml`: set `os.editCommand: nvim`, `os.editCommandTemplate: '{{editor}} --server "$NVIM" --remote-tab "{{filename}}"'` (or `editPreset: 'nvim-remote'`), and `git.paging.pager: "bat --color=always --style=changes"`. |
-| **`ripgrep` + `fzf` + `bat`** | Wire `rg` as the backend search generator for fzf (`FZF_DEFAULT_COMMAND`), with `bat` rendering line-numbered, syntax-highlighted previews for files and code hits. | Export `FZF_DEFAULT_COMMAND='rg --files --hidden --glob "!.git/*"'` and `FZF_DEFAULT_OPTS="--preview 'bat --style=numbers --color=always --line-range :500 {}'"`. |
+| **`ripgrep` / `fd` + `fzf` + `bat`** | Wire `rg` or `fd` as the backend file generator for fzf (`FZF_DEFAULT_COMMAND`), with `bat` rendering line-numbered, syntax-highlighted previews for files and code hits. | Export `FZF_DEFAULT_COMMAND='rg --files --hidden --glob "!.git/*"'` (or `fd --type f --hidden --exclude .git`) and `FZF_DEFAULT_OPTS="--preview 'bat --style=numbers --color=always --line-range :500 {}'"`. |
 | **`mpv` + `yt-dlp` + GPU HWDEC** | Stream web video directly to mpv via yt-dlp, using native hardware decoding (`nvdec-copy` on NVIDIA RTX, `vaapi` on Intel/AMD, `d3d11va` on Windows) and D3D11/Vulkan color management, bypassing heavy browser CPU/RAM consumption. | In `mpv.conf`: `vo=gpu-next`, `hwdec=nvdec-copy` (or `vaapi`/`d3d11va`), `ytdl-format="bestvideo[height<=?1080]+bestaudio/best"`, `target-colorspace-hint=yes`. |
 | **`winget` + `wsl` + `windows-terminal`** | Align WinGet download concurrency, WSL2 mirrored networking / memory bounding (`autoMemoryReclaim=dropcache`), and Windows Terminal Atlas GPU text rendering. | In `settings.json`: `useAtlasEngine=true`; in `.wslconfig`: `networkingMode=mirrored`, `autoMemoryReclaim=dropcache`, `sparseVhd=true`, `memory=4GB`/`8GB`; in WinGet: `downloader=default`, `source.autoUpdateIntervalInMinutes=120`. |
 | **`gh` + `git` + `lazygit`** | Register GitHub CLI as the Git credential helper to eliminate token prompts, and integrate PR/issue reviews directly within the terminal UI. | Run `gh auth setup-git` to register `gh auth git-credential` with Git; configure `git.paging.pager: "bat --color=always --style=plain"`; configure LazyGit custom commands for PR checkouts. |
@@ -1073,13 +1073,13 @@ system-optimizer full
 
 1. **Tier 1: System Core & OS Baseline**:
    - NVMe/SSD TRIM verification (`fsutil DisableDeleteNotify = 0`), volume health checks, and 8.3 short name deactivation on secondary data drives.
-   - Memory Compression activation (`Enable-MMAgent -mc` or zram) to prevent SSD paging lockups.
+   - Memory Compression activation (`Enable-MMAgent -mc` in user-run elevated PowerShell, or Linux zram) to prevent SSD paging lockups.
    - Power plan alignment (`powercfg`) ensuring maximum responsiveness on AC.
    - Startup application audit (pruning unneeded background updaters and telemetry daemons).
 
 2. **Tier 2: System Security Hardening**:
    - Windows Defender Firewall profile enforcement (Domain/Private/Public active with default BlockInbound).
-   - Antivirus & Exploit Guard hardening: Enable Potentially Unwanted Application (PUA) Protection (`Set-MpPreference -PUAProtection 1`).
+   - Antivirus & Exploit Guard hardening: Enable Potentially Unwanted Application (PUA) Protection (`Set-MpPreference -PUAProtection 1` — user-run elevated PowerShell).
    - PowerShell script execution hardening: Enforce `ExecutionPolicy RemoteSigned` for `CurrentUser`.
    - Package manager supply chain security: Enforce `winget` hash verification and malware scan overrides remaining disabled.
 
@@ -1100,8 +1100,8 @@ system-optimizer full
    - **`ripgrep` (`rg`)**: Configure `RIPGREP_CONFIG_PATH` with threads dynamically aligned to detected CPU logical cores (`--threads=$(nproc)`), `--smart-case`, `--max-columns=300` preview, `--mmap` for NVMe SSDs, and global ignore globs (`!.git`, `!node_modules`, `!target`).
    - **`zoxide`**: Configure fast directory jumping (`z`, `zi`), set `_ZO_EXCLUDE_DIRS` for system/temp roots, initialize shell hooks in `$PROFILE` and `.bashrc`, and prune stale directories.
    - **`eza`**: Define standard ergonomic aliases in `pwsh` and `bash` (`ls`, `ll`, `la`, `lt`) with icons and header, binding git status strictly to detailed listings to avoid recursive tree slowdowns.
-   - **`bat` & `fzf`**: Set `FZF_DEFAULT_COMMAND` to multithreaded `fd --type f --hidden --exclude .git`, configure `bat` syntax pager with inferred terminal theme or user-selected palette.
-   - **`starship`**: Configure `command_timeout = 500ms`, enable native `[mise]` module for zero-latency polyglot runtime indication, disable slow per-language subshell version modules (`nodejs`, `python`, `rust`, `golang`), and pre-cache prompt evaluation in `bash` and `pwsh`.
+   - **`bat` & `fzf`**: Set `FZF_DEFAULT_COMMAND` to multithreaded `fd --type f --hidden --exclude .git` (or `rg --files --hidden --glob '!.git/*'`), configure `bat` syntax pager with inferred terminal theme or user-selected palette.
+   - **`starship`**: Configure `command_timeout = 500` (integer milliseconds), enable native `[mise]` module for zero-latency polyglot runtime indication, disable slow per-language subshell version modules (`nodejs`, `python`, `rust`, `golang`), and pre-cache prompt evaluation in `bash` and `pwsh`.
    - **`git`**: Configure `core.fscache = true`, `core.preloadIndex = true`, `core.untrackedCache = true`, `diff.algorithm = histogram`, `push.autoSetupRemote = true`, and Git Credential Manager (`credential.helper = manager`).
    - **`mpv` & `yt-dlp`**: Configure `vo=gpu-next`, `gpu-api=d3d11` (or `vulkan`), hardware decoding tailored to detected GPU (`hwdec=nvdec-copy` on NVIDIA RTX, `d3d11va`/`vaapi` on AMD/Intel), native HDR passthrough (`target-colorspace-hint=yes`), BT.2446a tone-mapping, and multithreaded fragment downloads in yt-dlp.
    - **`pi`**: Enforce `auth.json` 0600 permissions, configure session file archiving (>30d), compaction token reserve tuning (`16384`), tool access boundaries, and ensure `mise` shims (`~/.local/share/mise/shims` or `%LOCALAPPDATA%\mise\shims`) are active in agent execution environments to prevent non-interactive "command not found" errors.
