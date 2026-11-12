@@ -15,8 +15,8 @@ if [[ "${1:-}" == "--json" ]]; then
   output_json=true
 fi
 
-local_app_data="${LOCALAPPDATA:-$HOME/AppData/Local}"
-roaming_app_data="${APPDATA:-$HOME/AppData/Roaming}"
+local_app_data="$(win_path_unix "${LOCALAPPDATA:-$HOME/AppData/Local}")"
+roaming_app_data="$(win_path_unix "${APPDATA:-$HOME/AppData/Roaming}")"
 
 if is_windows; then
   # 1. Available Package Managers on Windows
@@ -45,9 +45,9 @@ if is_windows; then
 
   # 6. Developer Tools & CLI Utilities on Windows
   dev_cli_candidates=(
-    "pwsh" "powershell" "windows-terminal" "wsl" "powertoys" "pi" "bash" "topgrade" "git"
-    "neovim" "nvim" "starship" "bat" "fzf" "ripgrep" "rg" "fd" "eza" "lsd" "lazygit"
-    "ffmpeg" "mpv" "yt-dlp" "syncthing" "rustdesk" "controld" "ctrld" "zoxide" "sqlite3" "herdr" "gh"
+    "pwsh" "powershell" "powertoys" "pi" "bash" "topgrade" "git"
+    "neovim" "nvim" "starship" "bat" "fzf" "ripgrep" "rg" "fd" "eza" "lsd" "lazygit" "lazydocker"
+    "ffmpeg" "mpv" "yt-dlp" "btop" "btop4win" "syncthing" "rustdesk" "controld" "ctrld" "zoxide" "sqlite3" "herdr" "gh"
   )
 else
   # Linux Package Managers
@@ -78,7 +78,7 @@ else
   # Linux Developer Tools & CLI Utilities
   dev_cli_candidates=(
     "pi" "bash" "topgrade" "git" "neovim" "nvim" "starship" "bat" "fzf" "ripgrep" "rg" "fd"
-    "eza" "lsd" "yazi" "ranger" "broot" "delta" "lazygit" "lazydocker"
+    "eza" "lsd" "zoxide" "yazi" "ranger" "broot" "delta" "lazygit" "lazydocker"
     "ffmpeg" "mpv" "yt-dlp" "btop" "htop" "syncthing" "sqlite3" "zstd" "pigz"
     "rustdesk" "controld" "ctrld" "herdr" "gh"
   )
@@ -97,6 +97,7 @@ canonical_name() {
     plasmashell|kwin_wayland|kwin_x11) echo "kde-plasma" ;;
     mise-en-place|rtx) echo "mise" ;;
     github-cli|gh) echo "gh" ;;
+    btop4win) echo "btop" ;;
     *) echo "$t" ;;
   esac
 }
@@ -132,6 +133,9 @@ is_target_present() {
         ;;
       firefox)
         [[ -d "$roaming_app_data/Mozilla/Firefox" ]] && return 0
+        ;;
+      librewolf)
+        [[ -d "$roaming_app_data/librewolf" || -d "/c/Program Files/LibreWolf" ]] && return 0
         ;;
       powertoys)
         [[ -d "$local_app_data/Microsoft/PowerToys" || -d "/c/Program Files/PowerToys" ]] && return 0

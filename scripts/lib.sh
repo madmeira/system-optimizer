@@ -89,3 +89,55 @@ python_ok() {
   out="$("$1" --version 2>&1 || true)"
   [[ "$out" =~ ^Python[[:space:]][0-9] ]]
 }
+
+# Normalize a Windows path to POSIX slashes when cygpath is available (Git Bash / MSYS2) so
+# path comparisons against $PATH and string concatenations do not mix backslashes and slashes.
+win_path_unix() {
+  local p="$1"
+  if [[ -z "$p" ]]; then
+    return
+  fi
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -u "$p" 2>/dev/null || printf '%s' "${p//\\//}"
+  else
+    printf '%s' "${p//\\//}"
+  fi
+}
+
+# Extract a string, number, or boolean field from single-line JSON (such as PowerShell ConvertTo-Json -Compress)
+# while properly handling escaped quotes (\") and backslashes (\\). Prints default ($3, or "unknown") when absent/null.
+ps_json_str() {
+  local json="$1" key="$2" default="${3:-unknown}" raw
+  raw=$(printf '%s' "$json" | grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*\"(\\\\.|[^\"\\\\])*\"" | head -n 1 || true)
+  if [[ -z "$raw" ]]; then
+    printf '%s' "$default"
+    return
+  fi
+  raw=$(printf '%s' "$raw" | sed -E "s/^\"${key}\"[[:space:]]*:[[:space:]]*\"//; s/\"$//")
+  printf '%s' "$raw" | awk '{
+    out = ""
+    for (i = 1; i <= length($0); i++) {
+      c = substr($0, i, 1)
+      if (c == "\\" && i < length($0)) {
+        i++; n = substr($0, i, 1)
+        if (n == "n" || n == "r" || n == "t") out = out " "
+        else out = out n
+      } else {
+        out = out c
+      }
+    }
+    printf "%s", out
+  }'
+}
+
+ps_json_num() {
+  local json="$1" key="$2" default="${3:-unknown}" raw
+  raw=$(printf '%s' "$json" | grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*-?[0-9]+([.][0-9]+)?" | head -n 1 | sed -E 's/^[^:]+:[[:space:]]*//' || true)
+  printf '%s' "${raw:-$default}"
+}
+
+ps_json_bool() {
+  local json="$1" key="$2" default="${3:-unknown}" raw
+  raw=$(printf '%s' "$json" | grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*(true|false)" | head -n 1 | grep -oE '(true|false)$' || true)
+  printf '%s' "${raw:-$default}"
+}

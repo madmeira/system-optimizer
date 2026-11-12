@@ -17,24 +17,34 @@ if [[ -z "$target" ]]; then
   exit 1
 fi
 
-local_app_data="${LOCALAPPDATA:-$HOME/AppData/Local}"
-roaming_app_data="${APPDATA:-$HOME/AppData/Roaming}"
+local_app_data="$(win_path_unix "${LOCALAPPDATA:-$HOME/AppData/Local}")"
+roaming_app_data="$(win_path_unix "${APPDATA:-$HOME/AppData/Roaming}")"
 
-# Dynamic hardware detection (cached across multi-target batch runs via env)
+# Dynamic hardware detection (threads fast at startup; GPU lazy — only queried by targets like mpv)
 detected_threads="${_SO_DETECTED_THREADS:-$(nproc 2>/dev/null || echo "${NUMBER_OF_PROCESSORS:-4}")}"
-if [[ -n "${_SO_DETECTED_GPU+x}" ]]; then
-  detected_gpu="$_SO_DETECTED_GPU"
-elif is_windows; then
-  detected_gpu=$(run_ps '(@(Get-CimInstance Win32_VideoController | Where-Object { $_.AdapterRAM -gt 0 -or ($_.Name -notmatch "Virtual|Remote|Basic") }) | Select-Object -First 1 -ExpandProperty Name) 2>$null' 2>/dev/null || echo "")
-elif command -v lspci >/dev/null 2>&1; then
-  detected_gpu=$(lspci 2>/dev/null | grep -Ei "vga|3d|display" | head -n 1 | sed 's/.*: //' || echo "")
-else
-  detected_gpu=""
-fi
+get_detected_gpu() {
+  if [[ -n "${_SO_DETECTED_GPU+x}" ]]; then
+    printf '%s\n' "$_SO_DETECTED_GPU"
+    return 0
+  fi
+  local gpu=""
+  if is_windows; then
+    gpu=$(run_ps '
+      $gpus = @(Get-CimInstance Win32_VideoController | Where-Object { $_.Name -and ($_.AdapterRAM -gt 0 -or $_.Name -notmatch "Virtual|Remote|Basic") })
+      $dgpu = @($gpus | Where-Object { $_.Name -match "NVIDIA|GeForce|RTX|GTX|Quadro|Radeon RX|Arc " })
+      if ($dgpu.Count -gt 0) { $dgpu[0].Name.Trim() }
+      elseif ($gpus.Count -gt 0) { ($gpus | ForEach-Object { $_.Name.Trim() }) -join "; " }
+      else { "" }
+    ' 2>/dev/null || echo "")
+  elif command -v lspci >/dev/null 2>&1; then
+    gpu=$(lspci 2>/dev/null | grep -Ei "vga|3d|display" | sed 's/.*: //' | tr '\n' ';' | sed 's/;$/\n/; s/;/; /g' || echo "")
+  fi
+  export _SO_DETECTED_GPU="$gpu"
+  printf '%s\n' "$gpu"
+}
 
 if [[ $# -gt 1 ]]; then
   export _SO_DETECTED_THREADS="$detected_threads"
-  export _SO_DETECTED_GPU="$detected_gpu"
   batch_rc=0
   for batch_target in "$@"; do
     # One failing target must not hide the rest, and must not pass silently.
@@ -165,7 +175,7 @@ browser_report_win() {
   fi
   if [[ -d "$data" ]]; then
     profiles=$(find "$data" -maxdepth 1 -type d \( -name Default -o -name 'Profile *' \) 2>/dev/null | wc -l || true)
-    echo "User Data: ${data//\//\\}"
+    echo "User Data: $data"
     echo "Profiles: $profiles"
   fi
   echo "Managed Policies: ${managed:-unknown}"
@@ -302,19 +312,27 @@ case "$target" in
         $os = Get-CimInstance Win32_OperatingSystem
         $pf = Get-CimInstance Win32_PageFileUsage | Measure-Object -Property AllocatedBaseSize -Sum
         $mm = try { (Get-MMAgent -ErrorAction SilentlyContinue).MemoryCompression } catch { $null }
-        [PSCustomObject]@{
-          RAMTotalGB = [math]::Round($os.TotalVisibleMemorySize / 1MB, 2)
-          RAMFreeGB = [math]::Round($os.FreePhysicalMemory / 1MB, 2)
-          PagefileGB = if ($pf.Sum) { [math]::Round($pf.Sum / 1KB, 2) } else { 0 }
-          MemCompression = if ($null -ne $mm) { [bool]$mm } else { $true }
-        } | ConvertTo-Json -Compress
+        $inv = [Globalization.CultureInfo]::InvariantCulture
+        if ($os) { ([math]::Round($os.TotalVisibleMemorySize / 1MB, 2)).ToString($inv) } else { "unknown" }
+        if ($os) { ([math]::Round($os.FreePhysicalMemory / 1MB, 2)).ToString($inv) } else { "unknown" }
+        if ($null -ne $pf -and $null -ne $pf.Sum) { ([math]::Round($pf.Sum / 1KB, 2)).ToString($inv) } else { if ($os) { "0" } else { "unknown" } }
+        if ($null -ne $mm) { ([string][bool]$mm).ToLower() } else { "unknown" }
       ' 2>/dev/null || true)
-      ram_tot=$(echo "$mem_info" | grep -oE '"RAMTotalGB":[0-9.]+' | cut -d: -f2 || echo "16.0")
-      ram_free=$(echo "$mem_info" | grep -oE '"RAMFreeGB":[0-9.]+' | cut -d: -f2 || echo "8.0")
-      page_file=$(echo "$mem_info" | grep -oE '"PagefileGB":[0-9.]+' | cut -d: -f2 || echo "16.0")
-      mem_comp=$(echo "$mem_info" | grep -oE '"MemCompression":(true|false)' | cut -d: -f2 || echo "true")
-      echo "Total Physical RAM: ${ram_tot} GiB (${ram_free} GiB free)"
-      echo "Paging File (Allocated): ${page_file} GiB"
+      { read -r ram_tot; read -r ram_free; read -r page_file; read -r mem_comp; } <<< "$mem_info" || true
+      ram_tot="${ram_tot:-unknown}"
+      ram_free="${ram_free:-unknown}"
+      page_file="${page_file:-unknown}"
+      mem_comp="${mem_comp:-unknown}"
+      if [[ "$ram_tot" == "unknown" ]]; then
+        echo "Total Physical RAM: unknown"
+      else
+        echo "Total Physical RAM: ${ram_tot} GiB (${ram_free} GiB free)"
+      fi
+      if [[ "$page_file" == "unknown" ]]; then
+        echo "Paging File (Allocated): unknown"
+      else
+        echo "Paging File (Allocated): ${page_file} GiB"
+      fi
       echo "Windows Memory Compression: $mem_comp"
       echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
       echo "  * Performance: Enable-MMAgent -mc (compressed in-RAM paging, eliminates SSD paging stalls)"
@@ -375,8 +393,9 @@ case "$target" in
       ' 2>/dev/null || echo "unknown")
       fast_boot=$(run_ps '
         $hb = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power" -Name HiberbootEnabled -ErrorAction SilentlyContinue).HiberbootEnabled
-        if ($null -ne $hb) { [bool]$hb } else { $true }
-      ' 2>/dev/null || echo "true")
+        if ($null -ne $hb) { ([string][bool]$hb).ToLower() } else { "unknown" }
+      ' 2>/dev/null || echo "unknown")
+      fast_boot="${fast_boot:-unknown}"
       echo "System Uptime: $uptime_str"
       echo "Fast Startup (Hiberboot): $fast_boot"
       echo "Startup Applications:"
@@ -451,12 +470,25 @@ case "$target" in
       for f in /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf ~/.ssh/config; do
         [[ -f "$f" ]] && echo "  - [EXISTS] $f"
       done
+      sshd_t=""
       if command -v sshd >/dev/null 2>&1; then
         sshd_t=$(sshd -T 2>/dev/null || true)
-        if [[ -n "$sshd_t" ]]; then
-          echo "Effective SSH Settings:"
-          echo "  * PermitRootLogin: $(echo "$sshd_t" | grep -i '^permitrootlogin' | awk '{print $2}')"
-          echo "  * PasswordAuthentication: $(echo "$sshd_t" | grep -i '^passwordauthentication' | awk '{print $2}')"
+      fi
+      if [[ -n "$sshd_t" ]]; then
+        echo "Effective SSH Settings:"
+        echo "  * PermitRootLogin: $(echo "$sshd_t" | grep -i '^permitrootlogin' | awk '{print $2}')"
+        echo "  * PasswordAuthentication: $(echo "$sshd_t" | grep -i '^passwordauthentication' | awk '{print $2}')"
+      else
+        ssh_files=()
+        for sf in /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config; do
+          [[ -r "$sf" ]] && ssh_files+=("$sf")
+        done
+        if [[ ${#ssh_files[@]} -gt 0 ]]; then
+          prl=$(grep -hEi '^[[:space:]]*PermitRootLogin[[:space:]]+' "${ssh_files[@]}" 2>/dev/null | head -n 1 | awk '{print tolower($2)}' || true)
+          pwa=$(grep -hEi '^[[:space:]]*PasswordAuthentication[[:space:]]+' "${ssh_files[@]}" 2>/dev/null | head -n 1 | awk '{print tolower($2)}' || true)
+          echo "Configured SSH Settings (config fallback):"
+          echo "  * PermitRootLogin: ${prl:-default (not explicitly set)}"
+          echo "  * PasswordAuthentication: ${pwa:-default (not explicitly set)}"
         fi
       fi
       echo "Permissions of ~/.ssh directory: $(stat -c '%a' "$HOME/.ssh" 2>/dev/null || echo absent)"
@@ -717,10 +749,15 @@ case "$target" in
     fi
 
     echo "Security & Hygiene Checks:"
-    if [[ "$PATH" =~ (^|:)\.($|:) || "$PATH" =~ :: ]]; then
+    if [[ "$PATH" =~ (^|:)\.($|:) || "$PATH" =~ (^:|::|:$) ]]; then
       echo "  * [WARNING] PATH contains relative '.' or empty entry! High security risk for binary hijacking."
     else
       echo "  * PATH Sanitation: OK (No relative or empty directories)"
+    fi
+    if [[ -f "$HOME/.bashrc" ]]; then
+      echo "Active .bashrc Ergonomics & Integrations:"
+      echo "  * HISTCONTROL: $(grep -E '^[[:space:]]*(export[[:space:]]+)?HISTCONTROL=' "$HOME/.bashrc" 2>/dev/null | tail -n 1 || echo 'unset')"
+      echo "  * Shell Hooks: $(grep -oE '(mise activate|starship init|zoxide init|fzf --bash)' "$HOME/.bashrc" 2>/dev/null | sort -u | tr '\n' ' ' || echo 'none detected')"
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
@@ -893,6 +930,7 @@ case "$target" in
       echo "  * Media Streamer (yt-dlp): [NOT FOUND] (Install yt-dlp to stream web video directly to mpv)"
     fi
 
+    detected_gpu="$(get_detected_gpu)"
     hwdec_choice="hwdec=auto-safe"
     vo_choice="vo=gpu-next, gpu-api=d3d11 (Windows) or vulkan (Linux)"
     if [[ "$detected_gpu" =~ (NVIDIA|GeForce|RTX|GTX) ]]; then
@@ -1153,10 +1191,12 @@ case "$target" in
       [[ -f "$f" ]] && echo "  - [EXISTS] $f"
     done
     echo "Ripgrep + FZF + Bat Synergy Integration:"
-    if [[ "${FZF_DEFAULT_COMMAND:-}" =~ (rg|ripgrep) ]]; then
+    if [[ "${FZF_DEFAULT_COMMAND:-}" =~ (^|[^A-Za-z0-9_])(rg|ripgrep)([^A-Za-z0-9_]|$) ]]; then
       echo "  * FZF Backend: [WIRED] (rg is active search generator in FZF_DEFAULT_COMMAND)"
+    elif [[ "${FZF_DEFAULT_COMMAND:-}" =~ (^|[^A-Za-z0-9_])(fd|fdfind)([^A-Za-z0-9_]|$) ]]; then
+      echo "  * FZF Backend: [CONFIGURED] (fd is active in FZF_DEFAULT_COMMAND; rg serves content search)"
     else
-      echo "  * FZF Backend: [RECOMMENDED] (Wire rg as backend: export FZF_DEFAULT_COMMAND=\"rg --files --hidden --glob '!.git/*'\")"
+      echo "  * FZF Backend: [RECOMMENDED] (Wire rg or fd as backend: export FZF_DEFAULT_COMMAND=\"rg --files --hidden --glob '!.git/*'\")"
     fi
     bat_bin=$(command -v bat 2>/dev/null || echo "")
     if [[ -n "$bat_bin" ]]; then
@@ -1575,7 +1615,7 @@ case "$target" in
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Set command_timeout = 500ms; enable native [mise] module and disable redundant language modules ([nodejs], [python], [rust]) to eliminate 50-200ms subshell prompt lag; ensure mise env_cache = true"
+    echo "  * Performance: Set command_timeout = 500 (integer ms); enable native [mise] module and disable redundant language modules ([nodejs], [python], [rust]) to eliminate 50-200ms subshell prompt lag; ensure mise env_cache = true"
     echo "  * Configuration: Clean minimal prompt layout, directory truncation length 3, consistent Nerd Font symbols"
     echo "  * Security: Avoid untrusted custom command execution in prompt modules ([custom.*]); restrict starship.toml permissions to 0600"
     echo "====================================="
@@ -1707,8 +1747,7 @@ case "$target" in
     done
     for f in "$roaming_app_data/GitHub CLI/hosts.yml" "$HOME/.config/gh/hosts.yml"; do
       if [[ -f "$f" ]]; then
-        perms=$(stat -c "%a" "$f" 2>/dev/null || stat -f "%Lp" "$f" 2>/dev/null || echo "unknown")
-        echo "  - [EXISTS] $f (Permissions: $perms)"
+        echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
         [[ -z "$gh_hosts" ]] && gh_hosts="$f"
       fi
     done
@@ -1738,11 +1777,16 @@ case "$target" in
 
     echo "Workstation & Cross-Tool Synergies:"
     if command -v git >/dev/null 2>&1; then
-      gh_cred_helper=$(git config --get-regexp '^credential\..*helper' 2>/dev/null | grep -i "gh auth git-credential" || true)
-      if [[ -n "$gh_cred_helper" ]]; then
-        echo "  * Git Credential Helper: [CONFIGURED] (Transparent GitHub authentication for Git & LazyGit)"
+      git_creds=$(git config --get-regexp '^credential\..*helper' 2>/dev/null || true)
+      gh_proto=$(gh config get git_protocol 2>/dev/null || echo "")
+      if echo "$git_creds" | grep -qi "gh auth git-credential"; then
+        echo "  * Git Credential Helper: [CONFIGURED] (Transparent GitHub authentication via gh auth git-credential)"
+      elif echo "$git_creds" | grep -qiE "manager|osxkeychain|libsecret"; then
+        echo "  * Git Credential Helper: [CONFIGURED] (System Git Credential Manager active; 'gh auth setup-git' optional)"
+      elif [[ "$gh_proto" == "ssh" ]]; then
+        echo "  * Git Credential Helper: [OK] (git_protocol=ssh uses SSH keys; 'gh auth setup-git' only needed for HTTPS remotes)"
       else
-        echo "  * Git Credential Helper: [NOT CONFIGURED] (Run 'gh auth setup-git' to eliminate token/password prompts in git & lazygit)"
+        echo "  * Git Credential Helper: [NOT CONFIGURED] (Run 'gh auth setup-git' to eliminate token/password prompts for HTTPS remotes)"
       fi
     fi
     gh_pager=$(gh config get pager 2>/dev/null || echo "")
@@ -1762,7 +1806,7 @@ case "$target" in
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Configure pager = 'bat --color=always --style=plain' for zero-latency syntax diff reviews; leverage gh --json queries in scripts"
     echo "  * Configuration: Set git_protocol = 'ssh'; run 'gh auth setup-git' for seamless git & lazygit credentials; configure PR workflow aliases (co, pv)"
-    echo "  * Security: Restrict ~/.config/gh/hosts.yml permissions to 0600; enforce least-privilege token scopes; audit third-party extensions before installing"
+    echo "  * Security: Restrict ~/.config/gh/hosts.yml permissions to 0600 on Linux/WSL (NTFS ACLs on Windows); enforce least-privilege token scopes; audit third-party extensions before installing"
     echo "====================================="
     exit 0
     ;;
@@ -1819,47 +1863,151 @@ case "$target" in
     echo "====================================="
     exit 0
     ;;
+  brave|brave-browser|brave-bin)
+    echo "Category: Web Browser / Brave Browser"
+    if is_windows; then
+      browser_report_win brave.exe "$local_app_data/BraveSoftware/Brave-Browser/User Data" 'HKLM:\SOFTWARE\Policies\BraveSoftware\Brave'
+    else
+      browser_report_linux "$(command -v brave-browser || command -v brave || true)"
+      browser_policy_linux /etc/brave/policies/managed
+      [[ -f "$HOME/.config/brave-flags.conf" ]] && echo "Launch Flags: [EXISTS] $HOME/.config/brave-flags.conf$(cfg_perm_tag "$HOME/.config/brave-flags.conf")"
+    fi
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
+    echo "  * Performance: Hardware acceleration on; enable Memory Saver; trim unused startup extensions"
+    echo "  * Configuration: Separate profiles per context; sync only needed data types"
+    echo "  * Security: Brave Shields tracker/fingerprinting protection active, Safe Browsing on, auto-update on, audit extensions"
+    echo "====================================="
+    exit 0
+    ;;
+  firefox|mozilla-firefox|librewolf)
+    if [[ "$target" == "librewolf" ]]; then
+      echo "Category: Web Browser / LibreWolf"
+      ff_app="librewolf.exe"
+      ff_win_profiles="$roaming_app_data/librewolf/Profiles"
+      ff_policy_key='HKLM:\SOFTWARE\Policies\LibreWolf'
+    else
+      echo "Category: Web Browser / Mozilla Firefox"
+      ff_app="firefox.exe"
+      ff_win_profiles="$roaming_app_data/Mozilla/Firefox/Profiles"
+      ff_policy_key='HKLM:\SOFTWARE\Policies\Mozilla\Firefox'
+    fi
+    if is_windows; then
+      ff_info=$(SO_APP="$ff_app" SO_KEY="$ff_policy_key" run_ps '
+        $p = ""
+        foreach ($r in "HKLM","HKCU") {
+          $v = (Get-ItemProperty "${r}:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\$env:SO_APP" -ErrorAction SilentlyContinue)."(default)"
+          if ($v) { $p = $v; break }
+        }
+        if (-not $p) {
+          foreach ($cand in @("$env:ProgramFiles\Mozilla Firefox\firefox.exe", "${env:ProgramFiles(x86)}\Mozilla Firefox\firefox.exe", "$env:LOCALAPPDATA\Mozilla Firefox\firefox.exe", "$env:ProgramFiles\LibreWolf\librewolf.exe")) {
+            if ($cand -and (Test-Path -LiteralPath $cand)) { $p = $cand; break }
+          }
+        }
+        $p
+        if ($p) { (Get-Item -LiteralPath $p).VersionInfo.ProductVersion } else { "" }
+        $polFile = if ($p) { Join-Path (Split-Path -Parent $p) "distribution\policies.json" } else { "" }
+        ((Test-Path -Path $env:SO_KEY) -or ([bool]$polFile -and (Test-Path -LiteralPath $polFile)))
+      ' 2>/dev/null || true)
+      { read -r ff_exe; read -r ff_ver; read -r ff_managed; } <<< "$ff_info" || true
+      if [[ -n "${ff_exe:-}" ]]; then
+        echo "Status: INSTALLED"
+        echo "Executable: $ff_exe"
+        echo "Version: ${ff_ver:-unknown}"
+      elif [[ -d "$ff_win_profiles" ]]; then
+        echo "Status: user data found, executable not located"
+      else
+        echo "Status: NOT INSTALLED"
+      fi
+      if [[ -d "$ff_win_profiles" ]]; then
+        ff_prof_count=$(find "$ff_win_profiles" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ' || true)
+        echo "Profiles Directory: $ff_win_profiles"
+        echo "Profiles: ${ff_prof_count:-0}"
+      fi
+      echo "Managed Policies: ${ff_managed:-unknown}"
+    else
+      if [[ "$target" == "librewolf" ]]; then
+        browser_report_linux "$(command -v librewolf || true)"
+        browser_policy_linux /etc/librewolf/policies /usr/lib/librewolf/distribution
+        ff_linux_dir="$HOME/.librewolf"
+      else
+        browser_report_linux "$(command -v firefox || true)"
+        browser_policy_linux /etc/firefox/policies /usr/lib/firefox/distribution
+        ff_linux_dir="$HOME/.mozilla/firefox"
+      fi
+      if [[ -d "$ff_linux_dir" ]]; then
+        ff_prof_count=$(find "$ff_linux_dir" -mindepth 1 -maxdepth 1 -type d -name '*.*' 2>/dev/null | wc -l | tr -d ' ' || true)
+        echo "Profiles Directory: $ff_linux_dir ($ff_prof_count profile dir(s))"
+      fi
+    fi
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
+    echo "  * Performance: Hardware WebRender compositing & VA-API/D3D11 video decode enabled; auto-unload inactive tabs on low/medium RAM"
+    echo "  * Configuration: Manage reproducible preferences via profile user.js; keep separate profiles per workflow"
+    echo "  * Security: Enable HTTPS-Only Mode, Enhanced Tracking Protection (Strict), DNS-over-HTTPS, and audit extensions"
+    echo "====================================="
+    exit 0
+    ;;
+  system|os)
+    echo "Category: System Meta-Target / Host Hardware & OS Baseline"
+    script_dir="$(dirname "${BASH_SOURCE[0]}")"
+    bash "$script_dir/hardware-probe.sh"
+    echo ""
+    bash "$script_dir/system-probe.sh"
+    echo "====================================="
+    exit 0
+    ;;
+  security|hardening|audit)
+    echo "Category: Security Meta-Target / Defensive Posture Audit"
+    script_dir="$(dirname "${BASH_SOURCE[0]}")"
+    bash "$script_dir/security-audit.sh"
+    echo "====================================="
+    exit 0
+    ;;
+  full|all)
+    echo "Category: System Meta-Target / Full Workstation Inspection Sweep"
+    script_dir="$(dirname "${BASH_SOURCE[0]}")"
+    bash "$script_dir/hardware-probe.sh"
+    echo ""
+    bash "$script_dir/system-probe.sh"
+    echo ""
+    bash "$script_dir/security-audit.sh"
+    echo ""
+    bash "$script_dir/detect-targets.sh"
+    echo "====================================="
+    exit 0
+    ;;
 esac
 
 # 2. Package / Tool Handling
+case "$target" in
+  pacman|yay|paru|makepkg|pacman-contrib) echo "Category: Package Manager / Arch Linux Package & Build Stack" ;;
+  kde|kde-plasma|baloo) echo "Category: Desktop Environment / KDE Plasma & KWin" ;;
+  podman|lazydocker) echo "Category: Containers / Rootless Podman & Lazydocker" ;;
+  fd|fdfind) echo "Category: Search Utility / fd File Finder" ;;
+  btop|htop|btop4win) echo "Category: System Monitor / Resource & Process Viewer" ;;
+  syncthing) echo "Category: File Synchronization / Syncthing" ;;
+  python|python3) echo "Category: Language Runtime / Python" ;;
+  sqlite3) echo "Category: Database CLI / SQLite3" ;;
+  *) echo "Category: Package / Tool ($target)" ;;
+esac
+
 binary_lookup="$target"
 case "$target" in
-  neovim) binary_lookup="nvim" ;;
-  ripgrep) binary_lookup="rg" ;;
-  windows-terminal) binary_lookup="wt" ;;
   kde|kde-plasma) binary_lookup="plasmashell" ;;
   baloo) binary_lookup="balooctl6" ;;
   pacman-contrib) binary_lookup="paccache" ;;
-  brave|brave-bin) binary_lookup="brave" ;;
-  google-chrome) binary_lookup="google-chrome-stable" ;;
+  fd) binary_lookup="fdfind" ;;
+  btop) binary_lookup="btop4win" ;;
 esac
 
-bin_path=$(command -v "$binary_lookup" 2>/dev/null || command -v "$target" 2>/dev/null || echo "")
+bin_path=$(command -v "$target" 2>/dev/null || command -v "$binary_lookup" 2>/dev/null || echo "")
 
 if [[ -z "$bin_path" ]]; then
   echo "Status: NOT FOUND IN PATH"
   echo "Checking common installation locations..."
   if is_windows; then
-    case "$target" in
-      windows-terminal|wt)
-        echo "Windows Terminal is packaged under: $local_app_data/Packages/Microsoft.WindowsTerminal_*"
-        ;;
-      brave)
-        [[ -d "$local_app_data/BraveSoftware" ]] && echo "Found Brave User Data: $local_app_data/BraveSoftware"
-        ;;
-      chrome)
-        [[ -d "$local_app_data/Google/Chrome" ]] && echo "Found Google Chrome: $local_app_data/Google/Chrome"
-        ;;
-      edge)
-        [[ -d "$local_app_data/Microsoft/Edge" ]] && echo "Found Microsoft Edge: $local_app_data/Microsoft/Edge"
-        ;;
-      powertoys)
-        [[ -d "$local_app_data/Microsoft/PowerToys" ]] && echo "Found PowerToys Data: $local_app_data/Microsoft/PowerToys"
-        ;;
-    esac
     if command -v winget >/dev/null 2>&1; then
       echo "Winget package search for '$target':"
-      winget search "$target" 2>/dev/null | head -n 5 || true
+      winget search --count 5 --accept-source-agreements "$target" 2>/dev/null | tr -d '\r' | head -n 8 || true
     fi
   else
     if command -v pacman >/dev/null 2>&1; then
@@ -1888,7 +2036,7 @@ echo "Binary Path: $bin_path"
 
 version="unknown"
 for flag in "--version" "-V" "-v" "version"; do
-  if ver_out=$("$bin_path" $flag 2>/dev/null | tr -d '\0' | head -n 1); then
+  if ver_out=$("$bin_path" $flag 2>/dev/null | tr -d '\0\r' | head -n 1); then
     if [[ -n "$ver_out" ]]; then
       version="$ver_out"
       break
@@ -1922,62 +2070,23 @@ config_candidates=(
 
 # Tool-specific known paths
 case "$target" in
-  topgrade)
-    config_candidates+=("$roaming_app_data/topgrade.toml" "$HOME/.config/topgrade.toml")
-    ;;
-  mpv|yt-dlp)
-    config_candidates+=("$roaming_app_data/mpv/mpv.conf" "$HOME/.config/mpv/mpv.conf" "$roaming_app_data/yt-dlp/config" "$HOME/.config/yt-dlp/config")
-    ;;
-  neovim|nvim)
-    config_candidates+=("$local_app_data/nvim/init.lua" "$local_app_data/nvim" "$HOME/.config/nvim/init.lua")
-    ;;
-  starship)
-    config_candidates+=("$HOME/.config/starship.toml" "$roaming_app_data/starship.toml")
-    ;;
-  git)
-    config_candidates+=("$HOME/.gitconfig" "$HOME/.config/git/config" "/etc/gitconfig" "/c/ProgramData/Git/config")
-    ;;
-  cargo|rust|rustc)
-    config_candidates+=("$HOME/.cargo/config.toml")
-    ;;
-  mise|rtx)
-    config_candidates+=("$HOME/.config/mise/config.toml" "$HOME/.config/mise/settings.toml" "$local_app_data/mise/config.toml" "$roaming_app_data/mise/config.toml")
-    ;;
-  bat)
-    config_candidates+=("$roaming_app_data/bat/config" "$HOME/.config/bat/config")
-    ;;
-  lazygit)
-    config_candidates+=("$roaming_app_data/lazygit/config.yml" "$HOME/.config/lazygit/config.yml")
-    ;;
-  herdr)
-    config_candidates+=("$roaming_app_data/herdr/config.toml" "$HOME/.config/herdr/config.toml")
-    ;;
-  gh|github-cli)
-    config_candidates+=("$roaming_app_data/GitHub CLI/config.yml" "$HOME/.config/gh/config.yml" "$HOME/.config/gh/hosts.yml")
-    ;;
-  brave|brave-bin)
-    config_candidates+=("$local_app_data/BraveSoftware/Brave-Browser" "$HOME/.config/brave-flags.conf")
-    ;;
   pacman|yay|paru|makepkg)
     config_candidates+=("/etc/pacman.conf" "/etc/makepkg.conf" "$HOME/.config/yay/config.json")
     ;;
   kde|kde-plasma)
     config_candidates+=("$HOME/.config/kdeglobals" "$HOME/.config/kwinrc" "$HOME/.config/baloofilerc")
     ;;
-  bash)
-    config_candidates+=("$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile")
-    ;;
   podman|lazydocker)
-    config_candidates+=("$HOME/.config/containers/containers.conf" "$HOME/.config/containers/registries.conf" "$HOME/.config/containers/storage.conf" "$HOME/.config/lazydocker/config.yml")
+    config_candidates+=("$HOME/.config/containers/containers.conf" "$HOME/.config/containers/registries.conf" "$HOME/.config/containers/storage.conf" "$HOME/.config/lazydocker/config.yml" "$roaming_app_data/lazydocker/config.yml")
     ;;
-  fd)
-    config_candidates+=("$HOME/.config/fd/ignore" "$HOME/.config/fd/config")
+  fd|fdfind)
+    config_candidates+=("$HOME/.config/fd/ignore" "$HOME/.config/fd/config" "$roaming_app_data/fd/ignore")
     ;;
-  btop|htop)
-    config_candidates+=("$HOME/.config/btop/btop.conf" "$HOME/.config/htop/htoprc")
+  btop|htop|btop4win)
+    config_candidates+=("$HOME/.config/btop/btop.conf" "$HOME/.config/htop/htoprc" "$local_app_data/btop/btop.conf")
     ;;
   syncthing)
-    config_candidates+=("$HOME/.local/state/syncthing/config.xml" "$HOME/.config/syncthing/config.xml")
+    config_candidates+=("$HOME/.local/state/syncthing/config.xml" "$HOME/.config/syncthing/config.xml" "$local_app_data/Syncthing/config.xml")
     ;;
   sqlite3)
     config_candidates+=("$HOME/.sqliterc")
@@ -2004,7 +2113,7 @@ fi
 case "$target" in
   python|python3)
     echo "Active Python Environment:"
-    py_ext=$("$bin_path" -c 'import os, sysconfig; print(os.path.exists(os.path.join(sysconfig.get_path("stdlib"), "EXTERNALLY-MANAGED")))' 2>/dev/null || echo unknown)
+    py_ext=$("$bin_path" -c 'import os, sysconfig; print(os.path.exists(os.path.join(sysconfig.get_path("stdlib"), "EXTERNALLY-MANAGED")))' 2>/dev/null | tr -d '\r' || echo unknown)
     case "$py_ext" in
       True)  echo "  * System pip protected (EXTERNALLY-MANAGED): [OK]" ;;
       False) echo "  * System pip protected (EXTERNALLY-MANAGED): [NOTE] this Python has no marker, so pip can change it (fine for pyenv or a virtualenv; otherwise use venv, uv or pipx)" ;;
@@ -2041,13 +2150,6 @@ case "$target" in
       echo "  * Baloo Indexing-Enabled: $(grep -E '^Indexing-Enabled=' "$HOME/.config/baloofilerc" 2>/dev/null | cut -d= -f2 || echo 'default (true)')"
     fi
     ;;
-  bash)
-    if [[ -f "$HOME/.bashrc" ]]; then
-      echo "Active .bashrc Ergonomics & Integrations:"
-      echo "  * HISTCONTROL: $(grep -E '^[[:space:]]*(export[[:space:]]+)?HISTCONTROL=' "$HOME/.bashrc" 2>/dev/null | tail -n 1 || echo 'unset')"
-      echo "  * Mise / Starship / Zoxide / FZF: $(grep -oE '(mise activate|starship init|zoxide init|fzf --bash)' "$HOME/.bashrc" 2>/dev/null | sort -u | tr '\n' ' ' || echo 'none detected')"
-    fi
-    ;;
   podman|lazydocker)
     if [[ -f "$HOME/.config/containers/containers.conf" ]]; then
       echo "Active Rootless Podman Limits:"
@@ -2057,6 +2159,7 @@ case "$target" in
   syncthing)
     st_cfg="$HOME/.local/state/syncthing/config.xml"
     [[ ! -f "$st_cfg" ]] && st_cfg="$HOME/.config/syncthing/config.xml"
+    [[ ! -f "$st_cfg" ]] && st_cfg="$local_app_data/Syncthing/config.xml"
     if [[ -f "$st_cfg" ]]; then
       echo "Active Syncthing GUI & Relay Settings:"
       echo "  * GUI Listen Address: $(grep -A 4 '<gui ' "$st_cfg" 2>/dev/null | grep -oE '<address>[^<]+</address>' | sed -E 's/<\/?address>//g' || echo 'unknown')"
@@ -2067,21 +2170,6 @@ esac
 # Tool Security & Hardening Check
 echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
 case "$target" in
-  topgrade)
-    echo "  * Performance: Parallel tool steps where supported, align [mise] jobs with CPU threads (nproc), enable cleanup = true (runs mise prune)"
-    echo "  * Configuration: Coordinated step list (winget, wsl, pacman, mise), [mise] bump = true, 'mise reshim' in post_commands"
-    echo "  * Security: Restrict untrusted shell hooks, run mise steps without sudo (allow_root = false), verify package manager signatures"
-    ;;
-  mise|rtx)
-    echo "  * Performance: Match jobs with CPU threads (nproc); env_cache = true with 1h TTL; cargo.binstall = true"
-    echo "  * Configuration: Set pin = true; configure cache_prune_age = '7d'; integrate with topgrade ([mise] bump = true, cleanup = true, mise reshim)"
-    echo "  * Security: Aqua SLSA/cosign verification; GitHub attestations; node.verify; restrict config permissions (0600)"
-    ;;
-  cargo|rust|rustc)
-    echo "  * Performance: Match build.jobs = \$(nproc 2>/dev/null || echo 4); ensure protocol = 'sparse'; enable net.git-fetch-with-cli = true; prefer mise cargo.binstall"
-    echo "  * Configuration: Disable 'cargo' in topgrade.toml (disable = ['cargo']) when managing CLIs via mise to eliminate from-source rebuilds"
-    echo "  * Security: Cargo audit supply-chain scanning, enforce Cargo.lock checksums, restrict ~/.cargo/config.toml permissions (0600)"
-    ;;
   pacman|yay|paru|makepkg)
     echo "  * Performance: Set ParallelDownloads = 5 in /etc/pacman.conf; set MAKEFLAGS=\"-j${detected_threads}\" in /etc/makepkg.conf; use zstd -T0 compression"
     echo "  * Configuration: Enable Color, ILoveCandy, VerbosePkgLists; enable paccache.timer for automated cache pruning; set yay cleanAfter = true"
@@ -2092,22 +2180,17 @@ case "$target" in
     echo "  * Configuration: Wayland session with adaptive TearFree compositing; consistent dark color scheme"
     echo "  * Security: KScreenLocker lock-on-resume enabled; restrict KWallet and ~/.config permissions"
     ;;
-  bash)
-    echo "  * Performance: Fast non-blocking prompt & directory jump hooks (mise activate, starship init, zoxide init, fzf --bash)"
-    echo "  * Configuration: Set HISTCONTROL=ignoreboth:erasedups, shopt -s histappend, bounded HISTSIZE/HISTFILESIZE, eza/bat aliases"
-    echo "  * Security: Enforce 0600 on ~/.bashrc and ~/.bash_history; scrub tokens from history"
-    ;;
   podman|lazydocker)
     echo "  * Performance: Use crun lightweight OCI runtime, bound log_size_max (10MB), native overlayfs storage driver"
     echo "  * Configuration: Pair rootless podman socket with lazydocker TUI; prune dangling images periodically"
     echo "  * Security: Rootless container execution, enforce pids_limit (2048), restrict containers.conf permissions to 0600"
     ;;
-  fd)
+  fd|fdfind)
     echo "  * Performance: Bound worker threads (-j${detected_threads}); exclude heavy build/cache trees (.git, node_modules, target, .venv)"
     echo "  * Configuration: Shared ignore patterns in ~/.config/fd/ignore paired with ripgrep and fzf"
     echo "  * Security: Enforce 0600 on ~/.config/fd/ignore"
     ;;
-  btop|htop)
+  btop|htop|btop4win)
     echo "  * Performance: Set update_ms = 2000 (btop) / delay = 15 (htop) to minimize monitor CPU overhead on low-core hosts"
     echo "  * Configuration: Show CPU frequency/temperature, per-core graphs, and zram/swap usage; unify theme (tokyo-night)"
     echo "  * Security: Run unprivileged without CAP_SYS_PTRACE/sudo unless inspecting root processes; enforce 0600 on config"
@@ -2122,30 +2205,10 @@ case "$target" in
     echo "  * Configuration: Set .headers on and .mode box in ~/.sqliterc for readable interactive queries"
     echo "  * Security: Enforce 0600 on ~/.sqliterc; avoid loading untrusted SQLite extensions"
     ;;
-  yt-dlp)
-    echo "  * Performance: Stream web video directly to mpv via yt-dlp, bypassing heavy browser CPU/RAM consumption"
-    echo "  * Configuration: Bound ytdl-format to 1080p/best; integrate ffmpeg; concurrent fragment downloads (--concurrent-fragments=4)"
-    echo "  * Security: Sanitize output filenames; avoid executing untrusted remote postprocessors"
-    ;;
-  git)
-    echo "  * Security: safe.directory configuration, Windows credential manager integration"
-    echo "  * Performance: core.fscache = true, core.preloadIndex = true, core.untrackedCache = true, pack memory bounds"
-    echo "  * Configuration: diff pager (bat/delta), diff algorithm (histogram), push.autoSetupRemote"
-    ;;
-  neovim|nvim)
-    echo "  * Performance: Byte-compiled lua loader (vim.loader.enable()), deferred plugin loading"
-    echo "  * Configuration: Ergonomic keymaps, LSP integration via mise, clipboard provider"
-    echo "  * Security: Modelines disabled (nomodeline), secure workspace trust plugins"
-    ;;
-  starship)
-    echo "  * Performance: Command timeout = 500ms, enable native [mise] module, disable slow per-language modules ([nodejs], [python], [rust])"
-    echo "  * Configuration: Clean minimal preset, Git branch status symbols, shell prompt caching in bash/pwsh"
-    echo "  * Security: Avoid executing external network queries in custom prompt modules, enforce 0600 on starship.toml"
-    ;;
-  gh|github-cli)
-    echo "  * Performance: Use fast bat pager for PR diff reviews; lean API queries via --json; batch extension updates in topgrade"
-    echo "  * Configuration: Set git_protocol = 'ssh'; run 'gh auth setup-git'; configure aliases for PR workflows (co, pv)"
-    echo "  * Security: Enforce 0600 on hosts.yml; least-privilege token scopes; audit installed extensions"
+  python|python3)
+    echo "  * Performance: Prefer uv for fast dependency resolution and virtualenv creation; enable bytecode compilation on install"
+    echo "  * Configuration: Isolate project dependencies per virtualenv/uv environment; keep global Python clean"
+    echo "  * Security: Respect EXTERNALLY-MANAGED system Python protection; pin dependencies with hashes in lockfiles"
     ;;
   *)
     echo "  * Security: Least privilege, minimal network exposure, file permissions"

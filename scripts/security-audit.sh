@@ -42,14 +42,14 @@ if is_windows; then
     } | ConvertTo-Json -Compress
   ' 2>/dev/null || true)
 
-  fw_summary=$(echo "$ps_sec" | grep -oE '"FirewallSummary":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
-  fw_all_active=$(echo "$ps_sec" | grep -oE '"FirewallAllActive":(true|false)' | cut -d: -f2 || echo "unknown")
-  realtime_prot=$(echo "$ps_sec" | grep -oE '"RealTimeProtection":(true|false)' | cut -d: -f2 || echo "unknown")
-  av_enabled=$(echo "$ps_sec" | grep -oE '"AntivirusEnabled":(true|false)' | cut -d: -f2 || echo "unknown")
-  pua_prot=$(echo "$ps_sec" | grep -oE '"PUAProtection":[0-9]+' | cut -d: -f2 || echo "unknown")
-  uac_enabled=$(echo "$ps_sec" | grep -oE '"UACEnabled":(true|false)' | cut -d: -f2 || echo "unknown")
-  exec_policy=$(echo "$ps_sec" | grep -oE '"ExecutionPolicy":"[^"]+"' | cut -d: -f2 | tr -d '"' || echo "unknown")
-  sshd_status=$(echo "$ps_sec" | grep -oE '"SSHDService":"[^"]+"' | cut -d: -f2 | tr -d '"' || echo "unknown")
+  fw_summary=$(ps_json_str "$ps_sec" "FirewallSummary" "unknown")
+  fw_all_active=$(ps_json_bool "$ps_sec" "FirewallAllActive" "unknown")
+  realtime_prot=$(ps_json_bool "$ps_sec" "RealTimeProtection" "unknown")
+  av_enabled=$(ps_json_bool "$ps_sec" "AntivirusEnabled" "unknown")
+  pua_prot=$(ps_json_num "$ps_sec" "PUAProtection" "unknown")
+  uac_enabled=$(ps_json_bool "$ps_sec" "UACEnabled" "unknown")
+  exec_policy=$(ps_json_str "$ps_sec" "ExecutionPolicy" "unknown")
+  sshd_status=$(ps_json_str "$ps_sec" "SSHDService" "unknown")
 
   # Network Exposure (listening TCP ports)
   listening_tcp=()
@@ -220,6 +220,21 @@ if command -v sshd >/dev/null 2>&1; then
   if [[ -n "$sshd_test" ]]; then
     ssh_root_login=$(echo "$sshd_test" | grep -i "^permitrootlogin" | awk '{print $2}' || echo "unknown")
     ssh_pass_auth=$(echo "$sshd_test" | grep -i "^passwordauthentication" | awk '{print $2}' || echo "unknown")
+  else
+    # Unprivileged fallback when host keys prevent sshd -T: inspect readable sshd_config(.d) in OpenSSH first-match order
+    sshd_cfg_files=()
+    if [[ -d /etc/ssh/sshd_config.d ]]; then
+      for cf in /etc/ssh/sshd_config.d/*.conf; do
+        [[ -r "$cf" ]] && sshd_cfg_files+=("$cf")
+      done
+    fi
+    [[ -r /etc/ssh/sshd_config ]] && sshd_cfg_files+=("/etc/ssh/sshd_config")
+    if [[ ${#sshd_cfg_files[@]} -gt 0 ]]; then
+      rl_val=$(awk 'tolower($1) == "permitrootlogin" { print $2; exit }' "${sshd_cfg_files[@]}" 2>/dev/null || true)
+      pa_val=$(awk 'tolower($1) == "passwordauthentication" { print $2; exit }' "${sshd_cfg_files[@]}" 2>/dev/null || true)
+      [[ -n "$rl_val" ]] && ssh_root_login="$rl_val"
+      [[ -n "$pa_val" ]] && ssh_pass_auth="$pa_val"
+    fi
   fi
 fi
 
@@ -258,8 +273,21 @@ if [[ -d "$HOME/.ssh" ]]; then
 fi
 
 pacman_siglevel="unknown"
+pkg_sig_ok=false
 if [[ -f /etc/pacman.conf ]]; then
-  pacman_siglevel=$(grep -E "^[[:space:]]*SigLevel" /etc/pacman.conf 2>/dev/null | head -n 1 | sed 's/.*=[ \t]*//' || echo "default")
+  pacman_siglevel=$(grep -E "^[[:space:]]*SigLevel[[:space:]]*=" /etc/pacman.conf 2>/dev/null | head -n 1 | sed 's/.*=[ \t]*//' || true)
+  [[ -z "$pacman_siglevel" ]] && pacman_siglevel="default"
+  [[ "$pacman_siglevel" != "Never" ]] && pkg_sig_ok=true
+elif [[ -d /etc/apt ]]; then
+  pacman_siglevel="n/a (APT)"
+  if ! grep -RqiE 'AllowUnauthenticated[[:space:]]+"true"' /etc/apt/apt.conf /etc/apt/apt.conf.d 2>/dev/null; then
+    pkg_sig_ok=true
+  fi
+elif [[ -r /etc/dnf/dnf.conf ]]; then
+  pacman_siglevel="n/a (DNF)"
+  if grep -Eqi '^[[:space:]]*gpgcheck[[:space:]]*=[[:space:]]*(1|true|yes)' /etc/dnf/dnf.conf 2>/dev/null; then
+    pkg_sig_ok=true
+  fi
 fi
 
 keyring_timer_active=$(first_line_or inactive systemctl is-active archlinux-keyring-wkd-sync.timer)
@@ -290,7 +318,7 @@ total_flags=6
 [[ "$dmesg_restrict" == "1" ]] && ((score_flags++)) || true
 [[ "$prot_hardlinks" == "1" && "$prot_symlinks" == "1" ]] && ((score_flags++)) || true
 [[ "$ssh_dir_perms" == "700" || "$ssh_dir_perms" == "absent" ]] && ((score_flags++)) || true
-[[ "$pacman_siglevel" != "Never" ]] && ((score_flags++)) || true
+[[ "$pkg_sig_ok" == true ]] && ((score_flags++)) || true
 
 if [[ "$output_json" == true ]]; then
   cat <<EOF

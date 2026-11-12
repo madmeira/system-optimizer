@@ -73,19 +73,19 @@ if is_windows; then
       echo '{"error": "powershell unavailable or returned no data"}'
     fi
   else
-    os_info=$(echo "$ps_data" | grep -oE '"OS":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
-    uptime_info=$(echo "$ps_data" | grep -oE '"Uptime":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
-    power_info=$(echo "$ps_data" | grep -oE '"PowerScheme":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
-    vols_info=$(echo "$ps_data" | grep -oE '"Volumes":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
-    trim_info=$(echo "$ps_data" | grep -oE '"TRIM":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
-    sn_info=$(echo "$ps_data" | grep -oE '"ShortNames8dot3":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
-    mc_info=$(echo "$ps_data" | grep -oE '"MemoryCompression":(true|false)' | cut -d: -f2 || echo "unknown")
-    tcp_info=$(echo "$ps_data" | grep -oE '"TcpAutoTuning":"[^"]+"' | cut -d: -f2- | tr -d '"' || echo "unknown")
-    fast_info=$(echo "$ps_data" | grep -oE '"FastStartup":(true|false)' | cut -d: -f2 || echo "unknown")
-    startup_count=$(echo "$ps_data" | grep -oE '"StartupAppsCount":[0-9]+' | cut -d: -f2 || echo "unknown")
-    startup_list=$(echo "$ps_data" | grep -oE '"StartupApps":"[^"]*"' | cut -d: -f2- | tr -d '"' || echo "unknown")
-    stopped_count=$(echo "$ps_data" | grep -oE '"StoppedAutoServicesCount":[0-9]+' | cut -d: -f2 || echo "unknown")
-    stopped_list=$(echo "$ps_data" | grep -oE '"StoppedAutoServices":"[^"]*"' | cut -d: -f2- | tr -d '"' || echo "unknown")
+    os_info=$(ps_json_str "$ps_data" "OS" "unknown")
+    uptime_info=$(ps_json_str "$ps_data" "Uptime" "unknown")
+    power_info=$(ps_json_str "$ps_data" "PowerScheme" "unknown")
+    vols_info=$(ps_json_str "$ps_data" "Volumes" "unknown")
+    trim_info=$(ps_json_str "$ps_data" "TRIM" "unknown")
+    sn_info=$(ps_json_str "$ps_data" "ShortNames8dot3" "unknown")
+    mc_info=$(ps_json_bool "$ps_data" "MemoryCompression" "unknown")
+    tcp_info=$(ps_json_str "$ps_data" "TcpAutoTuning" "unknown")
+    fast_info=$(ps_json_bool "$ps_data" "FastStartup" "unknown")
+    startup_count=$(ps_json_num "$ps_data" "StartupAppsCount" "unknown")
+    startup_list=$(ps_json_str "$ps_data" "StartupApps" "unknown")
+    stopped_count=$(ps_json_num "$ps_data" "StoppedAutoServicesCount" "unknown")
+    stopped_list=$(ps_json_str "$ps_data" "StoppedAutoServices" "unknown")
 
     cat <<EOF
 === System Configuration & Performance Probe (Windows) ===
