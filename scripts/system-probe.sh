@@ -22,7 +22,7 @@ if is_windows; then
     $power = try { (powercfg /getactivescheme 2>$null | Out-String).Trim() } catch { $null }
     $trimNtfs = try {
       $out = cmd.exe /c "fsutil behavior query DisableDeleteNotify 2>&1"
-      if ($out -match "NTFS DisableDeleteNotify = 0") { "Enabled (TRIM active)" } elseif ($out -match "DisableDeleteNotify") { "Disabled" } else { "unknown" }
+      if ($out -match "(?im)^(NTFS\s+)?DisableDeleteNotify\s*=\s*0\b") { "Enabled (TRIM active)" } elseif ($out -match "(?im)^(NTFS\s+)?DisableDeleteNotify\s*=\s*1\b") { "Disabled" } else { "unknown" }
     } catch { "unknown" }
     # registry values and cmdlets, not the translated text of command-line tools
     $shortNames = try {
@@ -112,7 +112,7 @@ fi
 
 # Linux System Probing
 os_name="Unknown"
-[[ -f /etc/os-release ]] && os_name=$(grep -E "^PRETTY_NAME=" /etc/os-release | cut -d= -f2 | tr -d '"')
+[[ -f /etc/os-release ]] && os_name=$(grep -E "^PRETTY_NAME=" /etc/os-release 2>/dev/null | cut -d= -f2- | tr -d '"' || echo "Linux")
 kernel_ver=$(uname -r)
 
 governor=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "not available")
@@ -129,8 +129,8 @@ if command -v systemd-detect-virt >/dev/null 2>&1; then
   fi
 fi
 
-root_source=$(df --output=source / 2>/dev/null | tail -1 || echo "")
-root_fstype=$(df --output=fstype / 2>/dev/null | tail -1 || echo "")
+root_source=$(LC_ALL=C df --output=source / 2>/dev/null | tail -1 || echo "")
+root_fstype=$(LC_ALL=C df --output=fstype / 2>/dev/null | tail -1 || echo "")
 mount_options=$(findmnt -n -o OPTIONS / 2>/dev/null || echo "defaults")
 fstrim_active=$(first_line_or inactive systemctl is-active fstrim.timer)
 fstrim_enabled=$(first_line_or disabled systemctl is-enabled fstrim.timer)
@@ -149,14 +149,14 @@ qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo "unknown")
 
 boot_time="unknown"
 if command -v systemd-analyze >/dev/null 2>&1; then
-  boot_time=$(systemd-analyze 2>/dev/null | head -n 1 || echo "unknown")
+  boot_time=$(LC_ALL=C systemd-analyze 2>/dev/null | head -n 1 || echo "unknown")
 fi
 
 slow_units=()
 if command -v systemd-analyze >/dev/null 2>&1; then
   while IFS= read -r line; do
     [[ -n "$line" ]] && slow_units+=("$line")
-  done < <(systemd-analyze blame 2>/dev/null | head -n 5 || true)
+  done < <(LC_ALL=C systemd-analyze blame 2>/dev/null | head -n 5 || true)
 fi
 
 failed_units=()
@@ -164,7 +164,7 @@ while IFS= read -r line; do
   [[ -n "$line" ]] && failed_units+=("$line")
 done < <(systemctl --failed --no-legend 2>/dev/null | awk '{print $1}' || true)
 
-journal_size=$(journalctl --disk-usage 2>/dev/null | grep -oE "[0-9]+(\.[0-9]+)?[KMGT]?" | head -n 1 || echo "unknown")
+journal_size=$(LC_ALL=C journalctl --disk-usage 2>/dev/null | grep -oE "[0-9]+(\.[0-9]+)?[KMGT]?" | head -n 1 || echo "unknown")
 
 if [[ "$output_json" == true ]]; then
   cat <<EOF

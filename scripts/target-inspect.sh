@@ -296,7 +296,7 @@ case "$target" in
       echo "  * Configuration: Disable 8.3 name creation on secondary data drives (fsutil 8dot3name set <drive> 1)"
       echo "  * Security: BitLocker drive encryption status, NTFS access control lists"
     else
-      root_dev=$(df --output=source / 2>/dev/null | tail -1 || echo "")
+      root_dev=$(LC_ALL=C df --output=source / 2>/dev/null | tail -1 || echo "")
       echo "Root Device: $root_dev"
       echo "Mount Options: $(findmnt -n -o OPTIONS / 2>/dev/null || echo defaults)"
       echo "fstrim.timer Status: $(systemctl is-active fstrim.timer 2>/dev/null || echo inactive) ($(systemctl is-enabled fstrim.timer 2>/dev/null || echo disabled))"
@@ -339,8 +339,8 @@ case "$target" in
       echo "  * Configuration: Fixed or system-managed pagefile on fastest NVMe drive"
       echo "  * Security: Memory Integrity (HVCI) and Virtualization-Based Security (VBS)"
     else
-      echo "Total Memory: $(free -h 2>/dev/null | awk '/Mem:/ {print $2}' || echo unknown)"
-      echo "Swap: $(free -h 2>/dev/null | awk '/Swap:/ {print $2}' || echo unknown)"
+      echo "Total Memory: $(LC_ALL=C free -h 2>/dev/null | awk '/^Mem:/ {print $2}' || echo unknown)"
+      echo "Swap: $(LC_ALL=C free -h 2>/dev/null | awk '/^Swap:/ {print $2}' || echo unknown)"
       if command -v zramctl >/dev/null 2>&1; then
         echo "zram Devices:"
         zramctl 2>/dev/null || true
@@ -368,7 +368,7 @@ case "$target" in
       echo "  * Configuration: Set 100% min/max processor state on AC, disable core parking on desktop"
       echo "  * Security: Hardware mitigation status (Spectre/Meltdown), AMD SVM / Intel VT-x enabled"
     else
-      echo "CPU Model: $(lscpu 2>/dev/null | grep 'Model name:' | sed 's/Model name:[ \t]*//' || echo unknown)"
+      echo "CPU Model: $(LC_ALL=C lscpu 2>/dev/null | grep 'Model name:' | sed 's/Model name:[ \t]*//' || echo unknown)"
       echo "Governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo unknown)"
       echo "Microcode: $(grep -m1 'microcode' /proc/cpuinfo 2>/dev/null | awk '{print $3}' || echo unknown)"
       echo "Power Daemons:"
@@ -407,14 +407,14 @@ case "$target" in
       echo "  * Configuration: Set non-essential auto services to Delayed Start (StartType: AutomaticDelayedStart)"
       echo "  * Security: Verify Secure Boot status (Confirm-SecureBootUEFI)"
     else
-      echo "Startup Time: $(systemd-analyze 2>/dev/null | head -n 1 || echo unknown)"
+      echo "Startup Time: $(LC_ALL=C systemd-analyze 2>/dev/null | head -n 1 || echo unknown)"
       failed_units=$(systemctl --failed --no-legend 2>/dev/null | sed 's/^[^A-Za-z0-9_@.-]*//' | awk '{print $1}' || true)
       if [[ -n "$failed_units" ]]; then
         echo "Failed Units: [WARNING] $(printf '%s\n' "$failed_units" | wc -l) unit(s): $(tr '\n' ' ' <<< "$failed_units")"
       else
         echo "Failed Units: [OK] none"
       fi
-      echo "Journal Usage: $(journalctl --disk-usage 2>/dev/null || echo unknown)"
+      echo "Journal Usage: $(LC_ALL=C journalctl --disk-usage 2>/dev/null || echo unknown)"
     fi
     echo "====================================="
     exit 0
@@ -465,7 +465,11 @@ case "$target" in
       echo "Local Key Directory: $HOME/.ssh"
       [[ -d "$HOME/.ssh" ]] && echo "  - Permissions: n/a (NTFS ACLs, not POSIX modes)"
     else
-      echo "sshd Service: $(systemctl is-active sshd 2>/dev/null || echo inactive) ($(systemctl is-enabled sshd 2>/dev/null || echo disabled))"
+      ssh_unit="sshd"
+      if [[ $(first_line_or inactive systemctl is-active sshd) != "active" && $(first_line_or inactive systemctl is-active ssh) == "active" ]]; then
+        ssh_unit="ssh"
+      fi
+      echo "sshd Service ($ssh_unit): $(first_line_or inactive systemctl is-active "$ssh_unit") ($(first_line_or disabled systemctl is-enabled "$ssh_unit"))"
       echo "SSH Configs:"
       for f in /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*.conf ~/.ssh/config; do
         [[ -f "$f" ]] && echo "  - [EXISTS] $f"
@@ -1198,7 +1202,7 @@ case "$target" in
     else
       echo "  * FZF Backend: [RECOMMENDED] (Wire rg or fd as backend: export FZF_DEFAULT_COMMAND=\"rg --files --hidden --glob '!.git/*'\")"
     fi
-    bat_bin=$(command -v bat 2>/dev/null || echo "")
+    bat_bin=$(command -v bat 2>/dev/null || command -v batcat 2>/dev/null || echo "")
     if [[ -n "$bat_bin" ]]; then
       echo "  * Bat Previewer: [AVAILABLE] ($bat_bin provides line-numbered syntax previews)"
     else
@@ -1494,9 +1498,9 @@ case "$target" in
     echo "====================================="
     exit 0
     ;;
-  bat)
+  bat|batcat)
     echo "Category: Syntax Pager / bat"
-    bat_bin=$(command -v bat 2>/dev/null || echo "")
+    bat_bin=$(command -v bat 2>/dev/null || command -v batcat 2>/dev/null || echo "")
     echo "Binary: ${bat_bin:-Not installed}"
     if [[ -n "$bat_bin" ]]; then
       bat_ver=$("$bat_bin" --version 2>/dev/null || echo "unknown")
@@ -1975,13 +1979,108 @@ case "$target" in
     echo "====================================="
     exit 0
     ;;
+  sandboxing|systemd-security)
+    echo "Category: Security / Service & Application Sandboxing"
+    if is_windows; then
+      hvci_state=$(run_ps '
+        $hvci = (Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity" -Name Enabled -ErrorAction SilentlyContinue).Enabled
+        if ($null -ne $hvci) { [int]$hvci } else { "unknown" }
+      ' 2>/dev/null || echo "unknown")
+      case "$hvci_state" in
+        1) echo "  * Memory Integrity (HVCI): Enabled [OK]" ;;
+        0) echo "  * Memory Integrity (HVCI): Disabled [WARNING] (Enable Core Isolation Memory Integrity)" ;;
+        *) echo "  * Memory Integrity (HVCI): unknown [NOT READABLE]" ;;
+      esac
+    else
+      if [[ -r /sys/module/apparmor/parameters/enabled ]] && [[ "$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null)" == "Y" ]]; then
+        echo "  * Mandatory Access Control: AppArmor enabled [OK]"
+      elif command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce 2>/dev/null || true)" == "Enforcing" ]]; then
+        echo "  * Mandatory Access Control: SELinux Enforcing [OK]"
+      else
+        echo "  * Mandatory Access Control: none active [NOTE] (AppArmor or SELinux not detected as enforcing)"
+      fi
+      if [[ -e /proc/sys/kernel/unprivileged_userns_clone ]]; then
+        sysctl_check kernel.unprivileged_userns_clone '1' '1 (required for rootless Podman/Flatpak/bwrap)'
+      fi
+      echo "  * Bubblewrap (bwrap): $(command -v bwrap 2>/dev/null || echo 'not installed')"
+      if command -v systemd-analyze >/dev/null 2>&1; then
+        sb_counts=$(LC_ALL=C systemd-analyze security 2>/dev/null | LC_ALL=C awk '$2 ~ /^[0-9]/ { if ($2 >= 8.0) u++; else if ($2 >= 5.0) m++; else o++ } END { printf "%d %d %d", o+0, m+0, u+0 }' || echo "0 0 0")
+        read -r sb_ok sb_med sb_unsafe <<< "$sb_counts"
+        if [[ "${sb_unsafe:-0}" -gt 0 ]]; then
+          echo "  * systemd Service Exposure: [WARNING] $sb_unsafe unsafe/exposed (>=8.0), $sb_med medium, $sb_ok OK"
+        else
+          echo "  * systemd Service Exposure: [OK] 0 unsafe units ($sb_med medium, $sb_ok OK)"
+        fi
+      else
+        echo "  * systemd Service Exposure: unavailable [NOT READABLE]"
+      fi
+    fi
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
+    echo "  * Security: Harden exposed custom systemd units (ProtectSystem=strict, PrivateTmp=true, NoNewPrivileges=true); keep MAC/HVCI active"
+    echo "  * Configuration: Prefer rootless containers (Podman) and portal-restricted Flatpak overrides over host-wide privileges"
+    echo "  * Performance: Avoid heavy VM isolation for trusted CLI workloads where namespace sandboxing suffices"
+    echo "====================================="
+    exit 0
+    ;;
+  package-audit|pkg-audit|supply-chain)
+    echo "Category: Security / Package Integrity & Vulnerability Audit"
+    if is_windows; then
+      if command -v winget >/dev/null 2>&1; then
+        wg_exp=$(winget settings export 2>/dev/null | tr -d '\r' || true)
+        if printf '%s\n' "$wg_exp" | grep -qE '"(InstallerHashOverride|LocalArchiveMalwareScanOverride)"[[:space:]]*:[[:space:]]*true'; then
+          echo "  * WinGet Integrity Overrides: [WARNING] hash or malware scan override is enabled"
+        elif [[ -n "$wg_exp" ]]; then
+          echo "  * WinGet Integrity Overrides: [OK] hash and malware scan checks enforced"
+        else
+          echo "  * WinGet Integrity Overrides: [NOT READABLE]"
+        fi
+      else
+        echo "  * WinGet Integrity Overrides: winget not installed [NOT READABLE]"
+      fi
+    else
+      if [[ -r /etc/pacman.conf ]]; then
+        sig_lvl=$(grep -E '^[[:space:]]*SigLevel[[:space:]]*=' /etc/pacman.conf 2>/dev/null | head -n 1 | sed 's/.*=[[:space:]]*//' || true)
+        if [[ "$sig_lvl" == *"Never"* ]]; then
+          echo "  * Pacman SigLevel (/etc/pacman.conf): $sig_lvl [WARNING] (Never disables GPG package verification)"
+        else
+          echo "  * Pacman SigLevel (/etc/pacman.conf): ${sig_lvl:-default} [OK]"
+        fi
+      elif [[ -d /etc/apt ]]; then
+        if grep -RqiE 'AllowUnauthenticated[[:space:]]+"true"' /etc/apt/apt.conf /etc/apt/apt.conf.d 2>/dev/null; then
+          echo "  * APT Signature Policy: AllowUnauthenticated=true [WARNING]"
+        else
+          echo "  * APT Signature Policy: GPG repository verification active [OK]"
+        fi
+      elif [[ -r /etc/dnf/dnf.conf ]]; then
+        if grep -Eqi '^[[:space:]]*gpgcheck[[:space:]]*=[[:space:]]*(1|true|yes)' /etc/dnf/dnf.conf 2>/dev/null; then
+          echo "  * DNF Signature Policy: gpgcheck enabled [OK]"
+        else
+          echo "  * DNF Signature Policy: gpgcheck not enabled [WARNING]"
+        fi
+      else
+        echo "  * OS Package Signature Policy: [NOT READABLE] (no readable pacman/apt/dnf config)"
+      fi
+      scanners=()
+      for sc in arch-audit cargo-audit pip-audit trivy osv-scanner; do
+        command -v "$sc" >/dev/null 2>&1 && scanners+=("$sc")
+      done
+      echo "  * Installed Vulnerability Scanners: ${scanners[*]:-none detected}"
+    fi
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
+    echo "  * Security: Enforce GPG/hash verification across OS and language package managers (pacman SigLevel, winget hash check, mise SLSA/cosign)"
+    echo "  * Configuration: Install arch-audit / unattended-upgrades / cargo-audit to catch CVEs early"
+    echo "  * Performance: Schedule vulnerability database syncs alongside regular topgrade maintenance"
+    echo "====================================="
+    exit 0
+    ;;
 esac
 
 # 2. Package / Tool Handling
 case "$target" in
   pacman|yay|paru|makepkg|pacman-contrib) echo "Category: Package Manager / Arch Linux Package & Build Stack" ;;
+  flatpak) echo "Category: Package Manager / Flatpak Sandboxed Applications" ;;
   kde|kde-plasma|baloo) echo "Category: Desktop Environment / KDE Plasma & KWin" ;;
-  podman|lazydocker) echo "Category: Containers / Rootless Podman & Lazydocker" ;;
+  podman|docker|lazydocker) echo "Category: Containers / Container Runtime & Lazydocker" ;;
   fd|fdfind) echo "Category: Search Utility / fd File Finder" ;;
   btop|htop|btop4win) echo "Category: System Monitor / Resource & Process Viewer" ;;
   syncthing) echo "Category: File Synchronization / Syncthing" ;;
@@ -1997,6 +2096,8 @@ case "$target" in
   pacman-contrib) binary_lookup="paccache" ;;
   fd) binary_lookup="fdfind" ;;
   btop) binary_lookup="btop4win" ;;
+  bat) binary_lookup="batcat" ;;
+  python) binary_lookup="python3" ;;
 esac
 
 bin_path=$(command -v "$target" 2>/dev/null || command -v "$binary_lookup" 2>/dev/null || echo "")
@@ -2076,8 +2177,11 @@ case "$target" in
   kde|kde-plasma)
     config_candidates+=("$HOME/.config/kdeglobals" "$HOME/.config/kwinrc" "$HOME/.config/baloofilerc")
     ;;
-  podman|lazydocker)
-    config_candidates+=("$HOME/.config/containers/containers.conf" "$HOME/.config/containers/registries.conf" "$HOME/.config/containers/storage.conf" "$HOME/.config/lazydocker/config.yml" "$roaming_app_data/lazydocker/config.yml")
+  flatpak)
+    config_candidates+=("$HOME/.local/share/flatpak/overrides/global" "/var/lib/flatpak/overrides/global")
+    ;;
+  podman|docker|lazydocker)
+    config_candidates+=("$HOME/.config/containers/containers.conf" "$HOME/.config/containers/registries.conf" "$HOME/.config/containers/storage.conf" "$HOME/.docker/config.json" "/etc/docker/daemon.json" "$HOME/.config/lazydocker/config.yml" "$roaming_app_data/lazydocker/config.yml")
     ;;
   fd|fdfind)
     config_candidates+=("$HOME/.config/fd/ignore" "$HOME/.config/fd/config" "$roaming_app_data/fd/ignore")
@@ -2150,10 +2254,37 @@ case "$target" in
       echo "  * Baloo Indexing-Enabled: $(grep -E '^Indexing-Enabled=' "$HOME/.config/baloofilerc" 2>/dev/null | cut -d= -f2 || echo 'default (true)')"
     fi
     ;;
+  flatpak)
+    echo "Active Flatpak Remotes & Sandbox Overrides:"
+    flatpak remotes --columns=name,options 2>/dev/null | sed 's/^/  * Remote: /' || true
+    fp_ov="$HOME/.local/share/flatpak/overrides/global"
+    if [[ -f "$fp_ov" ]] && grep -qE '^[[:space:]]*filesystems?=([^#]*;)?host($|;)' "$fp_ov" 2>/dev/null; then
+      echo "  * Global Override ($fp_ov): [WARNING] grants filesystems=host across all Flatpak apps"
+    elif [[ -f "$fp_ov" ]]; then
+      echo "  * Global Override ($fp_ov): [OK] no global filesystem=host escape"
+    fi
+    ;;
   podman|lazydocker)
     if [[ -f "$HOME/.config/containers/containers.conf" ]]; then
       echo "Active Rootless Podman Limits:"
       grep -E '^[[:space:]]*(pids_limit|log_size_max|runtime)[[:space:]]*=' "$HOME/.config/containers/containers.conf" 2>/dev/null | sed 's/^/  * /' || true
+    fi
+    ;;
+  docker)
+    if [[ -f "$HOME/.docker/config.json" ]]; then
+      if grep -q '"auths"' "$HOME/.docker/config.json" 2>/dev/null && ! grep -qE '"credsStore"[[:space:]]*:[[:space:]]*"[^"]+"' "$HOME/.docker/config.json" 2>/dev/null; then
+        if grep -A 5 '"auths"' "$HOME/.docker/config.json" 2>/dev/null | grep -q '"auth"'; then
+          echo "  * Docker Credentials ($HOME/.docker/config.json): [WARNING] base64 auth token stored without credsStore"
+        else
+          echo "  * Docker Credentials ($HOME/.docker/config.json): [OK]"
+        fi
+      else
+        echo "  * Docker Credentials ($HOME/.docker/config.json): [OK]"
+      fi
+    fi
+    if [[ -r /etc/docker/daemon.json ]]; then
+      echo "  * Daemon Config (/etc/docker/daemon.json): readable"
+      grep -E '"(log-driver|max-size|live-restore|userns-remap)"' /etc/docker/daemon.json 2>/dev/null | sed 's/^[[:space:]]*/    /' || true
     fi
     ;;
   syncthing)
@@ -2180,10 +2311,20 @@ case "$target" in
     echo "  * Configuration: Wayland session with adaptive TearFree compositing; consistent dark color scheme"
     echo "  * Security: KScreenLocker lock-on-resume enabled; restrict KWallet and ~/.config permissions"
     ;;
+  flatpak)
+    echo "  * Performance: Prune unused runtimes (flatpak uninstall --unused); share host GPU/VA-API extensions"
+    echo "  * Configuration: Prefer --user Flathub installations for rootless updates integrated with topgrade"
+    echo "  * Security: Avoid global filesystem=host overrides; grant narrow XDG portal paths per application"
+    ;;
   podman|lazydocker)
     echo "  * Performance: Use crun lightweight OCI runtime, bound log_size_max (10MB), native overlayfs storage driver"
     echo "  * Configuration: Pair rootless podman socket with lazydocker TUI; prune dangling images periodically"
     echo "  * Security: Rootless container execution, enforce pids_limit (2048), restrict containers.conf permissions to 0600"
+    ;;
+  docker)
+    echo "  * Performance: Enable BuildKit, bound container json-file logs (max-size 10m, max-file 3), prune unused build cache"
+    echo "  * Configuration: Pair with lazydocker TUI; bound WSL2 backend RAM when using Docker Desktop on Windows"
+    echo "  * Security: Prefer rootless mode or userns-remap; store registry tokens in OS keychain via credsStore; avoid mounting docker.sock into untrusted containers"
     ;;
   fd|fdfind)
     echo "  * Performance: Bound worker threads (-j${detected_threads}); exclude heavy build/cache trees (.git, node_modules, target, .venv)"

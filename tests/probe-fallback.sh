@@ -405,4 +405,23 @@ got="$(run_ps 'x')"
 [[ "$(power_plan_name 'no parentheses here')" == "no parentheses here" ]] || fail "power_plan_name without parentheses"
 ok "run_ps strips carriage returns and power_plan_name returns the plan name"
 
+# system-probe NTFS TRIM regex must require = 1 for Disabled (never classify "DisableDeleteNotify = 0" without "NTFS " as Disabled)
+if grep -qF 'elseif ($out -match "DisableDeleteNotify")' "$ROOT/scripts/system-probe.sh"; then
+  fail "system-probe.sh still classifies bare 'DisableDeleteNotify = 0' as Disabled"
+fi
+ok "system-probe NTFS TRIM check distinguishes = 0 and = 1 with or without NTFS prefix"
+
+# Linux system-probe and hardware-probe survive non-C decimal locales when runnable on Linux
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) echo "SKIP - Linux locale JSON check" ;;
+  *)
+    LC_NUMERIC=de_DE.UTF-8 bash "$ROOT/scripts/hardware-probe.sh" --json > "$WORK/hw_loc.json" 2>/dev/null || true
+    "$PY" -m json.tool "$WORK/hw_loc.json" > /dev/null || fail "hardware-probe JSON broke under LC_NUMERIC=de_DE.UTF-8"
+    [[ "$(jget "$WORK/hw_loc.json" ram.tier)" != '"unknown"' ]] || fail "hardware-probe ram.tier became unknown under LC_NUMERIC=de_DE.UTF-8"
+    LC_NUMERIC=de_DE.UTF-8 bash "$ROOT/scripts/system-probe.sh" --json > "$WORK/sys_loc.json" 2>/dev/null || true
+    "$PY" -m json.tool "$WORK/sys_loc.json" > /dev/null || fail "system-probe JSON broke under LC_NUMERIC=de_DE.UTF-8"
+    ok "Linux probes emit valid JSON and numeric tiers under comma-decimal locales"
+    ;;
+esac
+
 echo "probe-fallback: $pass passed"

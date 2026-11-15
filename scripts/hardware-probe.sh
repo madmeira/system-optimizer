@@ -101,7 +101,7 @@ if is_windows; then
   fi
 else
   # Linux hardware probing
-  cpu_model=$(lscpu 2>/dev/null | grep -E "^Model name:" | sed 's/Model name:[ \t]*//' || echo "Unknown CPU")
+  cpu_model=$(LC_ALL=C lscpu 2>/dev/null | grep -E "^Model name:" | sed 's/Model name:[ \t]*//' || echo "Unknown CPU")
   cpu_cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo "1")
   cpu_arch=$(uname -m)
   cpu_governor=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "unknown")
@@ -112,16 +112,16 @@ else
   fi
 
   ram_total_kb=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
-  ram_total_gb=$(awk "BEGIN {printf \"%.2f\", $ram_total_kb / 1024 / 1024}")
+  ram_total_gb=$(LC_ALL=C awk "BEGIN {printf \"%.2f\", $ram_total_kb / 1024 / 1024}")
   swap_total_kb=$(grep SwapTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
-  swap_total_gb=$(awk "BEGIN {printf \"%.2f\", $swap_total_kb / 1024 / 1024}")
+  swap_total_gb=$(LC_ALL=C awk "BEGIN {printf \"%.2f\", $swap_total_kb / 1024 / 1024}")
 
   zram_active=false
   zram_size="0"
   zram_algorithm="none"
   mem_compression="false"
   if command -v zramctl >/dev/null 2>&1; then
-    zram_out=$(zramctl --noheadings --output NAME,ALGORITHM,DISKSIZE 2>/dev/null | head -n 1 || true)
+    zram_out=$(LC_ALL=C zramctl --noheadings --output NAME,ALGORITHM,DISKSIZE 2>/dev/null | head -n 1 || true)
     if [[ -n "$zram_out" ]]; then
       zram_active=true
       zram_algorithm=$(echo "$zram_out" | awk '{print $2}')
@@ -139,7 +139,7 @@ else
     [[ -z "$gpu_info" ]] && gpu_info="None detected"
   fi
 
-  root_device=$(df --output=source / 2>/dev/null | tail -1 || echo "")
+  root_device=$(LC_ALL=C df --output=source / 2>/dev/null | tail -1 || echo "")
   rotational="unknown"
   if [[ -n "$root_device" ]]; then
     if command -v lsblk >/dev/null 2>&1; then
@@ -165,7 +165,7 @@ else
 
   os_name="Unknown Linux"
   if [[ -f /etc/os-release ]]; then
-    os_name=$(grep -E "^PRETTY_NAME=" /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "Linux")
+    os_name=$(grep -E "^PRETTY_NAME=" /etc/os-release 2>/dev/null | cut -d= -f2- | tr -d '"' || echo "Linux")
   fi
   kernel=$(uname -r)
 fi
@@ -174,9 +174,9 @@ fi
 safe_concurrency=$cpu_cores
 if [[ ! "$ram_total_gb" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
   memory_tier="unknown"
-elif (( $(awk "BEGIN {print ($ram_total_gb <= 4.0)}") )); then
+elif (( $(LC_ALL=C awk "BEGIN {print ($ram_total_gb <= 4.0)}") )); then
   memory_tier="low"
-elif (( $(awk "BEGIN {print ($ram_total_gb <= 16.0)}") )); then
+elif (( $(LC_ALL=C awk "BEGIN {print ($ram_total_gb <= 16.0)}") )); then
   memory_tier="medium"
 else
   memory_tier="high"

@@ -16,10 +16,10 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/home"
 
-targets="bash bat brave btop cargo chrome controld defender edge eza fd firefox full fzf gh git herdr htop kde-plasma lazydocker lazygit
-mise mpv neovim network pacman pi podman powertoys pwsh python ripgrep rustdesk security sqlite3 starship storage syncthing system topgrade
-windows-terminal winget wsl yay yt-dlp zoxide"
-domain_and_browser_targets=" system security full storage network defender chrome edge brave firefox "
+targets="bash bat boot brave btop cargo chrome controld cpu defender docker edge execution-policy eza fd firefox firewall flatpak full fzf gh git herdr htop
+kde-plasma kernel lazydocker lazygit makepkg memory mise mpv neovim network package-audit pacman pi podman powertoys pwsh python ripgrep rustdesk
+sandboxing security sqlite3 ssh starship storage syncthing sysctl-security system topgrade uac windows-terminal winget wsl yay yt-dlp zoxide"
+domain_and_browser_targets=" system security full kernel storage memory cpu boot network firewall ssh sysctl-security sandboxing package-audit execution-policy uac defender chrome edge brave firefox "
 failed=0; count=0
 for t in $targets; do
   count=$((count + 1))
@@ -224,15 +224,19 @@ export EDITOR=nvim
 alias ls='eza --icons=auto'
 alias a=task-run-alpha
 EOF
+mkdir -p "$WORK/home/.pi/agent" "$WORK/remote/.pi/agent"
+printf '{\n  "apiKey": "my-json-secret-value",\n  "defaultModel": "gpt-5"\n}\n' > "$WORK/home/.pi/agent/settings.json"
+printf '{\n  "defaultModel": "claude-4"\n}\n' > "$WORK/remote/.pi/agent/settings.json"
 printf "alias ls='ls --color'\nalias a=task-run-beta\n" > "$WORK/remote/.zshrc"
 out="$(env -i PATH="$WORK/ssh:$PATH" HOME="$WORK/home" FAKE_REMOTE="$WORK/remote" bash "$ROOT/scripts/host-diff.sh" fakehost)"
-for leaked in "sk-abc12345678" "pw0rd"; do
+for leaked in "sk-abc12345678" "pw0rd" "my-json-secret-value"; do
   [[ "$out" != *"$leaked"* ]] || { echo "FAIL - host-diff printed a secret: $leaked" >&2; exit 1; }
 done
 for expected in "[DIFFERENT] .zshrc" "export OPENAI=<value hidden>" "export EDITOR=nvim" "alias ls='eza --icons=auto'" \
-                "alias a=task-run-alpha" "alias a=task-run-beta"; do
+                "alias a=task-run-alpha" "alias a=task-run-beta" "[DIFFERENT] .pi/agent/settings.json" '"apiKey": <redacted>'; do
   [[ "$out" == *"$expected"* ]] || { echo "FAIL - host-diff output missing: $expected" >&2; exit 1; }
 done
+rm -rf "$WORK/home/.pi" "$WORK/remote/.pi"
 # 255 = dead connection, 1 = the file exists but cat could not read it: neither may look like a missing file
 for code in 255 1; do
   if env -i PATH="$WORK/ssh:$PATH" HOME="$WORK/home" FAKE_REMOTE="$WORK/remote" FAKE_SSH_EXIT="$code" bash "$ROOT/scripts/host-diff.sh" fakehost >/dev/null 2>&1; then
@@ -270,4 +274,62 @@ gh_out="$(env -i PATH="$WORK/bin:$PATH" HOME="$WORK/home" GIT_CONFIG_NOSYSTEM=1 
 [[ "$gh_out" == *"Git Credential Helper: [CONFIGURED]"* ]] || { echo "FAIL - gh ignored configured git credential.helper" >&2; exit 1; }
 rm -f "$WORK/home/.gitconfig"
 echo "ok   - starship integer timeout, ripgrep+fd synergy, and gh+git credential helper verified"
+# sandboxing, flatpak, docker, detect-targets canonicalization, and elevated remediation script contract
+cat > "$WORK/fake/systemd-analyze" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "security" ]]; then
+  printf 'UNIT                                 EXPOSURE PREDICATE HAPPY\nfoo.service                               9.2 UNSAFE    😨\nbar.service                               2.1 OK        🙂\n'
+fi
+EOF
+chmod +x "$WORK/fake/systemd-analyze"
+sb_out="$(env -i PATH="$WORK/fake:$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/scripts/target-inspect.sh" sandboxing)"
+[[ "$sb_out" == *"systemd Service Exposure: [WARNING] 1 unsafe/exposed (>=8.0), 0 medium, 1 OK"* ]] || { echo "FAIL - sandboxing did not warn on unsafe systemd unit" >&2; exit 1; }
+
+printf '#!/usr/bin/env bash\necho "Flatpak 1.15.8"\n' > "$WORK/bin/flatpak"
+printf '#!/usr/bin/env bash\necho "Docker version 27.1.1"\n' > "$WORK/bin/docker"
+chmod +x "$WORK/bin/flatpak" "$WORK/bin/docker"
+mkdir -p "$WORK/home/.local/share/flatpak/overrides" "$WORK/home/.docker"
+printf '[Context]\nfilesystems=host;\n' > "$WORK/home/.local/share/flatpak/overrides/global"
+fp_out="$(env -i PATH="$WORK/bin:$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/scripts/target-inspect.sh" flatpak)"
+[[ "$fp_out" == *"[WARNING] grants filesystems=host across all Flatpak apps"* ]] || { echo "FAIL - flatpak did not warn on filesystems=host" >&2; exit 1; }
+printf '[Context]\nfilesystems=!host;\n' > "$WORK/home/.local/share/flatpak/overrides/global"
+fp_ok="$(env -i PATH="$WORK/bin:$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/scripts/target-inspect.sh" flatpak)"
+[[ "$fp_ok" == *"[OK] no global filesystem=host escape"* ]] || { echo "FAIL - flatpak warned on negated !host override" >&2; exit 1; }
+rm -rf "$WORK/home/.local/share/flatpak"
+
+printf '{\n  "auths": {\n    "https://index.docker.io/v1/": {\n      "auth": "dXNlcjpwYXNz"\n    }\n  }\n}\n' > "$WORK/home/.docker/config.json"
+dk_warn="$(env -i PATH="$WORK/bin:$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/scripts/target-inspect.sh" docker)"
+[[ "$dk_warn" == *"[WARNING] base64 auth token stored without credsStore"* ]] || { echo "FAIL - docker did not warn on plaintext auth without credsStore" >&2; exit 1; }
+printf '{\n  "credsStore": "secretservice",\n  "auths": {}\n}\n' > "$WORK/home/.docker/config.json"
+dk_ok="$(env -i PATH="$WORK/bin:$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/scripts/target-inspect.sh" docker)"
+[[ "$dk_ok" == *"Docker Credentials ($WORK/home/.docker/config.json): [OK]"* ]] || { echo "FAIL - docker did not report OK with credsStore" >&2; exit 1; }
+rm -rf "$WORK/home/.docker"
+echo "ok   - sandboxing, flatpak, and docker config checks verified"
+
+# detect-targets on Linux: python3 -> python, batcat -> bat, fdfind -> fd, and balanced_top omits uninstalled topgrade
+mkdir -p "$WORK/deb"
+for b in bash env grep sed awk cat tr head wc dirname uname; do
+  p="$(command -v "$b" || true)"; [[ -n "$p" ]] && ln -sf "$p" "$WORK/deb/$b"
+done
+printf '#!/bin/sh\necho "Python 3.12.3"\n' > "$WORK/deb/python3"
+printf '#!/bin/sh\necho "batcat 0.24.0"\n' > "$WORK/deb/batcat"
+printf '#!/bin/sh\necho "fdfind 10.1.0"\n' > "$WORK/deb/fdfind"
+chmod +x "$WORK/deb/python3" "$WORK/deb/batcat" "$WORK/deb/fdfind"
+det_json="$(env -i PATH="$WORK/deb" HOME="$WORK/home" LANG=C "$WORK/deb/bash" "$ROOT/scripts/detect-targets.sh" --json)"
+[[ "$det_json" == *'"python"'* && "$det_json" == *'"bat"'* && "$det_json" == *'"fd"'* ]] || { echo "FAIL - detect-targets missed python3/batcat/fdfind canonicalization" >&2; exit 1; }
+[[ "$det_json" != *'"topgrade"'* ]] || { echo "FAIL - detect-targets included uninstalled topgrade in balanced_top" >&2; exit 1; }
+for deb_t in python fd; do
+  deb_ins="$(env -i PATH="$WORK/deb" HOME="$WORK/home" LANG=C "$WORK/deb/bash" "$ROOT/scripts/target-inspect.sh" "$deb_t")"
+  [[ "$deb_ins" == *"Status: INSTALLED"* ]] || { echo "FAIL - target-inspect $deb_t missed Debian binary fallback" >&2; exit 1; }
+done
+deb_bat="$(env -i PATH="$WORK/deb" HOME="$WORK/home" LANG=C "$WORK/deb/bash" "$ROOT/scripts/target-inspect.sh" bat)"
+[[ "$deb_bat" == *"Binary: $WORK/deb/batcat"* ]] || { echo "FAIL - target-inspect bat missed batcat fallback" >&2; exit 1; }
+echo "ok   - detect-targets canonicalizes python3/batcat/fdfind and omits uninstalled topgrade"
+
+# SKILL.md & optimization-guide.md elevated remediation script contract
+for needle in "apply-elevated-" 'Never invoke `sudo`' "umask 077" "chmod 0700"; do
+  grep -qF -- "$needle" "$ROOT/SKILL.md" || { echo "FAIL - SKILL.md missing elevated script requirement: $needle" >&2; exit 1; }
+done
+grep -qF -- "WindowsBuiltInRole]::Administrator" "$ROOT/references/optimization-guide.md" || { echo "FAIL - optimization-guide.md missing PowerShell elevation template" >&2; exit 1; }
+echo "ok   - elevated remediation script workflow documented in SKILL.md and optimization-guide.md"
 echo "inspect-smoke: $count targets passed"
