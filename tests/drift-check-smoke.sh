@@ -13,17 +13,19 @@ PY="$(command -v python3 || command -v python)"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-mkdir -p "$WORK/home" "$WORK/emptybin" "$WORK/mockbin"
+mkdir -p "$WORK/home" "$WORK/appdata/Local" "$WORK/appdata/Roaming" "$WORK/emptybin" "$WORK/mockbin"
 
 # Link basic POSIX/core utilities into emptybin so tool-drift-check.sh runs with zero tracked tools installed.
-# On Windows Git Bash (MSYS2), copy required runtime DLLs and cygpath so child MSYS binaries resolve DLLs cleanly.
+# Use type -P (external executables only, skipping shell builtins like printf on Git Bash) and copy MSYS2 DLLs on Windows.
 for b in bash sh env grep sed awk cat tr cut head tail wc dirname basename uname date mktemp sort rm mkdir printf chmod readlink realpath timeout cygpath; do
-  p="$(command -v "$b" 2>/dev/null || true)"
-  [[ -n "$p" ]] && ln -sf "$p" "$WORK/emptybin/$b"
+  p="$(type -P "$b" 2>/dev/null || true)"
+  if [[ -n "$p" && -f "$p" ]]; then
+    ln -sf "$p" "$WORK/emptybin/$(basename "$p")"
+  fi
 done
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)
-    for dll in /usr/bin/msys-*.dll /bin/msys-*.dll; do
+    for dll in /usr/bin/*.dll /bin/*.dll; do
       [[ -f "$dll" ]] && cp -f "$dll" "$WORK/emptybin/"
     done
     ;;
@@ -32,7 +34,8 @@ esac
 run_isolated() {
   local path_val="$1"
   shift
-  env -i PATH="$path_val" HOME="$WORK/home" LANG=C \
+  env -i PATH="$path_val" HOME="$WORK/home" USERPROFILE="$WORK/home" \
+    LOCALAPPDATA="$WORK/appdata/Local" APPDATA="$WORK/appdata/Roaming" LANG=C \
     SYSTEMROOT="${SYSTEMROOT:-}" WINDIR="${WINDIR:-}" MSYS2_ARG_CONV_EXCL="*" \
     "$WORK/emptybin/bash" "$@"
 }
