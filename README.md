@@ -74,7 +74,7 @@ Invoke the skill with no arguments for an interactive hardware/OS probe and a 9-
 When called **without arguments**, the skill probes your host and presents nine numbered options:
 1. **System Core & OS Performance** (TRIM, memory compression/zram, CPU governor/power plan, boot & startup)
 2. **System Security Hardening & Posture** (Firewall, Defender/PUA, sysctl, ExecutionPolicy, SSH, systemd sandboxing)
-3. **Package Managers & Runtimes** (`winget`, `pacman`, `yay`, `makepkg`, `flatpak`, `wsl`, `podman`, `cargo`, `mise`)
+3. **Package Managers & Runtimes** (`winget`, `pacman`, `yay`, `makepkg`, `paccache`, `flatpak`, `wsl`, `podman`, `cargo`, `python`, `uv`, `mise`)
 4. **Web Browsers & Terminal / Desktop** (`windows-terminal`, `kde-plasma`, `brave`, `chrome`, `edge`, `librewolf`, `firefox`)
 5. **Developer & CLI Tools** (`neovim`, `starship`, `bat`, `fzf`, `ripgrep`, `fd`, `zoxide`, `eza`, `lazygit`, `git`, `gh`, `mpv`, `yt-dlp`, `pi`, `herdr`, etc.)
 6. **Curated Top Balanced Recommendations** (high-impact cross-cutting picks for your host)
@@ -98,29 +98,30 @@ Every invocation — including `full` — strictly enforces a six-rule safety co
 `system-optimizer` inspects, configures, hardens, and coordinates your workstation environment across three pillars — the **Optimization Triad**:
 
 1. **Performance**: Thread concurrency (`nproc` / logical processors), RAM-tier caching bounds, GPU hardware acceleration (DirectX / D3D11 / NVDEC / Vulkan / VA-API), SSD TRIM & mount optimization, CPU power plans / scaling governors, memory compression (Windows MMAgent / Linux zram), and WSL2 / container resource limits.
-2. **Configuration**: Modern upstream defaults, shell & editor ergonomics, cross-tool companion integrations, pruning of deprecated or conflicting flags, static shell startup caching, and automated update orchestration (`topgrade`, `winget`, `pacman`).
-3. **Security**: Attack surface reduction (Microsoft Defender PUA & Exploit Guard / Linux `/etc/sysctl.d/` hardening), firewall verification (`ufw` / `nftables` / Defender Firewall), script execution policies (`pwsh` `RemoteSigned`), cryptographic supply-chain verification (`mise` SLSA/cosign, `pacman` `SigLevel`, `winget` hash checks), and least-privilege file/socket permissions (`0600` credentials & agent sockets).
+2. **Configuration**: Modern upstream defaults verified against live installed binary schemas (`tool-drift-check.sh`), shell & editor ergonomics, cross-tool companion integrations, pruning of deprecated or conflicting flags, static shell startup caching, and automated update orchestration (`topgrade`, `winget`, `pacman`, `paccache`).
+3. **Security**: Attack surface reduction (Microsoft Defender PUA & Exploit Guard / Linux `/etc/sysctl.d/` hardening), firewall verification (`ufw` / `nftables` / Defender Firewall), script execution policies (`pwsh` `RemoteSigned`), cryptographic supply-chain verification (`mise` SLSA/cosign/npm provenance/`minimum_release_age`, `pacman` `DownloadUser = alpm` & `SigLevel`, `winget` hash checks, `uv` `exclude-newer` & `uv audit`), and least-privilege permissions (`0600` credentials & agent sockets including `pi` `auth.json`/`mcp-auth.json` and `herdr.sock`).
 
-The skill is **100% generic** and contains **no hardcoded hardware values**. Every run executes a **6-Phase Execution Pipeline**:
+The skill is **100% generic** and contains **no hardcoded hardware values**. Every run executes a **6-Phase Execution Pipeline** with a dynamic schema gate:
 
 1. **Probe Hardware & Baseline** (`hardware-probe.sh`, `system-probe.sh`, `detect-targets.sh`)
 2. **Audit Security Posture & Target State** (`security-audit.sh`, `target-inspect.sh`)
-3. **Research Upstream Standards** (verify current syntax, deprecations, and CVEs)
+2.5. **Dynamic Schema & Version Drift Gate** (`tool-drift-check.sh` — live CLI/schema introspection flagging `[VERIFIED]`, `[VERSION AHEAD]`, `[SCHEMA DRIFT]`, `[DEPRECATED CONFIG]`)
+3. **Research Upstream Standards & Live Schemas** (verify current syntax, deprecations, and CVEs)
 4. **Propose & Apply Triad Optimizations** (backed up via `backup-config.sh`)
-5. **Verification & Health Checks** (config syntax validation, dry-runs, service health)
+5. **Post-Apply Native Validation Gate & Health Checks** (`herdr config check`, `mise doctor`, `nvim --headless +q`, `bat --diagnostic`, `git config --list`, `sshd -t`; auto-rollback on validator failure)
 6. **Memory Persistence, Final Report & Elevated Script Offer** (update `MEMORY.md` and `MASTER_MEMORY.md`, and offer a consolidated elevated apply script when privileged suggestions remain)
 
 ## Supported Targets
 
-`scripts/target-inspect.sh` and the optimization guide cover **60 targets** across system domains, OS platforms, browsers, and developer tools:
+`scripts/target-inspect.sh` and the optimization guide cover **63 targets** across system domains, OS platforms, browsers, and developer tools:
 
 | Category | Targets |
 |---|---|
 | **System Domains** | `system`, `security`, `storage`, `network`, `kernel`, `memory`, `cpu`, `boot`, `firewall`, `ssh`, `sandboxing`, `package-audit`, `full` |
 | **Windows 11 / 10** | `winget`, `windows-terminal`, `wsl`, `pwsh`, `powertoys`, `defender`, `execution-policy`, `uac` |
-| **Linux** | `pacman`, `yay`, `makepkg`, `flatpak`, `kde-plasma` (plus `systemd`, `sysctl`, `ufw`/`nftables` aliases) |
+| **Linux** | `pacman`, `yay`, `makepkg`, `paccache`, `flatpak`, `kde-plasma` (plus `systemd`, `sysctl`, `ufw`/`nftables` aliases) |
 | **Web Browsers** | `brave`, `chrome`, `edge`, `firefox`, `librewolf` |
-| **Runtimes & Containers** | `mise`, `topgrade`, `cargo`, `python`, `podman`, `docker`, `lazydocker` |
+| **Runtimes & Containers** | `mise`, `topgrade`, `cargo`, `python`, `uv`, `podman`, `docker`, `lazydocker` |
 | **Editor, Shell & CLI** | `neovim`, `bash`, `starship`, `bat`, `fzf`, `ripgrep`, `fd`, `zoxide`, `eza`, `sqlite3` |
 | **Git & GitHub** | `git`, `gh`, `lazygit` |
 | **AI Coding Agents** | `pi`, `herdr` |
@@ -137,23 +138,23 @@ The skill is **100% generic** and contains **no hardcoded hardware values**. Eve
 
 | Dimension | Scaling Behavior |
 |---|---|
-| **CPU Concurrency** | Dynamically probes `nproc` / `NumberOfLogicalProcessors` to bind compilation threads (`cargo`, `makepkg`), runtime jobs (`mise`, `topgrade`), and search worker threads (`ripgrep`, `fd`). |
-| **RAM Tiers** | **Low (<= 4 GB)**: Constrains buffer caches (Git `pack.windowMemory = 256m`, WSL2 `1.5GB`), enables aggressive browser tab discarding, and leverages Linux zram / Windows Memory Compression.<br>**Medium (4–16 GB)**: Balanced caches and WSL2 allocation.<br>**High (> 16 GB)**: High-throughput in-memory caching and memory-mapped I/O (`--mmap`). |
-| **Storage Media** | Probes NVMe/SATA SSD vs Rotational HDD. Activates periodic TRIM (`fstrim.timer` / `DisableDeleteNotify = 0`), WSL2 sparse VHDs (`sparseVhd = true`), and memory-mapped scans on SSDs while avoiding seek thrashing on HDDs. |
-| **GPU Architecture** | Tailors hardware video decoding and rendering across NVIDIA (NVDEC/NVENC), AMD Radeon (AMF/VA-API), Intel (QSV/VA-API), and integrated low-power GPUs. |
+| **CPU Concurrency** | Dynamically probes `nproc` / `NumberOfLogicalProcessors` to bind compilation threads (`makepkg`), runtime jobs (`mise`, `topgrade`), while leaving `cargo`, `ripgrep`, and `fd` on their smarter built-in core auto-detection. |
+| **RAM Tiers** | **Low (<= 4 GB)**: Constrains buffer caches (Git `pack.windowMemory = 256m`, WSL2 `1.5GB`), enables aggressive browser tab discarding, and leverages Linux zram / Windows Memory Compression.<br>**Medium (4–16 GB)**: Balanced caches and WSL2 allocation (`[experimental] autoMemoryReclaim=dropcache`).<br>**High (> 16 GB)**: Generous tool buffers (`sqlite3` `cache_size = -16000`) and higher WSL2 headroom. |
+| **Storage Media** | Probes NVMe/SATA SSD vs Rotational HDD. Activates periodic TRIM (`fstrim.timer` / `DisableDeleteNotify = 0`) and avoids WSL2 `sparseVhd = true` (Microsoft documents `ext4.vhdx` corruption risk). |
+| **GPU Architecture** | Tailors hardware video decoding (`vo=gpu-next`, `profile=high-quality`, zero-copy `hwdec=auto-safe`) across NVIDIA (NVDEC/Vulkan/D3D11), AMD Radeon (VA-API/D3D11VA), Intel (VA-API/D3D11VA), and legacy iGPUs (`vo=gpu` + `opengl`). |
 | **Theme Policy** | **Zero Hardcoding**: Dynamically infers color palettes from your existing terminal, editor, or desktop configuration before aligning companion tool themes. |
 
 ## Toolchain & Ecosystem Synergies
 
 - **`topgrade` + `mise`**: Separates OS package upgrades from user polyglot runtimes, disables redundant language updaters, and auto-reshims binaries after upgrades.
-- **`mise` + `starship`**: Zero-latency prompt version display via the native `[mise]` module while detecting and removing redundant per-language prompt tokens (`$nodejs`, `$python`, `$rust`, etc.).
-- **`neovim` + `mise`**: Single-source polyglot LSPs, formatters, linters, and debuggers via `mise` (`aqua:`/`go:`/`npm:`/`github:` backends, plus `rust` `rust-analyzer` component), Mason locked strictly to editor-only adapters (`PATH = "append"`, `opts_extend = {}`, `mason = false`), LazyVim v15+ compatibility checks, and async `DirChanged` `mise env --json` synchronization.
-- **`topgrade` + `cargo` + `mise`**: Prebuilt Rust binary installs via `cargo.binstall = true`, disabling duplicate from-source `cargo-update` builds in Topgrade.
-- **`lazygit` + `neovim` + `bat`**: Remote tab editing via `nvim --server` to prevent nested editor instances, paired with `bat --style=changes` syntax diff paging.
-- **`ripgrep` + `fzf` + `bat`**: Fast, gitignore-aware fuzzy file and content search with line-numbered, syntax-highlighted previews.
-- **`gh` + `git` + `lazygit` + `topgrade`**: Unified GitHub CLI credential delegation (`gh auth setup-git`), syntax-highlighted PR diffs, and automated CLI extension updates.
-- **`herdr` + `pi` + `mise`**: Non-interactive agent subshell `mise` shim inheritance, UNIX socket hardening (`0600`), and stale session (>30d) hygiene.
-- **`mpv` + `yt-dlp` + GPU**: Hardware-decoded streaming video (`hwdec=auto-safe`, `vo=gpu-next`) with strict TLS certificate verification.
+- **`mise` + `starship`**: Fast prompt integration via `mise` `env_cache = true` (`1h` TTL), `--print-full-init` cached hooks, and optional `[mise]` (`disabled = false`, `$symbol`/`$health`).
+- **`neovim` + `mise`**: Single-source polyglot LSPs, formatters, linters, and debuggers via `mise` (`aqua:`/`go:`/`npm:`/`github:` backends, plus `rust` `rust-analyzer` component), Mason locked strictly to editor-only adapters (`PATH = "append"`, `opts_extend = {}`, `opts.servers.<srv>.mason = false`, `automatic_enable = false`), LazyVim v15/v16+ & native `vim.lsp.config`/`vim.lsp.enable` checks, and async `DirChanged` `mise env --json` synchronization.
+- **`topgrade` + `cargo` + `mise`**: Prebuilt Rust binary installs via `cargo.binstall = true`, disabling duplicate standalone updaters (`disable = ["uv", "cargo", "pi"]`) in Topgrade.
+- **`lazygit` + `neovim` + `bat`**: Remote tab editing via `os.editPreset: "nvim-remote"`, paired with `git.diffRenderers` running `bat --color=always --style=changes,numbers`.
+- **`ripgrep` / `fd` + `fzf` + `bat`**: `.gitignore`-aware `fd --strip-cwd-prefix` / `rg --files` search with `fzf` (`--info=inline-right`) and `bat --theme=auto` previews.
+- **`gh` + `git` + `lazygit` + `topgrade`**: HTTPS `gh auth setup-git` / SSH workflow, `bat` pager, and Topgrade's native `github_cli_extensions` step.
+- **`herdr` + `pi` + `mise`**: Non-interactive agent subshell `mise` shim inheritance, `herdr integration status` + `resume_agents_on_restore`, `herdr update --handoff`, and `0600` socket/auth hardening (`herdr.sock`, `auth.json`, `mcp-auth.json`).
+- **`mpv` + `yt-dlp` + GPU**: Hardware-decoded streaming video (`vo=gpu-next`, `profile=high-quality`, zero-copy `hwdec=auto-safe`, `yt-dlp-ejs` + `-N 4`) with strict TLS certificate verification.
 
 ## Standalone CLI Scripts
 
@@ -169,6 +170,10 @@ Every script in `scripts/` can be run directly without an AI agent for diagnosti
 # Inspect one or more targets (or pass 'all')
 ./scripts/target-inspect.sh neovim mise starship
 ./scripts/target-inspect.sh all
+
+# Live CLI/schema drift check against verified baseline & active user configs
+./scripts/tool-drift-check.sh neovim mise starship herdr
+./scripts/tool-drift-check.sh --json
 
 # Back up a config file before editing, list backups, or restore from backup
 ./scripts/backup-config.sh ~/.gitconfig git "Enable delta/bat pager and fsmonitor"
@@ -211,11 +216,13 @@ system-optimizer/
 │   ├── backup-config.sh              # Pre-modification backup, SHA-256 ledger & restore manager
 │   ├── remote-run.sh                 # Run one of these scripts on another host over SSH
 │   ├── host-diff.sh                  # Compare shell startup files & tool configs between two hosts (secrets redacted)
-│   └── target-inspect.sh             # Per-target configuration & cross-tool synergy inspector (60 targets)
+│   ├── target-inspect.sh             # Per-target configuration & cross-tool synergy inspector (63 targets)
+│   └── tool-drift-check.sh           # Offline live CLI/schema introspection & config deprecation gate
 └── tests/
     ├── backup-smoke.sh               # Backup, list, restore, and path-traversal safety tests
     ├── probe-fallback.sh             # Verifies probes report "unknown" when PowerShell is unavailable
-    ├── inspect-smoke.sh              # Runs all 60 targets in a clean environment + synergy assertions
+    ├── inspect-smoke.sh              # Runs all 63 targets in a clean environment + synergy assertions
+    ├── drift-check-smoke.sh          # Verifies tool-drift-check.sh CLI, mock drift states & live JSON
     ├── inspect-windows.sh            # Smoke test for Windows-specific targets on Windows runners
     ├── json-escape.sh                # Validates JSON escaping for quotes, backslashes & control chars
     └── windows-baseline.sh           # Manual helper to run all probes on a Windows host (Git Bash)
@@ -230,6 +237,7 @@ bash tests/backup-smoke.sh
 bash tests/probe-fallback.sh
 bash tests/json-escape.sh
 bash tests/inspect-smoke.sh
+bash tests/drift-check-smoke.sh
 bash tests/inspect-windows.sh   # Runs on Windows (Git Bash)
 ```
 

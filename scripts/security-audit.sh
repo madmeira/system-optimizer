@@ -272,12 +272,57 @@ if [[ -d "$HOME/.ssh" ]]; then
   done
 fi
 
+pi_agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+pi_auth_perms="absent"
+[[ -f "$pi_agent_dir/auth.json" ]] && pi_auth_perms=$(stat -c "%a" "$pi_agent_dir/auth.json" 2>/dev/null || echo "unknown")
+pi_mcp_auth_perms="absent"
+[[ -f "$pi_agent_dir/mcp-auth.json" ]] && pi_mcp_auth_perms=$(stat -c "%a" "$pi_agent_dir/mcp-auth.json" 2>/dev/null || echo "unknown")
+insecure_pi_creds=()
+if [[ "$pi_auth_perms" != "absent" && "$pi_auth_perms" != "unknown" && "$pi_auth_perms" != "600" ]]; then
+  insecure_pi_creds+=("auth.json ($pi_auth_perms)")
+fi
+if [[ "$pi_mcp_auth_perms" != "absent" && "$pi_mcp_auth_perms" != "unknown" && "$pi_mcp_auth_perms" != "600" ]]; then
+  insecure_pi_creds+=("mcp-auth.json ($pi_mcp_auth_perms)")
+fi
+
 pacman_siglevel="unknown"
+pacman_siglevel_all=()
+pacman_insecure_siglevels=()
+pacman_download_user="n/a"
+pacman_sandbox_disabled=()
+pacman_sandbox_ok="unknown"
 pkg_sig_ok=false
 if [[ -f /etc/pacman.conf ]]; then
-  pacman_siglevel=$(grep -E "^[[:space:]]*SigLevel[[:space:]]*=" /etc/pacman.conf 2>/dev/null | head -n 1 | sed 's/.*=[ \t]*//' || true)
-  [[ -z "$pacman_siglevel" ]] && pacman_siglevel="default"
-  [[ "$pacman_siglevel" != "Never" ]] && pkg_sig_ok=true
+  if [[ -r /etc/pacman.conf ]]; then
+    while IFS= read -r sl; do
+      [[ -n "$sl" ]] && pacman_siglevel_all+=("$sl")
+    done < <(grep -E '^[[:space:]]*SigLevel[[:space:]]*=' /etc/pacman.conf 2>/dev/null | sed -E 's/^[[:space:]]*SigLevel[[:space:]]*=[[:space:]]*//; s/[[:space:]]+$//' || true)
+    if [[ ${#pacman_siglevel_all[@]} -gt 0 ]]; then
+      pacman_siglevel="${pacman_siglevel_all[0]}"
+    else
+      pacman_siglevel="default"
+    fi
+    for sl in "${pacman_siglevel_all[@]}"; do
+      if [[ "$sl" =~ (^|[[:space:]])(Never|TrustAll)([[:space:]]|$) ]]; then
+        pacman_insecure_siglevels+=("$sl")
+      fi
+    done
+    [[ ${#pacman_insecure_siglevels[@]} -eq 0 ]] && pkg_sig_ok=true
+
+    pacman_download_user=$(grep -E '^[[:space:]]*DownloadUser[[:space:]]*=' /etc/pacman.conf 2>/dev/null | head -n 1 | sed -E 's/^[[:space:]]*DownloadUser[[:space:]]*=[[:space:]]*//; s/[[:space:]]+$//' || true)
+    [[ -z "$pacman_download_user" ]] && pacman_download_user="unset"
+    while IFS= read -r ds; do
+      [[ -n "$ds" ]] && pacman_sandbox_disabled+=("$ds")
+    done < <(grep -oE '^[[:space:]]*(DisableSandbox|DisableSandboxFilesystem|DisableSandboxSyscalls)([[:space:]]|$)' /etc/pacman.conf 2>/dev/null | awk '{print $1}' || true)
+    if [[ ${#pacman_sandbox_disabled[@]} -gt 0 || "$pacman_download_user" == "unset" ]]; then
+      pacman_sandbox_ok=false
+    else
+      pacman_sandbox_ok=true
+    fi
+  else
+    pacman_siglevel="unreadable"
+    pacman_download_user="unreadable"
+  fi
 elif [[ -d /etc/apt ]]; then
   pacman_siglevel="n/a (APT)"
   if ! grep -RqiE 'AllowUnauthenticated[[:space:]]+"true"' /etc/apt/apt.conf /etc/apt/apt.conf.d 2>/dev/null; then
@@ -304,10 +349,9 @@ systemd_sec_ok=0
 systemd_sec_medium=0
 systemd_sec_unsafe=0
 if command -v systemd-analyze >/dev/null 2>&1; then
-  sec_summary=$(LC_ALL=C systemd-analyze security 2>/dev/null | LC_ALL=C awk '$2 ~ /^[0-9]/ { if ($2 >= 8.0) unsafe++; else if ($2 >= 5.0) medium++; else ok++ } END { printf "%d %d %d", ok, medium, unsafe }' || echo "0 0 0")
-  systemd_sec_ok=$(echo "$sec_summary" | awk '{print $1}')
-  systemd_sec_medium=$(echo "$sec_summary" | awk '{print $2}')
-  systemd_sec_unsafe=$(echo "$sec_summary" | awk '{print $3}')
+  sa_raw=$(LC_ALL=C systemd-analyze security 2>/dev/null || true)
+  sec_summary=$(printf '%s\n' "$sa_raw" | LC_ALL=C awk '$2 ~ /^[0-9]/ { if ($2 >= 8.0) unsafe++; else if ($2 >= 5.0) medium++; else ok++ } END { printf "%d %d %d\n", ok+0, medium+0, unsafe+0 }')
+  read -r systemd_sec_ok systemd_sec_medium systemd_sec_unsafe <<< "$sec_summary"
 fi
 
 score_flags=0
@@ -354,10 +398,18 @@ if [[ "$output_json" == true ]]; then
     "umask": "$(json_str "$current_umask")",
     "ssh_dir": "$(json_str "$ssh_dir_perms")",
     "gnupg_dir": "$(json_str "$gnupg_dir_perms")",
-    "insecure_ssh_keys": $(to_json_arr "${insecure_ssh_keys[@]}")
+    "insecure_ssh_keys": $(to_json_arr "${insecure_ssh_keys[@]}"),
+    "pi_auth_json": "$(json_str "$pi_auth_perms")",
+    "pi_mcp_auth_json": "$(json_str "$pi_mcp_auth_perms")",
+    "insecure_pi_creds": $(to_json_arr "${insecure_pi_creds[@]}")
   },
   "package_security": {
     "pacman_siglevel": "$(json_str "$pacman_siglevel")",
+    "pacman_siglevel_directives": $(to_json_arr "${pacman_siglevel_all[@]}"),
+    "pacman_insecure_siglevels": $(to_json_arr "${pacman_insecure_siglevels[@]}"),
+    "pacman_download_user": "$(json_str "$pacman_download_user")",
+    "pacman_sandbox_disabled_flags": $(to_json_arr "${pacman_sandbox_disabled[@]}"),
+    "pacman_sandbox_ok": $(json_bool "$pacman_sandbox_ok"),
     "keyring_timer_active": "$(json_str "$keyring_timer_active")",
     "pending_security_updates": "$(json_str "$pending_sec_updates")"
   },
@@ -396,12 +448,34 @@ else
   * ~/.ssh permissions: $ssh_dir_perms (Recommended: 700)
   * ~/.gnupg permissions: $gnupg_dir_perms (Recommended: 700)
 EOF
+  if [[ "$pi_auth_perms" != "absent" ]]; then
+    echo "  * Pi auth.json permissions: $pi_auth_perms (Recommended: 600)"
+  fi
+  if [[ "$pi_mcp_auth_perms" != "absent" ]]; then
+    echo "  * Pi mcp-auth.json permissions: $pi_mcp_auth_perms (Recommended: 600)"
+  fi
   if [[ ${#insecure_ssh_keys[@]} -gt 0 ]]; then
     echo "  * [WARNING] Loose SSH Key Permissions Detected: ${insecure_ssh_keys[*]}"
+  fi
+  if [[ ${#insecure_pi_creds[@]} -gt 0 ]]; then
+    echo "  * [WARNING] Loose Pi Credential Permissions Detected: ${insecure_pi_creds[*]} (Recommended: 600)"
   fi
   cat <<EOF
 - Package & Supply Chain Integrity:
   * Pacman SigLevel: $pacman_siglevel
+EOF
+  if [[ ${#pacman_insecure_siglevels[@]} -gt 0 ]]; then
+    echo "  * [WARNING] Insecure Pacman SigLevel Directive(s): ${pacman_insecure_siglevels[*]}"
+  fi
+  if [[ -r /etc/pacman.conf ]]; then
+    echo "  * Pacman DownloadUser: $pacman_download_user (Recommended: alpm)"
+    if [[ ${#pacman_sandbox_disabled[@]} -gt 0 ]]; then
+      echo "  * [WARNING] Pacman Sandbox Disabled Flags Active: ${pacman_sandbox_disabled[*]}"
+    elif [[ "$pacman_download_user" == "unset" ]]; then
+      echo "  * [WARNING] Pacman DownloadUser is unset (Pacman 7+ sandboxed downloads inactive)"
+    fi
+  fi
+  cat <<EOF
   * Keyring Sync Timer: $keyring_timer_active
   * Vulnerability / Update Status: $pending_sec_updates
 - systemd Sandboxing Assessment (systemd-analyze security):

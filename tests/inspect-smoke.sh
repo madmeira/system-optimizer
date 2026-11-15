@@ -17,9 +17,9 @@ trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/home"
 
 targets="bash bat boot brave btop cargo chrome controld cpu defender docker edge execution-policy eza fd firefox firewall flatpak full fzf gh git herdr htop
-kde-plasma kernel lazydocker lazygit makepkg memory mise mpv neovim network package-audit pacman pi podman powertoys pwsh python ripgrep rustdesk
-sandboxing security sqlite3 ssh starship storage syncthing sysctl-security system topgrade uac windows-terminal winget wsl yay yt-dlp zoxide"
-domain_and_browser_targets=" system security full kernel storage memory cpu boot network firewall ssh sysctl-security sandboxing package-audit execution-policy uac defender chrome edge brave firefox "
+kde-plasma kernel lazydocker lazygit librewolf makepkg memory mise mpv neovim network paccache package-audit pacman pi podman powertoys pwsh python ripgrep rustdesk
+sandboxing security sqlite3 ssh starship storage syncthing sysctl-security system topgrade uac uv windows-terminal winget wsl yay yt-dlp zoxide"
+domain_and_browser_targets=" system security full kernel storage memory cpu boot network firewall ssh sysctl-security sandboxing package-audit execution-policy uac defender chrome edge brave firefox librewolf "
 failed=0; count=0
 for t in $targets; do
   count=$((count + 1))
@@ -332,4 +332,20 @@ for needle in "apply-elevated-" 'Never invoke `sudo`' "umask 077" "chmod 0700"; 
 done
 grep -qF -- "WindowsBuiltInRole]::Administrator" "$ROOT/references/optimization-guide.md" || { echo "FAIL - optimization-guide.md missing PowerShell elevation template" >&2; exit 1; }
 echo "ok   - elevated remediation script workflow documented in SKILL.md and optimization-guide.md"
+
+# 2026 tool updates: uv, paccache, mise download_cache / deprecated always_keep_download, lazygit diffRenderers, wsl sparseVhd warning, Phase 2.5 dynamic gate
+printf '#!/usr/bin/env bash\nif [[ "${1:-}" == "--version" ]]; then echo "uv 0.13.8"; elif [[ "${1:-}" == "cache" ]]; then echo "%s/uv-cache"; elif [[ "${1:-}" == "tool" ]]; then printf "ruff v0.11.0\n"; fi\n' "$WORK" > "$WORK/bin/uv"
+chmod +x "$WORK/bin/uv"
+mkdir -p "$WORK/uv-cache" "$WORK/home/.config/uv"
+printf 'compile-bytecode = true\n' > "$WORK/home/.config/uv/uv.toml"
+uv_out="$(env -i PATH="$WORK/bin:$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/scripts/target-inspect.sh" uv)"
+[[ "$uv_out" == *"=== Target Inspection: uv ==="* && "$uv_out" == *"compile-bytecode"* ]] || { echo "FAIL - uv target inspection missing expected output" >&2; exit 1; }
+
+cfg_check mise .config/mise/config.toml $'[settings]\nalways_keep_download = true\nallow_root = true' "[DEPRECATED]"
+cfg_check lazygit .config/lazygit/config.yml $'git:\n  paging:\n    pager: delta' "diffRenderers"
+cfg_check wsl .wslconfig $'[wsl2]\nsparseVhd=true' "sparseVhd"
+for needle in "tool-drift-check.sh" "Phase 2.5" "SCHEMA DRIFT" "DEPRECATED CONFIG"; do
+  grep -qF -- "$needle" "$ROOT/SKILL.md" || { echo "FAIL - SKILL.md missing dynamic drift gate requirement: $needle" >&2; exit 1; }
+done
+echo "ok   - 2026 targets (uv, mise, lazygit, wsl) and Phase 2.5 dynamic drift gate verified"
 echo "inspect-smoke: $count targets passed"

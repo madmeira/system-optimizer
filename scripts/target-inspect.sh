@@ -17,6 +17,39 @@ if [[ -z "$target" ]]; then
   exit 1
 fi
 
+case "$target" in
+  -h|--help)
+    cat <<'EOF'
+Usage: target-inspect.sh <target-domain-tool-or-package> [target2 ...]
+
+Inspects system domains, tools, and packages across Performance, Configuration, and Security.
+
+Domains:
+  system, security, full, kernel, sysctl, sysctl-security, storage, disk,
+  filesystem, memory, swap, zram, cpu, governor, power, boot, systemd,
+  startup, firewall, ufw, nftables, firewalld, defender, ssh, sshd,
+  execution-policy, uac, network, net, sandboxing, systemd-security,
+  package-audit, pkg-audit, supply-chain
+
+Shells, Terminals & Multiplexers:
+  bash, pwsh, powershell, windows-terminal, wt, herdr, wsl
+
+Developer Tools & Runtimes:
+  mise, topgrade, pi, neovim, nvim, lazygit, git, gh, cargo, rust, rustc,
+  python, python3, uv, starship, zoxide, ripgrep, rg, fd, fdfind, eza,
+  bat, batcat, fzf, sqlite3
+
+Media, Sync, Containers, Monitors & OS Utilities:
+  mpv, yt-dlp, syncthing, podman, docker, lazydocker, flatpak, pacman, yay,
+  paru, makepkg, paccache, pacman-contrib, btop, htop, btop4win, rustdesk,
+  controld, ctrld, kde, kde-plasma, baloo, winget, powertoys
+
+Browsers:
+  chrome, edge, brave, firefox, librewolf
+EOF
+    exit 0
+    ;;
+esac
 local_app_data="$(win_path_unix "${LOCALAPPDATA:-$HOME/AppData/Local}")"
 roaming_app_data="$(win_path_unix "${APPDATA:-$HOME/AppData/Roaming}")"
 
@@ -123,6 +156,107 @@ cfg_perm_tag() {
   fi
 }
 
+# Strip ANSI CSI escape sequences and CR/NUL from CLI output
+strip_ansi() {
+  local esc
+  esc=$(printf '\033')
+  tr -d '\0\r' | sed -E "s/${esc}\\[[0-9;]*[[:alpha:]]//g"
+}
+
+# Run a command and print its first non-blank ANSI-stripped stdout line, or $1 default (SIGPIPE-safe under pipefail).
+first_clean_line_or() {
+  local default="$1" raw line
+  shift
+  raw=$("$@" 2>/dev/null || true)
+  line=$(printf '%s\n' "$raw" | strip_ansi | awk 'NF && !found { out=$0; found=1 } END { if (found) printf "%s", out }')
+  printf '%s' "${line:-$default}"
+}
+
+# Return 0 if any .lua file under $1 sets automatic_installation inside a mason-lspconfig spec/setup block.
+has_mason_lspconfig_deprecated() {
+  local dir="$1" f
+  while IFS= read -r f; do
+    [[ -f "$f" ]] || continue
+    if awk '
+      /^[[:space:]]*--/ { next }
+      {
+        line = $0
+        sub(/[[:space:]]*--.*$/, "", line)
+        if (line ~ /mason-lspconfig/) { in_mlsp = 1 }
+        else if (line ~ /["'\''][[:alnum:]_.-]+\/[[:alnum:]_.-]+["'\'']/ || line ~ /mason-(tool-installer|nvim-dap|null-ls)/) { in_mlsp = 0 }
+        if (in_mlsp && line ~ /automatic_installation[[:space:]]*=/) { found = 1; exit }
+      }
+      END { exit !found }
+    ' "$f" 2>/dev/null; then
+      return 0
+    fi
+  done < <(grep -RIl --include='*.lua' --exclude-dir=.git 'automatic_installation' "$dir" 2>/dev/null || true)
+  return 1
+}
+
+# Extract a key's value within a specific TOML [section] (empty section = top-level before any [section])
+toml_section_val() {
+  local file="$1" section="$2" key="$3"
+  [[ -r "$file" ]] || return 0
+  awk -v sec="$section" -v k="$key" '
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      if (line ~ /^[[:space:]]*\[/) {
+        hdr = line
+        sub(/^[[:space:]]*\[+/, "", hdr)
+        sub(/\].*$/, "", hdr)
+        gsub(/[[:space:]]+/, "", hdr)
+        in_sec = (sec != "" && hdr == sec)
+        seen_sec = 1
+        next
+      }
+      if ((sec == "" && !seen_sec) || in_sec) {
+        if (line ~ ("^[[:space:]]*" k "[[:space:]]*=")) {
+          val = line
+          sub(/^[^=]*=[[:space:]]*/, "", val)
+          if (val ~ /^"/) {
+            sub(/^"/, "", val); sub(/".*$/, "", val)
+          } else if (val ~ /^'\''/) {
+            sub(/^'\''/, "", val); sub(/'\''.*$/, "", val)
+          } else {
+            sub(/[[:space:]]*#.*$/, "", val)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
+          }
+          print val
+          exit
+        }
+      }
+    }
+  ' "$file" 2>/dev/null || true
+}
+
+# Extract a single- or multi-line TOML array value for <key> (e.g. disable = [...])
+toml_extract_array() {
+  local file="$1" key="$2"
+  [[ -r "$file" ]] || return 0
+  awk -v k="$key" '
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      sub(/[[:space:]]*#.*$/, "", line)
+      if (!collecting && line ~ ("^[[:space:]]*" k "[[:space:]]*=")) {
+        val = line
+        sub(/^[^=]*=[[:space:]]*/, "", val)
+        collecting = 1
+        acc = val
+        if (acc ~ /\]/) { print acc; collecting = 0; exit }
+        next
+      }
+      if (collecting) {
+        acc = acc " " line
+        if (line ~ /\]/) { print acc; collecting = 0; exit }
+      }
+    }
+    END { if (collecting && acc != "") print acc }
+  ' "$file" 2>/dev/null || true
+}
+
 # Print a browser found on Linux (empty $1 = not installed).
 browser_report_linux() {
   local exe="$1" ver
@@ -201,10 +335,10 @@ infer_theme() {
     fi
   fi
   local hdr_cfg
-  for hdr_cfg in "$roaming_app_data/herdr/config.toml" "$HOME/.config/herdr/config.toml"; do
-    if [[ -f "$hdr_cfg" ]]; then
+  for hdr_cfg in "${HERDR_CONFIG_PATH:-}" "$roaming_app_data/herdr/config.toml" "$HOME/.config/herdr/config.toml"; do
+    if [[ -n "$hdr_cfg" && -f "$hdr_cfg" ]]; then
       local hdr_theme
-      hdr_theme=$(grep -E '^[[:space:]]*name[[:space:]]*=' "$hdr_cfg" 2>/dev/null | cut -d= -f2- | tr -d ' "' || echo "")
+      hdr_theme=$(toml_section_val "$hdr_cfg" "theme" "name")
       if [[ -n "$hdr_theme" && "$hdr_theme" != "default" ]]; then
         echo "$hdr_theme"
         return 0
@@ -585,14 +719,18 @@ case "$target" in
       echo "  * Default Profile GUID: $def_prof"
       echo "  * Disable Animations: $anim_dis"
       echo "  * Copy Formatting: $copy_fmt"
-      atlas_eng=$(grep -E '"useAtlasEngine"[[:space:]]*:' "$wt_settings" 2>/dev/null | head -1 | awk -F: '{print $2}' | tr -d ' ,"' || echo "default (true)")
-      echo "  * Atlas GPU Text Engine: $atlas_eng"
+      atlas_eng=$(grep -E '"useAtlasEngine"[[:space:]]*:' "$wt_settings" 2>/dev/null | head -1 | awk -F: '{print $2}' | tr -d ' ,"' || true)
+      if [[ "$atlas_eng" == "false" ]]; then
+        echo "  * Atlas GPU Text Engine: false [WARNING] (Legacy setting explicitly disables GPU text rendering; remove or set true)"
+      else
+        echo "  * Atlas GPU Text Engine: ${atlas_eng:-default (enabled in WT 1.18+)}"
+      fi
     else
       echo "  - Standard settings.json not found yet."
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Hardware-accelerated Atlas text rendering engine ('useAtlasEngine: true'), set 'disableAnimations: true' for instantaneous tab/pane switching"
+    echo "  * Performance: Atlas GPU text rendering is enabled by default in Windows Terminal 1.18+ (ensure useAtlasEngine is not false); set 'disableAnimations: true' for instantaneous tab/pane switching"
     echo "  * Configuration: Set pwsh (PowerShell 7) or Git Bash as default profile, 'copyFormatting: none', Nerd Font face ('Hack Nerd Font')"
     echo "  * Security: Avoid profiles that auto-elevate without prompt; review custom action command injection"
     echo "====================================="
@@ -656,11 +794,24 @@ case "$target" in
       grep -E 'memory|processors|swap|autoMemoryReclaim|sparseVhd|dnsTunneling|networkingMode|firewall' "$wsl_conf_file" 2>/dev/null | while read -r line; do
         echo "  - $line"
       done || true
+      wsl_amr_exp=$(toml_section_val "$wsl_conf_file" "experimental" "autoMemoryReclaim")
+      wsl_amr_top=$(toml_section_val "$wsl_conf_file" "" "autoMemoryReclaim")
+      wsl_amr_wsl2=$(toml_section_val "$wsl_conf_file" "wsl2" "autoMemoryReclaim")
+      if [[ -n "$wsl_amr_top" || -n "$wsl_amr_wsl2" ]]; then
+        echo "  * [WARNING] autoMemoryReclaim should be placed under [experimental] in $wsl_conf_file"
+      elif [[ -n "$wsl_amr_exp" ]]; then
+        echo "  * [experimental] autoMemoryReclaim: $wsl_amr_exp"
+      fi
+      wsl_sparse=$(toml_section_val "$wsl_conf_file" "experimental" "sparseVhd")
+      [[ -z "$wsl_sparse" ]] && wsl_sparse=$(toml_section_val "$wsl_conf_file" "wsl2" "sparseVhd")
+      [[ -z "$wsl_sparse" ]] && wsl_sparse=$(toml_section_val "$wsl_conf_file" "" "sparseVhd")
+      if [[ "${wsl_sparse,,}" == "true" ]]; then
+        echo "  * [WARNING] sparseVhd=true is enabled in $wsl_conf_file (disabled upstream by Microsoft due to ext4 corruption risks)"
+      fi
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Set 'memory = 8GB' (bound to 50% host RAM), 'autoMemoryReclaim = dropcache' (reclaims cached memory to Windows),"
-    echo "                 'sparseVhd = true' (auto-compacts ext4 disk image on file deletion), processors bound to CPU cores"
+    echo "  * Performance: Set 'memory = 8GB' (bound to 50% host RAM), '[experimental] autoMemoryReclaim = dropcache' (reclaims cached memory to Windows), processors bound to CPU cores"
     echo "  * Configuration: Set 'networkingMode = mirrored' for low latency and Windows localhost parity, 'dnsTunneling = true'"
     echo "  * Security: Set 'firewall = true' with mirrored networking to apply Windows Defender Firewall rules inside WSL"
     echo "====================================="
@@ -777,17 +928,101 @@ case "$target" in
     echo "Binary: ${pi_bin:-unknown (running via wrapper/npx)}"
     pi_ver="unknown"
     if [[ -n "$pi_bin" ]]; then
-      pi_ver=$("$pi_bin" --version 2>/dev/null || echo "unknown")
+      pi_ver=$(first_clean_line_or "unknown" "$pi_bin" --version)
     fi
     echo "Version: $pi_ver"
 
-    echo "Configuration & State Files:"
-    for f in "$HOME/.pi/agent/settings.json" "$HOME/.pi/agent/auth.json" "$HOME/.pi/agent/mcp.json" "$HOME/.pi/agent/model-router.json" "$HOME/.pi/agent/models.json" "$HOME/.pi/web-search.json"; do
-      [[ -f "$f" ]] && echo "  - [EXISTS] $f"
+    pi_agent_dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+    echo "Configuration & State Files ($pi_agent_dir):"
+    for f in \
+      "$pi_agent_dir/settings.json" \
+      "$pi_agent_dir/auth.json" \
+      "$pi_agent_dir/mcp-auth.json" \
+      "$pi_agent_dir/models.json" \
+      "$pi_agent_dir/mcp.json" \
+      "$pi_agent_dir/trust.json" \
+      "$pi_agent_dir/keybindings.json"; do
+      if [[ -f "$f" ]]; then
+        echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
+      fi
+    done
+    for f in "$pi_agent_dir/model-router.json" "$HOME/.pi/web-search.json"; do
+      if [[ -f "$f" ]]; then
+        echo "  - [EXISTS] $f$(cfg_perm_tag "$f") (optional third-party extension)"
+      fi
     done
 
+    if ! is_windows; then
+      for cred_f in "$pi_agent_dir/auth.json" "$pi_agent_dir/mcp-auth.json"; do
+        if [[ -f "$cred_f" ]]; then
+          cred_mode=$(stat -c "%a" "$cred_f" 2>/dev/null || echo "")
+          if [[ -n "$cred_mode" && "$cred_mode" != "600" && "$cred_mode" != "400" ]]; then
+            echo "  * [SECURITY WARNING] $cred_f has mode $cred_mode (must be 0600 — stores sensitive credentials/OAuth tokens)"
+          fi
+        fi
+      done
+    fi
+
+    pi_settings="$pi_agent_dir/settings.json"
+    if [[ -f "$pi_settings" ]]; then
+      echo "Active Pi Settings ($pi_settings):"
+      if command -v python3 >/dev/null 2>&1; then
+        pi_parsed=$(python3 - "$pi_settings" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as fh:
+        d = json.load(fh)
+    cw = d.get("cacheWarming", "default (idle)")
+    dpt = d.get("defaultProjectTrust", "default (ask)")
+    dt = d.get("defaultTools", "default (all built-in)")
+    comp = d.get("compaction", {})
+    rt = comp.get("reserveTokens", "default (16384)") if isinstance(comp, dict) else "unknown"
+    krt = comp.get("keepRecentTokens", "default (20000)") if isinstance(comp, dict) else "unknown"
+    legacy = [k for k in ("permissions", "experimental") if k in d]
+    print(f"cw={cw}")
+    print(f"dpt={dpt}")
+    print(f"dt={dt}")
+    print(f"rt={rt}")
+    print(f"krt={krt}")
+    print(f"legacy={','.join(legacy)}")
+except Exception:
+    pass
+PY
+        )
+        if [[ -n "$pi_parsed" ]]; then
+          pi_cw=$(printf '%s\n' "$pi_parsed" | sed -n 's/^cw=//p' | head -n 1)
+          pi_dpt=$(printf '%s\n' "$pi_parsed" | sed -n 's/^dpt=//p' | head -n 1)
+          pi_dt=$(printf '%s\n' "$pi_parsed" | sed -n 's/^dt=//p' | head -n 1)
+          pi_rt=$(printf '%s\n' "$pi_parsed" | sed -n 's/^rt=//p' | head -n 1)
+          pi_krt=$(printf '%s\n' "$pi_parsed" | sed -n 's/^krt=//p' | head -n 1)
+          pi_legacy=$(printf '%s\n' "$pi_parsed" | sed -n 's/^legacy=//p' | head -n 1)
+          echo "  * cacheWarming: ${pi_cw:-default (idle)}"
+          echo "  * compaction: reserveTokens=${pi_rt:-default (16384)}, keepRecentTokens=${pi_krt:-default (20000)}"
+          echo "  * defaultProjectTrust: ${pi_dpt:-default (ask)}"
+          echo "  * defaultTools: ${pi_dt:-default (all built-in)}"
+          if [[ "$pi_dpt" == "always" ]]; then
+            echo "  * [SECURITY WARNING] defaultProjectTrust is 'always' globally (prefer 'ask' or 'never' with trust.json)"
+          fi
+          if [[ -n "$pi_legacy" ]]; then
+            echo "  * [NOTE] Legacy/non-core settings keys present ($pi_legacy); Pi 1.5.2 uses top-level cacheWarming, defaultProjectTrust, and defaultTools"
+          fi
+        fi
+      else
+        pi_cw=$(grep -E '"cacheWarming"[[:space:]]*:' "$pi_settings" 2>/dev/null | head -n 1 | awk -F: '{print $2}' | tr -d ' ,"' || true)
+        pi_dpt=$(grep -E '"defaultProjectTrust"[[:space:]]*:' "$pi_settings" 2>/dev/null | head -n 1 | awk -F: '{print $2}' | tr -d ' ,"' || true)
+        echo "  * cacheWarming: ${pi_cw:-default (idle)}"
+        echo "  * defaultProjectTrust: ${pi_dpt:-default (ask)}"
+        if [[ "$pi_dpt" == "always" ]]; then
+          echo "  * [SECURITY WARNING] defaultProjectTrust is 'always' globally (prefer 'ask' or 'never' with trust.json)"
+        fi
+        if grep -qE '"(permissions|experimental)"[[:space:]]*:' "$pi_settings" 2>/dev/null; then
+          echo "  * [NOTE] Legacy/non-core settings keys present (permissions/experimental); Pi 1.5.2 uses top-level cacheWarming, defaultProjectTrust, and defaultTools"
+        fi
+      fi
+    fi
+
     echo "Performance & Storage Metrics:"
-    sessions_dir="$HOME/.pi/agent/sessions"
+    sessions_dir="$pi_agent_dir/sessions"
     if [[ -d "$sessions_dir" ]]; then
       sess_count=$(find "$sessions_dir" -type f -name "*.jsonl" 2>/dev/null | wc -l | tr -d ' ' || true)
       stale_sess_count=$(find "$sessions_dir" -type f -name "*.jsonl" -mtime +30 2>/dev/null | wc -l | tr -d ' ' || true)
@@ -797,23 +1032,23 @@ case "$target" in
     cache_dir="$HOME/.pi/web-search-cache"
     if [[ -d "$cache_dir" ]]; then
       cache_size=$(du -sh "$cache_dir" 2>/dev/null | awk '{print $1}' || echo "0")
-      echo "  * Web Search Cache: $cache_size"
+      echo "  * Web Search Cache (optional extension): $cache_size"
     fi
 
     echo "Mise Toolchain Synergy in Agent Harness:"
     mise_bin=$(command -v mise 2>/dev/null || echo "")
     if [[ -n "$mise_bin" ]]; then
       echo "  * Mise Binary Detected: $mise_bin"
-      mise_shims="$HOME/.local/share/mise/shims"
+      mise_shims="${MISE_DATA_DIR:-$HOME/.local/share/mise}/shims"
       if is_windows; then
-        mise_shims="$local_app_data/mise/shims"
+        mise_shims="$(win_path_unix "${MISE_DATA_DIR:-$local_app_data/mise}")/shims"
       fi
       if [[ -d "$mise_shims" ]]; then
         echo "  * Mise Shims Directory: [EXISTS] ($mise_shims)"
         if [[ ":$PATH:" == *":$mise_shims:"* ]]; then
           echo "  * Shims on Agent PATH: [ACTIVE] (Subshell commands inherit project-pinned runtimes)"
         else
-          echo "  * Shims on Agent PATH: [NOT ON PATH] (Ensure mise shims are exported in subshell environments)"
+          echo "  * Shims on Agent PATH: [NOT ON PATH] (Export mise shims on PATH or set shellPath/shellCommandPrefix in settings.json)"
         fi
       fi
     else
@@ -821,9 +1056,9 @@ case "$target" in
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Session file archival (>30d), cache pruning, compaction reserve tuning (16384)"
-    echo "  * Configuration: Inherit mise shims on PATH for subshell execution (Node, Python, Rust, Go, UV); model router latency tuning"
-    echo "  * Security: auth.json 0600 mode, path deny rules (SSH/secrets), npm package supply-chain audit"
+    echo "  * Performance: Archive stale sessions (>30d); keep cacheWarming = 'idle' with PI_CACHE_RETENTION=long; tune compaction.keepRecentTokens/modelOverrides (reserveTokens defaults to 16384); prefer codemode/deferred MCP exposure"
+    echo "  * Configuration: Inherit mise shims on PATH (or shellPath in settings.json) for subshell runtimes; manage keybindings.json, mcp.json, and models.json"
+    echo "  * Security: Enforce 0600 on auth.json and mcp-auth.json; use defaultProjectTrust: 'ask' (trust.json) and defaultTools / --exclude-tools (OS/container sandboxing or tool_call extension for path gating); audit npm packages (--ignore-scripts)"
     echo "====================================="
     exit 0
     ;;
@@ -832,31 +1067,43 @@ case "$target" in
     ctrld_bin=$(command -v ctrld 2>/dev/null || command -v controld 2>/dev/null || echo "")
     echo "Binary: ${ctrld_bin:-Not installed}"
     if [[ -n "$ctrld_bin" ]]; then
-      ctrld_ver=$("$ctrld_bin" version 2>/dev/null || "$ctrld_bin" --version 2>/dev/null || echo "unknown")
+      ctrld_ver=$(first_clean_line_or "" "$ctrld_bin" version)
+      [[ -z "$ctrld_ver" ]] && ctrld_ver=$(first_clean_line_or "unknown" "$ctrld_bin" --version)
       echo "Version: $ctrld_ver"
     fi
 
     echo "Discovered Configuration Files:"
     for f in \
       "/etc/controld/ctrld.toml" \
-      "/etc/ctrld/ctrld.toml" \
       "$roaming_app_data/controld/ctrld.toml" \
       "/c/ProgramData/ControlD/ctrld.toml" \
       "$HOME/.config/controld/ctrld.toml"; do
       [[ -f "$f" ]] || continue
+      if [[ ! -r "$f" ]]; then
+        echo "  - [NOT READABLE] $f$(cfg_perm_tag "$f") (root-owned; inspect with elevated privileges)"
+        continue
+      fi
       echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
       if grep -qE '^[[:space:]]*ip[[:space:]]*=[[:space:]]*"0\.0\.0\.0"' "$f" 2>/dev/null; then
         echo "  * [WARNING] listener in $f binds 0.0.0.0 (use 127.0.0.1 unless this host serves the LAN)"
       fi
+      cd_type=$(toml_section_val "$f" "upstream.0" "type")
+      [[ -z "$cd_type" ]] && cd_type=$(toml_section_val "$f" "upstream.1" "type")
+      cd_cache=$(toml_section_val "$f" "service" "cache_enable")
+      cd_csize=$(toml_section_val "$f" "service" "cache_size")
+      cd_imode=$(toml_section_val "$f" "service" "intercept_mode")
+      [[ -n "$cd_type" ]] && echo "  * Upstream Protocol: $cd_type"
+      [[ -n "$cd_cache" ]] && echo "  * Cache Enabled: $cd_cache (cache_size=${cd_csize:-default})"
+      [[ -n "$cd_imode" ]] && echo "  * Intercept Mode: $cd_imode"
     done
     if [[ -n "$ctrld_bin" ]] && ! is_windows; then
       echo "  * Service ctrld: $(first_line_or inactive systemctl is-active ctrld)"
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: In-memory cache enabled, DoQ (DNS-over-QUIC) primary with DoH failover, LAN discovery off"
-    echo "  * Configuration: Local loopback listener 127.0.0.1:53, adapter DNS integration, log level notice"
-    echo "  * Security: Encrypted upstream transport, secure config permissions (0600)"
+    echo "  * Performance: Enable in-memory cache (cache_enable = true, cache_size = 4096); use type = 'doh3' (DNS-over-HTTP/3) primary with 'doh' failover; disable LAN discovery"
+    echo "  * Configuration: Local loopback listener 127.0.0.1:53 (restricted = true), adapter DNS integration, log_level = 'notice'"
+    echo "  * Security: Encrypted upstream transport (doh3/doh), secure config permissions (0600)"
     echo "====================================="
     exit 0
     ;;
@@ -864,6 +1111,14 @@ case "$target" in
     echo "Category: Remote Desktop / RustDesk Remote Access"
     rd_bin=$(command -v rustdesk 2>/dev/null || echo "")
     echo "Binary: ${rd_bin:-Not installed (Windows App or Service)}"
+    rd_ver="unknown"
+    if [[ -n "$rd_bin" ]]; then
+      rd_ver=$(first_clean_line_or "" "$rd_bin" --version)
+    fi
+    if [[ -z "$rd_ver" || "$rd_ver" == "unknown" ]] && ! is_windows && command -v pacman >/dev/null 2>&1; then
+      rd_ver=$(pacman -Q rustdesk-bin rustdesk 2>/dev/null | head -n 1 || true)
+    fi
+    echo "Version: ${rd_ver:-unknown}"
 
     echo "Discovered Configuration Files:"
     for f in \
@@ -872,12 +1127,26 @@ case "$target" in
       "$roaming_app_data/RustDesk/config/RustDesk.toml" \
       "$roaming_app_data/RustDesk/config/RustDesk2.toml" \
       "$roaming_app_data/RustDesk/config/peers.toml" \
+      "/c/Windows/ServiceProfiles/LocalService/AppData/Roaming/RustDesk/config/RustDesk2.toml" \
       "/etc/rustdesk/rustdesk.toml"; do
       [[ -f "$f" ]] || continue
+      if [[ ! -r "$f" ]]; then
+        echo "  - [NOT READABLE] $f$(cfg_perm_tag "$f")"
+        continue
+      fi
       echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
       if grep -qE "verification-method[[:space:]]*=[[:space:]]*['\"]use-permanent-password" "$f" 2>/dev/null; then
         echo "  * [NOTE] $f accepts the permanent password only (a preference: temporary or both passwords, plus approve-mode click, exposes less)"
       fi
+      if grep -qiE "direct-server[[:space:]]*=[[:space:]]*['\"]?Y['\"]?" "$f" 2>/dev/null; then
+        echo "  * [WARNING] $f enables direct-server = 'Y' (direct IP access exposed; disable unless restricted to trusted LAN)"
+      fi
+      rd_approve=$(grep -E "approve-mode[[:space:]]*=" "$f" 2>/dev/null | head -n 1 | cut -d= -f2- | tr -d " '\"" || true)
+      rd_lan=$(grep -E "enable-lan-discovery[[:space:]]*=" "$f" 2>/dev/null | head -n 1 | cut -d= -f2- | tr -d " '\"" || true)
+      rd_headless=$(grep -E "allow-linux-headless[[:space:]]*=" "$f" 2>/dev/null | head -n 1 | cut -d= -f2- | tr -d " '\"" || true)
+      [[ -n "$rd_approve" ]] && echo "  * approve-mode: $rd_approve"
+      [[ -n "$rd_lan" ]] && echo "  * enable-lan-discovery: $rd_lan"
+      [[ -n "$rd_headless" ]] && echo "  * allow-linux-headless: $rd_headless"
     done
     if [[ -n "$rd_bin" ]] && ! is_windows; then
       echo "  * Service rustdesk: $(first_line_or inactive systemctl is-active rustdesk)"
@@ -885,8 +1154,8 @@ case "$target" in
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Hardware video acceleration (NVENC on NVIDIA RTX, D3D11/DirectX on Windows, VA-API on Linux)"
-    echo "  * Configuration: Custom ID/relay server, on-demand vs background service mode, tray minimization"
-    echo "  * Security: Strong randomized temporary passwords, whitelist allowed peer IDs, restrict remote console execution"
+    echo "  * Configuration: Custom ID/relay server, on-demand vs background service mode, disable direct-server unless needed"
+    echo "  * Security: Strong randomized temporary passwords, approve-mode = 'password-and-click' or 'click', whitelist allowed peer IDs, restrict remote console execution"
     echo "====================================="
     exit 0
     ;;
@@ -895,7 +1164,7 @@ case "$target" in
     mpv_bin=$(command -v mpv 2>/dev/null || echo "")
     echo "Binary: ${mpv_bin:-Not installed}"
     if [[ -n "$mpv_bin" ]]; then
-      mpv_ver=$("$mpv_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
+      mpv_ver=$(first_clean_line_or "unknown" "$mpv_bin" --version)
       echo "Version: $mpv_ver"
     fi
 
@@ -904,7 +1173,7 @@ case "$target" in
       "$roaming_app_data/mpv/mpv.conf" \
       "$HOME/.config/mpv/mpv.conf" \
       "$local_app_data/mpv/mpv.conf"; do
-      [[ -f "$f" ]] && echo "  - [EXISTS] $f"
+      [[ -f "$f" ]] && echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
     done
 
     mpv_cfg=""
@@ -917,9 +1186,15 @@ case "$target" in
 
     if [[ -n "$mpv_cfg" ]]; then
       echo "Key Parameters in $mpv_cfg:"
-      grep -E '^(vo|gpu-api|hwdec|profile|target-colorspace-hint|interpolation|scale|ytdl-format|tone-mapping)=' "$mpv_cfg" 2>/dev/null | while read -r line; do
+      grep -E '^[[:space:]]*(vo|gpu-api|gpu-context|hwdec|profile|hdr-compute-peak|target-colorspace-hint(-mode)?|interpolation|scale|ytdl-format|tone-mapping)[[:space:]]*=' "$mpv_cfg" 2>/dev/null | while read -r line; do
         echo "  * $line"
       done || true
+      if grep -qiE '^[[:space:]]*profile[[:space:]]*=[[:space:]]*gpu-hq([[:space:]]|$|#)' "$mpv_cfg" 2>/dev/null; then
+        echo "  * [DEPRECATED] profile=gpu-hq is a legacy alias in $mpv_cfg (use profile=high-quality)"
+      fi
+      if grep -qiE '^[[:space:]]*hwdec[[:space:]]*=[[:space:]]*[a-z0-9]+-copy([[:space:],]|$)' "$mpv_cfg" 2>/dev/null; then
+        echo "  * [NOTE] Copyback hwdec (*-copy) forces GPU->RAM->GPU PCIe transfers; prefer zero-copy hwdec=auto-safe unless using CPU video filters"
+      fi
       if grep -qiE '^[[:space:]]*[^#]*no-check-certificate' "$mpv_cfg" 2>/dev/null; then
         echo "  * [SECURITY WARNING] 'no-check-certificates' found in $mpv_cfg (disables TLS verification)"
       fi
@@ -928,32 +1203,32 @@ case "$target" in
     echo "MPV + yt-dlp + GPU HWDEC Companion Synergy:"
     ytdl_bin=$(command -v yt-dlp 2>/dev/null || echo "")
     if [[ -n "$ytdl_bin" ]]; then
-      ytdl_ver=$("$ytdl_bin" --version 2>/dev/null || echo "unknown")
+      ytdl_ver=$(first_clean_line_or "unknown" "$ytdl_bin" --version)
       echo "  * Media Streamer (yt-dlp): [AVAILABLE] ($ytdl_bin $ytdl_ver)"
     else
       echo "  * Media Streamer (yt-dlp): [NOT FOUND] (Install yt-dlp to stream web video directly to mpv)"
     fi
 
     detected_gpu="$(get_detected_gpu)"
-    hwdec_choice="hwdec=auto-safe"
-    vo_choice="vo=gpu-next, gpu-api=d3d11 (Windows) or vulkan (Linux)"
+    hwdec_choice="hwdec=auto-safe (zero-copy default)"
+    vo_choice="vo=gpu-next, gpu-api=vulkan (Linux) or d3d11/vulkan (Windows)"
     if [[ "$detected_gpu" =~ (NVIDIA|GeForce|RTX|GTX) ]]; then
-      hwdec_choice="hwdec=nvdec-copy (NVIDIA RTX / discrete GPU)"
+      hwdec_choice="hwdec=auto-safe (or nvdec,vulkan,auto zero-copy on NVIDIA)"
     elif [[ "$detected_gpu" =~ (AMD|Radeon) ]]; then
-      hwdec_choice="hwdec=vaapi (Linux) / d3d11va (Windows AMD Radeon)"
+      hwdec_choice="hwdec=auto-safe (or vaapi,vulkan,auto on Linux / d3d11va,vulkan,auto on Windows AMD)"
     elif [[ "$detected_gpu" =~ (Haswell|Ivy[[:space:]]Bridge|Sandy[[:space:]]Bridge|HD[[:space:]]Graphics[[:space:]]4[0-9]{3}) ]]; then
       hwdec_choice="hwdec=auto-safe (Legacy Intel iGPU VA-API)"
       vo_choice="vo=gpu, gpu-api=opengl (Conservative pipeline for legacy Intel iGPU)"
     elif [[ "$detected_gpu" =~ (Intel) ]]; then
-      hwdec_choice="hwdec=vaapi (Linux) / d3d11va (Windows Intel Graphics)"
+      hwdec_choice="hwdec=auto-safe (or vaapi,vulkan,auto on Linux / d3d11va,vulkan,auto on Windows Intel)"
     fi
     echo "  * Hardware Decoder: $hwdec_choice"
     echo "  * Recommended Video Output: $vo_choice"
     echo "  * Browser Bypass: Direct mpv streaming bypasses heavy Chromium/browser CPU and RAM consumption"
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Stream web video directly to mpv via yt-dlp; use $vo_choice, $hwdec_choice"
-    echo "  * Configuration: HDR passthrough ('target-colorspace-hint=yes') or SDR tone-mapping ('tone-mapping=bt.2446a'), ytdl-format bound to 1080p/best"
+    echo "  * Performance: Stream web video directly to mpv via yt-dlp; use $vo_choice, $hwdec_choice, profile=high-quality"
+    echo "  * Configuration: Use tone-mapping=auto and target-colorspace-hint=auto (or =yes on HDR displays); bind ytdl-format to 1080p/best"
     echo "  * Security: Enforce TLS certificate verification (never pass no-check-certificates), restrict untrusted lua scripts"
     echo "====================================="
     exit 0
@@ -963,54 +1238,100 @@ case "$target" in
     tg_bin=$(command -v topgrade 2>/dev/null || echo "")
     echo "Binary: ${tg_bin:-Not installed}"
     if [[ -n "$tg_bin" ]]; then
-      tg_ver=$("$tg_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
+      tg_ver=$(first_clean_line_or "unknown" "$tg_bin" --version)
       echo "Version: $tg_ver"
     fi
 
     echo "Discovered Configuration Files:"
     tg_cfg=""
-    for f in "$roaming_app_data/topgrade.toml" "$HOME/.config/topgrade.toml"; do
+    tg_files=()
+    for f in "$roaming_app_data/topgrade.toml" "${XDG_CONFIG_HOME:-$HOME/.config}/topgrade.toml"; do
       if [[ -f "$f" ]]; then
-        echo "  - [EXISTS] $f"
+        echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
         [[ -z "$tg_cfg" ]] && tg_cfg="$f"
+        tg_files+=("$f")
       fi
     done
-    if [[ -d "$HOME/.config/topgrade.d" ]]; then
-      echo "  - [EXISTS DIR] $HOME/.config/topgrade.d"
+    tg_d_dir="${XDG_CONFIG_HOME:-$HOME/.config}/topgrade.d"
+    if [[ -d "$tg_d_dir" ]]; then
+      echo "  - [EXISTS DIR] $tg_d_dir"
+      for df in "$tg_d_dir"/*.toml; do
+        if [[ -f "$df" ]]; then
+          echo "  - [EXISTS] $df$(cfg_perm_tag "$df")"
+          tg_files+=("$df")
+        fi
+      done
     fi
 
-    if [[ -n "$tg_cfg" ]]; then
+    if [[ ${#tg_files[@]} -gt 0 ]]; then
       echo "Active Topgrade Configuration:"
-      cleanup_val=$(grep -E '^[[:space:]]*cleanup[[:space:]]*=' "$tg_cfg" 2>/dev/null | cut -d= -f2- | tr -d ' "' || echo "false")
-      retry_val=$(grep -E '^[[:space:]]*ask_retry[[:space:]]*=' "$tg_cfg" 2>/dev/null | cut -d= -f2- | tr -d ' "' || echo "true")
-      dis_val=$(grep -E '^[[:space:]]*disable[[:space:]]*=' "$tg_cfg" 2>/dev/null | cut -d= -f2- || echo "[]")
-      pre_sudo_val=$(grep -E '^[[:space:]]*pre_sudo[[:space:]]*=' "$tg_cfg" 2>/dev/null | cut -d= -f2- | tr -d ' "' || echo "false")
-      echo "  * Post-Run Cleanup: $cleanup_val"
-      echo "  * Ask Retry: $retry_val"
+      cleanup_val=""
+      retry_val=""
+      pre_sudo_val=""
+      sudo_loop_val=""
+      dis_val=""
+      tg_has_mise=""
+      tg_bump=""
+      tg_jobs=""
+      tg_reshim=""
+      tg_win_accept=""
+      tg_win_sudo=""
+      tg_dup_gh_ext=""
+      for tf in "${tg_files[@]}"; do
+        [[ -z "$cleanup_val" ]] && cleanup_val=$(toml_section_val "$tf" "misc" "cleanup")
+        [[ -z "$cleanup_val" ]] && cleanup_val=$(toml_section_val "$tf" "" "cleanup")
+        [[ -z "$retry_val" ]] && retry_val=$(toml_section_val "$tf" "misc" "ask_retry")
+        [[ -z "$retry_val" ]] && retry_val=$(toml_section_val "$tf" "" "ask_retry")
+        [[ -z "$pre_sudo_val" ]] && pre_sudo_val=$(toml_section_val "$tf" "misc" "pre_sudo")
+        [[ -z "$pre_sudo_val" ]] && pre_sudo_val=$(toml_section_val "$tf" "" "pre_sudo")
+        [[ -z "$sudo_loop_val" ]] && sudo_loop_val=$(toml_section_val "$tf" "misc" "sudo_loop")
+        [[ -z "$sudo_loop_val" ]] && sudo_loop_val=$(toml_section_val "$tf" "" "sudo_loop")
+        arr=$(toml_extract_array "$tf" "disable")
+        [[ -n "$arr" ]] && dis_val="$dis_val $arr"
+        grep -qE '^[[:space:]]*\[mise\]' "$tf" 2>/dev/null && tg_has_mise="yes"
+        [[ -z "$tg_bump" ]] && tg_bump=$(toml_section_val "$tf" "mise" "bump")
+        [[ -z "$tg_jobs" ]] && tg_jobs=$(toml_section_val "$tf" "mise" "jobs")
+        grep -qi "reshim" "$tf" 2>/dev/null && tg_reshim="yes"
+        [[ -z "$tg_win_accept" ]] && tg_win_accept=$(toml_section_val "$tf" "windows" "accept_all_updates")
+        [[ -z "$tg_win_sudo" ]] && tg_win_sudo=$(toml_section_val "$tf" "windows" "winget_use_sudo")
+        grep -qi "gh extension upgrade" "$tf" 2>/dev/null && tg_dup_gh_ext="yes"
+      done
+      dis_val="${dis_val:-[]}"
+      echo "  * Post-Run Cleanup: ${cleanup_val:-false}"
+      echo "  * Ask Retry: ${retry_val:-true}"
       echo "  * Disabled Steps: $dis_val"
-      echo "  * Pre-Sudo Credential Cache: $pre_sudo_val"
+      echo "  * Pre-Sudo Credential Cache: ${pre_sudo_val:-false}"
+      if [[ "$sudo_loop_val" == "true" ]]; then
+        echo "  * [NOTE] sudo_loop = true keeps sudo cached (avoid leaving unattended terminals open)"
+      fi
+      if is_windows || [[ -n "$tg_win_accept" || -n "$tg_win_sudo" ]]; then
+        echo "  * [windows] accept_all_updates: ${tg_win_accept:-unset}, winget_use_sudo: ${tg_win_sudo:-unset}"
+      fi
+      if [[ -n "$tg_dup_gh_ext" ]]; then
+        echo "  * [NOTE] Manual 'gh extension upgrade' found in config; Topgrade 17+ handles this natively via github_cli_extensions"
+      fi
 
       echo "Mise Companion Integration in Topgrade:"
       mise_bin=$(command -v mise 2>/dev/null || echo "")
       if [[ -n "$mise_bin" ]]; then
-        tg_has_mise=$(grep -E '^[[:space:]]*\[mise\]' "$tg_cfg" 2>/dev/null || true)
-        tg_bump=$(grep -A 5 '^[[:space:]]*\[mise\]' "$tg_cfg" 2>/dev/null | grep -E '^[[:space:]]*bump[[:space:]]*=' | cut -d= -f2- | tr -d ' "' || echo "false")
-        tg_jobs=$(grep -A 5 '^[[:space:]]*\[mise\]' "$tg_cfg" 2>/dev/null | grep -E '^[[:space:]]*jobs[[:space:]]*=' | cut -d= -f2- | tr -d ' "' || echo "mise default")
-        tg_reshim=$(grep -i "reshim" "$tg_cfg" 2>/dev/null || true)
         echo "  * Mise Binary Detected: $mise_bin"
-        echo "  * [mise] Section in topgrade.toml: $(if [[ -n "$tg_has_mise" ]]; then echo "Configured (bump=$tg_bump, jobs=$tg_jobs)"; else echo "Missing / Using defaults (bump=false)"; fi)"
+        echo "  * [mise] Section in topgrade config: $(if [[ -n "$tg_has_mise" ]]; then echo "Configured (bump=${tg_bump:-false}, jobs=${tg_jobs:-mise default})"; else echo "Missing / Using defaults (bump=false)"; fi)"
         echo "  * Post-Upgrade 'mise reshim' Hook: $(if [[ -n "$tg_reshim" ]]; then echo "Present in post_commands"; else echo "Missing (Add to post_commands to synchronize shims)"; fi)"
         echo "  * Redundant Runtime Self-Updater Conflicts: $(if echo "$dis_val" | grep -qi "uv"; then echo "uv disabled in topgrade (Prevented collision with mise)"; else echo "uv not disabled (May run duplicate self-update if managed by mise)"; fi)"
         echo "  * Rust Compilation De-duplication: $(if echo "$dis_val" | grep -qi "cargo"; then echo "cargo disabled in topgrade (Prevents slow from-source rebuilds, managed via mise binstall)"; else echo "cargo active in topgrade (Will compile from source; consider disabling if using mise cargo.binstall)"; fi)"
+        pi_bin_tg=$(command -v pi 2>/dev/null || echo "")
+        if [[ "$pi_bin_tg" == *"mise"* ]] || "$mise_bin" ls pi 2>/dev/null | grep -q .; then
+          echo "  * Pi Agent Step De-duplication: $(if echo "$dis_val" | grep -qiE '(^|[^a-z])pi([^a-z]|$)'; then echo "pi disabled in topgrade (Prevented dual-updater collision with mise)"; else echo "pi managed by mise but not in disable (Add 'pi' alongside 'uv'/'cargo' in disable)"; fi)"
+        fi
       else
         echo "  * Mise is not currently installed on this system."
       fi
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Enable cleanup = true (runs mise prune and cleans package caches); bound [mise] jobs to $(nproc 2>/dev/null || echo 4); disable uninstalled/redundant steps"
-    echo "  * Configuration: Set [mise] bump = true for automatic tool version updates; add 'mise reshim' to post_commands; coordinate update order across winget/wsl/pacman/mise"
-    echo "  * Security: Restrict untrusted custom commands, verify origin repository of third-party package managers; run mise unprivileged without sudo (allow_root = false)"
+    echo "  * Performance: Enable cleanup = true (runs mise prune and cleans package caches); bound [mise] jobs to $detected_threads; disable uninstalled or mise-managed steps ('uv', 'cargo', 'pi')"
+    echo "  * Configuration: Set [mise] bump = true and 'mise reshim' in [post_commands]; on Windows set [windows] accept_all_updates = true and winget_use_sudo = false; rely on native github_cli_extensions step"
+    echo "  * Security: Set [misc] allow_root = false; restrict untrusted custom [commands]; avoid unattended sudo_loop = true; enforce 0600 on topgrade.toml"
     echo "====================================="
     exit 0
     ;;
@@ -1019,7 +1340,7 @@ case "$target" in
     mise_bin=$(command -v mise 2>/dev/null || echo "")
     echo "Binary: ${mise_bin:-Not installed}"
     if [[ -n "$mise_bin" ]]; then
-      mise_ver=$("$mise_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
+      mise_ver=$(first_clean_line_or "unknown" "$mise_bin" --version)
       echo "Version: $mise_ver"
       if is_windows; then
         echo "Platform: Windows (Native / shims)"
@@ -1034,31 +1355,85 @@ case "$target" in
     fi
 
     echo "Discovered Configuration Files:"
+    mise_cfg_dir="${MISE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/mise}"
     mise_cfg=""
-    for f in "$HOME/.config/mise/config.toml" "$HOME/.config/mise/settings.toml" "$local_app_data/mise/config.toml" "$roaming_app_data/mise/config.toml"; do
+    mise_toml_files=()
+    for f in "$mise_cfg_dir/config.toml" "$roaming_app_data/mise/config.toml" "$local_app_data/mise/config.toml"; do
       if [[ -f "$f" ]]; then
-        echo "  - [EXISTS] $f"
-        [[ -z "$mise_cfg" && "$f" == *config.toml ]] && mise_cfg="$f"
+        echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
+        [[ -z "$mise_cfg" ]] && mise_cfg="$f"
+        mise_toml_files+=("$f")
       fi
     done
+    if [[ -d "$mise_cfg_dir/conf.d" ]]; then
+      for cf in "$mise_cfg_dir/conf.d"/*.toml; do
+        if [[ -f "$cf" ]]; then
+          echo "  - [EXISTS] $cf$(cfg_perm_tag "$cf")"
+          mise_toml_files+=("$cf")
+        fi
+      done
+    fi
+    if [[ -f "$mise_cfg_dir/settings.toml" ]]; then
+      echo "  - [LEGACY] $mise_cfg_dir/settings.toml$(cfg_perm_tag "$mise_cfg_dir/settings.toml") -> migrate to config.toml [settings]"
+      mise_toml_files+=("$mise_cfg_dir/settings.toml")
+    fi
 
-    if [[ -n "$mise_cfg" ]]; then
-      echo "Active Mise Configuration ($mise_cfg):"
-      m_jobs=$(grep -E '^[[:space:]]*jobs[[:space:]]*=' "$mise_cfg" 2>/dev/null | cut -d= -f2- | tr -d ' "' || echo "default (4)")
-      m_env_cache=$(grep -E '^[[:space:]]*env_cache[[:space:]]*=' "$mise_cfg" 2>/dev/null | cut -d= -f2- | tr -d ' "' || echo "false")
-      m_pin=$(grep -E '^[[:space:]]*pin[[:space:]]*=' "$mise_cfg" 2>/dev/null | cut -d= -f2- | tr -d ' "' || echo "false")
-      m_prune_age=$(grep -E '^[[:space:]]*cache_prune_age[[:space:]]*=' "$mise_cfg" 2>/dev/null | cut -d= -f2- | tr -d ' "' || echo "30d")
-      m_binstall=$(grep -E '^[[:space:]]*binstall[[:space:]]*=' "$mise_cfg" 2>/dev/null | cut -d= -f2- | tr -d ' "' || echo "false")
-      echo "  * Parallel Jobs: $m_jobs (Hardware thread budget: $(nproc 2>/dev/null || echo 4))"
-      echo "  * Environment Caching (env_cache): $m_env_cache"
+    mise_setting_val() {
+      local key="$1" default="$2" val="" sec="" subk="$1" mf=""
+      if [[ -n "$mise_bin" ]]; then
+        val=$(first_clean_line_or "" "$mise_bin" settings get "$key")
+      fi
+      if [[ -z "$val" ]]; then
+        if [[ "$key" == *.* ]]; then
+          sec="settings.${key%.*}"
+          subk="${key#*.}"
+        else
+          sec="settings"
+        fi
+        for mf in "${mise_toml_files[@]}"; do
+          val=$(toml_section_val "$mf" "$sec" "$subk")
+          [[ -z "$val" && "$key" == *.* ]] && val=$(toml_section_val "$mf" "settings" "$key")
+          [[ -z "$val" ]] && val=$(toml_section_val "$mf" "" "$key")
+          [[ -n "$val" ]] && break
+        done
+      fi
+      printf '%s' "${val:-$default}"
+    }
+
+    if [[ -n "$mise_bin" || ${#mise_toml_files[@]} -gt 0 ]]; then
+      echo "Active Mise Settings ($(if [[ -n "$mise_bin" ]]; then echo "live mise settings + TOML"; else echo "${mise_cfg:-TOML}"; fi)):"
+      m_jobs=$(mise_setting_val "jobs" "default (4)")
+      m_env_cache=$(mise_setting_val "env_cache" "false")
+      m_env_cache_ttl=$(mise_setting_val "env_cache_ttl" "1h")
+      m_pin=$(mise_setting_val "pin" "false")
+      m_prune_age=$(mise_setting_val "cache_prune_age" "30d")
+      m_binstall=$(mise_setting_val "cargo.binstall" "true")
+      m_dl_cache=$(mise_setting_val "download_cache" "true")
+      m_dl_max=$(mise_setting_val "download_cache_max_size" "2GiB")
+      m_auto_prune=$(mise_setting_val "upgrade.auto_prune" "true")
+      m_min_age=$(mise_setting_val "minimum_release_age" "unset")
+      m_npm_prov=$(mise_setting_val "npm.provenance" "true")
+      echo "  * Parallel Jobs: $m_jobs (Hardware thread budget: $detected_threads)"
+      echo "  * Environment Caching (env_cache): $m_env_cache (ttl=$m_env_cache_ttl)"
+      echo "  * Download Cache: $m_dl_cache (max_size=$m_dl_max)"
       echo "  * Version Pinning (pin): $m_pin"
-      echo "  * Cache Prune Age: $m_prune_age"
-      echo "  * Cargo Binstall (precompiled binaries): $m_binstall"
+      echo "  * Cache Prune Age: $m_prune_age (upgrade.auto_prune=$m_auto_prune)"
+      echo "  * Cargo Binstall (cargo.binstall): $m_binstall"
+      echo "  * Supply-Chain Guards: minimum_release_age=$m_min_age, npm.provenance=$m_npm_prov"
+
+      for mf in "${mise_toml_files[@]}"; do
+        if grep -qE '^[[:space:]]*always_keep_download[[:space:]]*=' "$mf" 2>/dev/null; then
+          echo "  * [DEPRECATED] always_keep_download found in $mf (replaced by download_cache = true / download_cache_max_size; removed in mise 2027.11.0)"
+        fi
+        if grep -qE '^[[:space:]]*allow_root[[:space:]]*=' "$mf" 2>/dev/null; then
+          echo "  * [WARNING] Invalid setting 'allow_root' in $mf (unknown in mise — allow_root belongs in topgrade.toml [misc])"
+        fi
+      done
     fi
 
     if [[ -n "$mise_bin" ]]; then
       echo "Mise Runtime & Tool Summary:"
-      tool_count=$("$mise_bin" ls --current 2>/dev/null | wc -l || true)
+      tool_count=$("$mise_bin" ls --current 2>/dev/null | wc -l | tr -d ' ' || true)
       echo "  * Active/Managed Tools: $tool_count installed"
     fi
 
@@ -1066,17 +1441,32 @@ case "$target" in
     tg_bin=$(command -v topgrade 2>/dev/null || echo "")
     if [[ -n "$tg_bin" ]]; then
       tg_cfg=""
-      for tf in "$roaming_app_data/topgrade.toml" "$HOME/.config/topgrade.toml"; do
-        [[ -f "$tf" ]] && tg_cfg="$tf" && break
+      tg_all=()
+      for tf in "$roaming_app_data/topgrade.toml" "${XDG_CONFIG_HOME:-$HOME/.config}/topgrade.toml"; do
+        if [[ -f "$tf" ]]; then
+          [[ -z "$tg_cfg" ]] && tg_cfg="$tf"
+          tg_all+=("$tf")
+        fi
       done
-      if [[ -n "$tg_cfg" ]]; then
-        tg_has_mise_table=$(grep -E '^[[:space:]]*\[mise\]' "$tg_cfg" 2>/dev/null || true)
-        tg_mise_bump=$(grep -A 5 '^[[:space:]]*\[mise\]' "$tg_cfg" 2>/dev/null | grep -E '^[[:space:]]*bump[[:space:]]*=' | cut -d= -f2- | tr -d ' "' || echo "false")
-        tg_mise_jobs=$(grep -A 5 '^[[:space:]]*\[mise\]' "$tg_cfg" 2>/dev/null | grep -E '^[[:space:]]*jobs[[:space:]]*=' | cut -d= -f2- | tr -d ' "' || echo "mise default")
-        tg_cleanup=$(grep -E '^[[:space:]]*cleanup[[:space:]]*=' "$tg_cfg" 2>/dev/null | cut -d= -f2- | tr -d ' "' || echo "false")
-        tg_has_reshim=$(grep -i "reshim" "$tg_cfg" 2>/dev/null || true)
-        echo "  - Topgrade Config: $tg_cfg"
-        echo "  - Native [mise] Step in Topgrade: $(if [[ -n "$tg_has_mise_table" ]]; then echo "Configured (bump=$tg_mise_bump, jobs=$tg_mise_jobs)"; else echo "Default/Unconfigured"; fi)"
+      for df in "${XDG_CONFIG_HOME:-$HOME/.config}/topgrade.d"/*.toml; do
+        [[ -f "$df" ]] && tg_all+=("$df")
+      done
+      if [[ ${#tg_all[@]} -gt 0 ]]; then
+        tg_has_mise_table=""
+        tg_mise_bump=""
+        tg_mise_jobs=""
+        tg_cleanup=""
+        tg_has_reshim=""
+        for tf in "${tg_all[@]}"; do
+          grep -qE '^[[:space:]]*\[mise\]' "$tf" 2>/dev/null && tg_has_mise_table="yes"
+          [[ -z "$tg_mise_bump" ]] && tg_mise_bump=$(toml_section_val "$tf" "mise" "bump")
+          [[ -z "$tg_mise_jobs" ]] && tg_mise_jobs=$(toml_section_val "$tf" "mise" "jobs")
+          [[ -z "$tg_cleanup" ]] && tg_cleanup=$(toml_section_val "$tf" "misc" "cleanup")
+          [[ -z "$tg_cleanup" ]] && tg_cleanup=$(toml_section_val "$tf" "" "cleanup")
+          grep -qi "reshim" "$tf" 2>/dev/null && tg_has_reshim="yes"
+        done
+        echo "  - Topgrade Config: ${tg_cfg:-${tg_all[0]}}"
+        echo "  - Native [mise] Step in Topgrade: $(if [[ -n "$tg_has_mise_table" ]]; then echo "Configured (bump=${tg_mise_bump:-false}, jobs=${tg_mise_jobs:-mise default})"; else echo "Default/Unconfigured"; fi)"
         echo "  - Automated Cache/Version Pruning: $(if [[ "$tg_cleanup" == "true" ]]; then echo "Enabled (Topgrade runs mise prune during cleanup)"; else echo "Disabled (Set cleanup = true)"; fi)"
         echo "  - Post-Update Shim Sync (mise reshim): $(if [[ -n "$tg_has_reshim" ]]; then echo "Configured in post_commands"; else echo "Not detected in post_commands (Recommended)"; fi)"
       else
@@ -1098,11 +1488,10 @@ case "$target" in
       echo "  - LSP Provisioning: Mise shims serve as single-source polyglot LSP, formatter, linter & DAP runtime"
       if [[ -n "$nv_cfg" ]]; then
         nv_dir=$(dirname "$nv_cfg")
-        mason_file=$(find "$nv_dir" -name "*mason*.lua" 2>/dev/null | head -n 1 || echo "")
-        if [[ -n "$mason_file" ]] && grep -qE 'opts_extend[[:space:]]*=[[:space:]]*\{\}' "$mason_file" 2>/dev/null && grep -qE 'mason[[:space:]]*=[[:space:]]*false' "$mason_file" 2>/dev/null; then
+        if [[ -d "$nv_dir/lua" ]] && grep -rqE 'opts_extend[[:space:]]*=[[:space:]]*\{\}' "$nv_dir/lua" 2>/dev/null && grep -rqE 'mason[[:space:]]*=[[:space:]]*false' "$nv_dir/lua" 2>/dev/null; then
           echo "  - Mason De-duplication: [LOCKED] (opts_extend = {} & mason = false prevent duplicate Mason installs)"
         fi
-        if grep -rq "mise_env_sync" "$nv_dir/lua" 2>/dev/null; then
+        if [[ -d "$nv_dir/lua" ]] && grep -rq "mise_env_sync" "$nv_dir/lua" 2>/dev/null; then
           echo "  - Dynamic Project Env Sync: [ACTIVE] (DirChanged -> mise env --json)"
         fi
       fi
@@ -1111,9 +1500,9 @@ case "$target" in
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Match jobs = $(nproc 2>/dev/null || echo 4); enable env_cache = true with env_cache_ttl = '1h' to eliminate subshell PATH latency; enable cargo.binstall = true"
-    echo "  * Configuration: Set pin = true; configure cache_prune_age = '7d'; integrate with topgrade ([mise] bump = true, cleanup = true for mise prune, and mise reshim in post_commands)"
-    echo "  * Security: Enforce supply-chain attestations (aqua.slsa, aqua.cosign, github_attestations, node.verify); restrict config permissions (0600); isolate runtime installs"
+    echo "  * Performance: Match jobs = $detected_threads; enable env_cache = true (env_cache_ttl = '1h'); use download_cache = true with download_cache_max_size = '2GiB' (not always_keep_download); enable cargo.binstall = true"
+    echo "  * Configuration: Set pin = true, cache_prune_age = '7d', upgrade.auto_prune = true; place overrides in conf.d/*.toml; integrate with topgrade ([mise] bump = true, cleanup = true, mise reshim in post_commands)"
+    echo "  * Security: Enforce minimum_release_age, npm.provenance = true, aqua.slsa, aqua.cosign, github_attestations, node.verify; restrict config permissions (0600); isolate runtime installs"
     echo "====================================="
     exit 0
     ;;
@@ -1122,38 +1511,54 @@ case "$target" in
     cg_bin=$(command -v cargo 2>/dev/null || echo "")
     echo "Binary: ${cg_bin:-Not installed}"
     if [[ -n "$cg_bin" ]]; then
-      cg_ver=$("$cg_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
-      rc_ver=$(rustc --version 2>/dev/null | head -n 1 || echo "unknown")
+      cg_ver=$(first_clean_line_or "unknown" "$cg_bin" --version)
+      rc_ver=$(first_clean_line_or "unknown" rustc --version)
       echo "Version: $cg_ver (rustc: $rc_ver)"
     fi
 
     echo "Discovered Configuration Files:"
+    cg_home="${CARGO_HOME:-$HOME/.cargo}"
     cg_cfg=""
-    for f in "$HOME/.cargo/config.toml" "${USERPROFILE:-/nonexistent}/.cargo/config.toml"; do
+    for f in "$cg_home/config.toml" "${USERPROFILE:-/nonexistent}/.cargo/config.toml"; do
       if [[ -f "$f" ]]; then
-        echo "  - [EXISTS] $f"
+        echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
         [[ -z "$cg_cfg" ]] && cg_cfg="$f"
+      fi
+    done
+    for leg_f in "$cg_home/config" "${USERPROFILE:-/nonexistent}/.cargo/config"; do
+      if [[ -f "$leg_f" ]]; then
+        echo "  - [DEPRECATED] $leg_f$(cfg_perm_tag "$leg_f") -> rename extensionless 'config' to 'config.toml'"
+        [[ -z "$cg_cfg" ]] && cg_cfg="$leg_f"
       fi
     done
 
     if [[ -n "$cg_cfg" ]]; then
       echo "Active Cargo Configuration ($cg_cfg):"
-      c_jobs=$(grep -E '^[[:space:]]*jobs[[:space:]]*=' "$cg_cfg" 2>/dev/null | awk -F= '{print $2}' | xargs || echo "default (num_cpus)")
-      c_proto=$(grep -E '^[[:space:]]*protocol[[:space:]]*=' "$cg_cfg" 2>/dev/null | awk -F= '{print $2}' | xargs || echo "default (sparse)")
-      c_gitcli=$(grep -E '^[[:space:]]*git-fetch-with-cli[[:space:]]*=' "$cg_cfg" 2>/dev/null | awk -F= '{print $2}' | xargs || echo "false")
-      echo "  * Parallel Build Jobs: $c_jobs (Hardware thread budget: $(nproc 2>/dev/null || echo 4))"
-      echo "  * Crates.io Protocol: $c_proto"
-      echo "  * Git Fetch with CLI: $c_gitcli"
+      c_jobs=$(toml_section_val "$cg_cfg" "build" "jobs")
+      c_gitcli=$(toml_section_val "$cg_cfg" "net" "git-fetch-with-cli")
+      echo "  * Parallel Build Jobs: ${c_jobs:-default (logical CPUs)}"
+      echo "  * Git Fetch with CLI: ${c_gitcli:-false}"
+    fi
+
+    if [[ -d "$cg_home/registry/cache" || -d "$cg_home/git/db" ]]; then
+      echo "Cargo Cache Footprint ($cg_home):"
+      [[ -d "$cg_home/registry/cache" ]] && echo "  * Registry Cache: $(du -sh "$cg_home/registry/cache" 2>/dev/null | awk '{print $1}' || echo unknown)"
+      [[ -d "$cg_home/git/db" ]] && echo "  * Git DB Cache: $(du -sh "$cg_home/git/db" 2>/dev/null | awk '{print $1}' || echo unknown)"
     fi
 
     echo "Mise & Topgrade Companion Integration:"
     mise_bin=$(command -v mise 2>/dev/null || echo "")
     if [[ -n "$mise_bin" ]]; then
-      mise_cfg=""
-      for mf in "$HOME/.config/mise/config.toml" "$local_app_data/mise/config.toml"; do
-        [[ -f "$mf" ]] && mise_cfg="$mf" && break
-      done
-      m_binstall=$(grep -E '^[[:space:]]*cargo\.binstall[[:space:]]*=' "$mise_cfg" 2>/dev/null | cut -d= -f2- | tr -d ' "' || echo "false")
+      m_binstall=$(first_clean_line_or "" "$mise_bin" settings get cargo.binstall)
+      if [[ -z "$m_binstall" ]]; then
+        for mf in "${MISE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/mise}/config.toml" "${MISE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/mise}/conf.d"/*.toml "$roaming_app_data/mise/config.toml" "$local_app_data/mise/config.toml"; do
+          [[ -f "$mf" ]] || continue
+          m_binstall=$(toml_section_val "$mf" "settings.cargo" "binstall")
+          [[ -z "$m_binstall" ]] && m_binstall=$(toml_section_val "$mf" "settings" "cargo.binstall")
+          [[ -n "$m_binstall" ]] && break
+        done
+      fi
+      m_binstall="${m_binstall:-true}"
       echo "  * Mise Cargo Binstall: $(if [[ "$m_binstall" == "true" ]]; then echo "[ENABLED] (Pre-compiled Rust binaries prioritized)"; else echo "[DISABLED] (Consider enabling cargo.binstall = true)"; fi)"
     else
       echo "  * Mise is not installed."
@@ -1161,22 +1566,22 @@ case "$target" in
 
     tg_bin=$(command -v topgrade 2>/dev/null || echo "")
     if [[ -n "$tg_bin" ]]; then
-      tg_cfg=""
-      for tf in "$roaming_app_data/topgrade.toml" "$HOME/.config/topgrade.toml"; do
-        [[ -f "$tf" ]] && tg_cfg="$tf" && break
+      tg_dis=""
+      for tf in "$roaming_app_data/topgrade.toml" "${XDG_CONFIG_HOME:-$HOME/.config}/topgrade.toml" "${XDG_CONFIG_HOME:-$HOME/.config}/topgrade.d"/*.toml; do
+        [[ -f "$tf" ]] || continue
+        tg_dis="$tg_dis $(toml_extract_array "$tf" "disable")"
       done
-      if [[ -n "$tg_cfg" ]]; then
-        dis_val=$(grep -E '^[[:space:]]*disable[[:space:]]*=' "$tg_cfg" 2>/dev/null || echo "[]")
-        echo "  * Topgrade Cargo Step: $(if echo "$dis_val" | grep -qi "cargo"; then echo "[DISABLED] (Eliminated slow from-source rebuilds, delegated to mise binstall)"; else echo "[ACTIVE] (Will compile CLI tools from source; consider adding 'cargo' to disable = [...])"; fi)"
+      if [[ -n "${tg_dis// /}" ]]; then
+        echo "  * Topgrade Cargo Step: $(if echo "$tg_dis" | grep -qi "cargo"; then echo "[DISABLED] (Eliminated slow from-source rebuilds, delegated to mise binstall)"; else echo "[ACTIVE] (Will compile CLI tools from source; consider adding 'cargo' to disable = [...])"; fi)"
       fi
     else
       echo "  * Topgrade is not installed."
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Match build.jobs = $(nproc 2>/dev/null || echo 4); ensure registries.crates-io.protocol = 'sparse'; enable net.git-fetch-with-cli = true; prefer mise with cargo.binstall = true for global CLI tools"
-    echo "  * Configuration: Disable 'cargo' step in topgrade.toml (disable = ['cargo']) when managing Rust CLIs via mise to eliminate hours of from-source rebuilds; tune codegen-units"
-    echo "  * Security: Run cargo audit for supply-chain vulnerability audits; enforce Cargo.lock checksums; restrict ~/.cargo/config.toml permissions to 0600"
+    echo "  * Performance: Rely on Cargo's default sparse protocol & num_cpus jobs (rustc 1.100+ uses rust-lld by default on Linux x86_64; mold optional); set net.git-fetch-with-cli = true; prune caches with cargo-cache/cargo-sweep; prefer mise cargo.binstall = true"
+    echo "  * Configuration: Disable 'cargo' step in topgrade.toml (disable = ['cargo']) when managing Rust CLIs via mise; keep target-cpu=native per-project rather than global"
+    echo "  * Security: Run cargo audit for supply-chain vulnerability audits; enforce Cargo.lock checksums; restrict ~/.cargo/config.toml and credentials.toml to 0600"
     echo "====================================="
     exit 0
     ;;
@@ -1185,15 +1590,27 @@ case "$target" in
     rg_bin=$(command -v rg 2>/dev/null || command -v ripgrep 2>/dev/null || echo "")
     echo "Binary: ${rg_bin:-Not installed}"
     if [[ -n "$rg_bin" ]]; then
-      rg_ver=$("$rg_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
+      rg_ver=$(first_clean_line_or "unknown" "$rg_bin" --version)
       echo "Version: $rg_ver"
     fi
 
     echo "Environment & Configuration Files:"
     echo "  * RIPGREP_CONFIG_PATH: ${RIPGREP_CONFIG_PATH:-[UNSET]}"
-    for f in "$HOME/.ripgreprc" "$HOME/.config/ripgrep/config" "$roaming_app_data/ripgrep/config"; do
-      [[ -f "$f" ]] && echo "  - [EXISTS] $f"
+    rg_cfgs=()
+    for f in "${RIPGREP_CONFIG_PATH:-}" "$HOME/.ripgreprc" "${XDG_CONFIG_HOME:-$HOME/.config}/ripgrep/config" "$roaming_app_data/ripgrep/config"; do
+      [[ -n "$f" && -f "$f" ]] || continue
+      seen=0
+      for existing in "${rg_cfgs[@]}"; do
+        [[ "$existing" == "$f" ]] && seen=1 && break
+      done
+      [[ "$seen" -eq 1 ]] && continue
+      rg_cfgs+=("$f")
+      echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
+      if grep -qE '^[[:space:]]*--mmap([[:space:]]|$)' "$f" 2>/dev/null; then
+        echo "  * [WARNING] --mmap forced in $f (ripgrep auto-enables mmap heuristically; forcing --mmap hurts parallel traversal and risks SIGBUS on truncated files)"
+      fi
     done
+
     echo "Ripgrep + FZF + Bat Synergy Integration:"
     if [[ "${FZF_DEFAULT_COMMAND:-}" =~ (^|[^A-Za-z0-9_])(rg|ripgrep)([^A-Za-z0-9_]|$) ]]; then
       echo "  * FZF Backend: [WIRED] (rg is active search generator in FZF_DEFAULT_COMMAND)"
@@ -1210,8 +1627,8 @@ case "$target" in
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Set RIPGREP_CONFIG_PATH, align threads to detected CPU cores (--threads=$detected_threads), set --max-columns=300 with preview, enable --mmap on SSDs"
-    echo "  * Configuration: Enable --smart-case by default, wire rg as FZF_DEFAULT_COMMAND backend with bat syntax previews, global ignore globs (!.git, !node_modules)"
+    echo "  * Performance: Set RIPGREP_CONFIG_PATH, set --max-columns=300 and --max-columns-preview (avoid forcing --mmap or hardcoded --threads)"
+    echo "  * Configuration: Enable --smart-case by default, wire rg/fd as FZF_DEFAULT_COMMAND backend with bat syntax previews, global ignore globs (!.git, !node_modules)"
     echo "  * Security: Ignore hidden git internal files (--glob=!.git/*) to prevent credential leakage in search results"
     echo "====================================="
     exit 0
@@ -1221,36 +1638,48 @@ case "$target" in
     zo_bin=$(command -v zoxide 2>/dev/null || echo "")
     echo "Binary: ${zo_bin:-Not installed}"
     if [[ -n "$zo_bin" ]]; then
-      zo_ver=$("$zo_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
+      zo_ver=$(first_clean_line_or "unknown" "$zo_bin" --version)
       echo "Version: $zo_ver"
     fi
 
     echo "Database & Configuration Locations:"
-    for f in "$local_app_data/zoxide/db.zo" "$HOME/.local/share/zoxide/db.zo" "$HOME/.config/zoxide"; do
-      [[ -e "$f" ]] && echo "  - [EXISTS] $f"
+    for f in "$local_app_data/zoxide/db.zo" "${XDG_DATA_HOME:-$HOME/.local/share}/zoxide/db.zo" "${XDG_CONFIG_HOME:-$HOME/.config}/zoxide"; do
+      if [[ -d "$f" ]]; then
+        echo "  - [EXISTS DIR] $f"
+      elif [[ -e "$f" ]]; then
+        echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
+      fi
     done
 
     if command -v zoxide >/dev/null 2>&1; then
-      db_count=$(zoxide query -l 2>/dev/null | wc -l || true)
+      db_count=$(zoxide query -l 2>/dev/null | wc -l | tr -d ' ' || true)
       echo "Tracked Directories in Database: $db_count entries"
     fi
 
     echo "Shell Integration:"
-    pwsh_prof="$HOME/Documents/PowerShell/Microsoft.PowerShell_profile.ps1"
-    if [[ -f "$pwsh_prof" ]] && grep -qi "zoxide init" "$pwsh_prof"; then
-      echo "  * PowerShell ($pwsh_prof): [INITIALIZED]"
-    else
-      echo "  * PowerShell: [NOT CONFIGURED] (Recommend: Invoke-Expression (& { (zoxide init powershell | Out-String) }))"
+    if is_windows || command -v pwsh >/dev/null 2>&1; then
+      pwsh_prof="$HOME/.config/powershell/Microsoft.PowerShell_profile.ps1"
+      is_windows && pwsh_prof="$HOME/Documents/PowerShell/Microsoft.PowerShell_profile.ps1"
+      if [[ -f "$pwsh_prof" ]] && grep -qi "zoxide init" "$pwsh_prof"; then
+        echo "  * PowerShell ($pwsh_prof): [INITIALIZED]"
+      else
+        echo "  * PowerShell: [NOT CONFIGURED] (Recommend: Invoke-Expression (& { (zoxide init powershell | Out-String) }))"
+      fi
     fi
-    if [[ -f "$HOME/.bashrc" ]] && grep -qi "zoxide init" "$HOME/.bashrc"; then
-      echo "  * Bash ($HOME/.bashrc): [INITIALIZED]"
+    if rc_lines 'zoxide init' >/dev/null; then
+      echo "  * Shell Startup Hooks:"
+      rc_lines 'zoxide init'
     else
-      echo "  * Bash: [NOT CONFIGURED] (Recommend: eval \"\$(zoxide init bash)\")"
+      echo "  * Shell Startup Hooks: [NOT CONFIGURED] in the files read: $(rc_read)(Recommend: eval \"\$(zoxide init bash)\")"
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Statically cache or fast-init zoxide hook in shell profiles; periodically prune dead paths (zoxide remove)"
-    echo "  * Configuration: Define aliases 'z' (jump) and 'zi' (interactive fzf jump); set _ZO_EXCLUDE_DIRS to skip temp and home root"
+    if is_windows; then
+      echo "  * Configuration: Define aliases 'z' (jump) and 'zi' (interactive fzf jump); set semicolon-delimited _ZO_EXCLUDE_DIRS on Windows (note \$HOME is excluded by default)"
+    else
+      echo "  * Configuration: Define aliases 'z' (jump) and 'zi' (interactive fzf jump); set colon-delimited _ZO_EXCLUDE_DIRS on Unix (note \$HOME is excluded by default)"
+    fi
     echo "  * Security: Protect db.zo database file permissions (0600) to keep browsing history private"
     echo "====================================="
     exit 0
@@ -1260,13 +1689,16 @@ case "$target" in
     eza_bin=$(command -v eza 2>/dev/null || echo "")
     echo "Binary: ${eza_bin:-Not installed}"
     if [[ -n "$eza_bin" ]]; then
-      eza_ver=$("$eza_bin" --version 2>/dev/null | head -n 2 | tr '\n' ' ' || echo "unknown")
+      eza_raw=$("$eza_bin" --version 2>/dev/null || true)
+      eza_ver=$(printf '%s\n' "$eza_raw" | strip_ansi | awk 'NR==2 && NF { out=$0 } END { if (out != "") printf "%s", out }')
+      [[ -z "$eza_ver" ]] && eza_ver=$(first_clean_line_or "unknown" "$eza_bin" --version)
       echo "Version: $eza_ver"
     fi
 
     echo "Discovered Configuration Files:"
-    for f in "$roaming_app_data/eza/theme.yml" "$HOME/.config/eza/theme.yml"; do
-      [[ -f "$f" ]] && echo "  - [EXISTS] $f"
+    eza_cfg_dir="${EZA_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/eza}"
+    for f in "$roaming_app_data/eza/theme.yml" "$eza_cfg_dir/theme.yml"; do
+      [[ -f "$f" ]] && echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
     done
 
     echo "Aliases in shell startup files:"
@@ -1277,14 +1709,17 @@ case "$target" in
       else
         echo "  * Icons flag: [OK]"
       fi
+      if rc_lines "(^|[^A-Za-z0-9_])eza[^#]*--no-dereference" >/dev/null; then
+        echo "  * [WARNING] '--no-dereference' found in eza alias (not a valid eza flag; eza already skips symlink traversal by default)"
+      fi
     else
       echo "  * eza alias: [NOT CONFIGURED] in the files read: $(rc_read)(files they source are not followed) (Recommend: alias ls='eza --icons=auto')"
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Avoid default --git scanning on large repositories or deep tree walks; bind --git only to detailed alias ('ll')"
-    echo "  * Configuration: Set ergonomic aliases in pwsh & bash: ls='eza --icons=auto', ll='eza -l --icons=auto --git --header', lt='eza --tree --level=2'"
-    echo "  * Security: Maintain --no-dereference by default to avoid unintended symlink traversal"
+    echo "  * Configuration: Set ergonomic aliases in pwsh & bash: ls='eza --icons=auto', ll='eza -l --icons=auto --git --header', lt='eza --tree --level=2'; configure EZA_CONFIG_DIR/theme.yml"
+    echo "  * Security: eza does not dereference symlinks by default (avoid -X/--dereference on untrusted trees); avoid --icons=always in scripts"
     echo "====================================="
     exit 0
     ;;
@@ -1293,38 +1728,47 @@ case "$target" in
     lg_bin=$(command -v lazygit 2>/dev/null || echo "")
     echo "Binary: ${lg_bin:-Not installed}"
     if [[ -n "$lg_bin" ]]; then
-      lg_ver=$("$lg_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
+      lg_ver=$(first_clean_line_or "unknown" "$lg_bin" --version)
       echo "Version: $lg_ver"
     fi
 
     echo "Discovered Configuration Files:"
     lg_cfg=""
-    for f in "$roaming_app_data/lazygit/config.yml" "$local_app_data/lazygit/config.yml" "$HOME/.config/lazygit/config.yml"; do
+    for f in "$roaming_app_data/lazygit/config.yml" "$local_app_data/lazygit/config.yml" "${XDG_CONFIG_HOME:-$HOME/.config}/lazygit/config.yml"; do
       if [[ -f "$f" ]]; then
-        echo "  - [EXISTS] $f"
+        echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
         [[ -z "$lg_cfg" ]] && lg_cfg="$f"
       fi
     done
 
     if [[ -n "$lg_cfg" ]]; then
       echo "Key Configuration Parameters:"
-      grep -E '^(  autoFetch|  edit|  animateExplosion|  showIcons|  pager):' "$lg_cfg" 2>/dev/null | while read -r line; do
+      grep -E '^[[:space:]]*(autoFetch|editPreset|edit|animateExplosion|nerdFontsVersion|showIcons|diffRenderers|paging|pagers):' "$lg_cfg" 2>/dev/null | while read -r line; do
         echo "  * $line"
       done || true
-
-      echo "Lazygit + Neovim + Bat Companion Synergy:"
-      nv_remote=$(grep -E 'nvim.*--server|editPreset.*nvim-remote|--remote-tab' "$lg_cfg" 2>/dev/null || true)
-      if [[ -n "$nv_remote" ]]; then
-        echo "  * Remote Tab Editing: [CONFIGURED] (Uses nvim --server / remote-tab to prevent nested editor spawns)"
-      else
-        echo "  * Remote Tab Editing: [MISSING] (Configure edit: 'nvim --server \$NVIM --remote-tab' to avoid nested editor freezes)"
+      if grep -qE '^[[:space:]]*(paging|pagers):' "$lg_cfg" 2>/dev/null; then
+        echo "  * [DEPRECATED] git.paging/git.pagers found in $lg_cfg (migrate to git.diffRenderers)"
+      fi
+      if grep -qE '^[[:space:]]*showIcons:' "$lg_cfg" 2>/dev/null; then
+        echo "  * [DEPRECATED] gui.showIcons found in $lg_cfg (use gui.nerdFontsVersion: \"3\")"
+      fi
+      if grep -qE '^[[:space:]]*edit:.*\$FILE' "$lg_cfg" 2>/dev/null; then
+        echo "  * [WARNING] \$FILE placeholder found in os.edit (use {{filename}} placeholder or os.editPreset: \"nvim-remote\")"
       fi
 
-      bat_pager=$(grep -E 'bat.*--style=changes|bat.*--color=always' "$lg_cfg" 2>/dev/null || true)
-      if [[ -n "$bat_pager" ]]; then
-        echo "  * Bat Diff Pager: [CONFIGURED] (bat --color=always --style=changes)"
+      echo "Lazygit + Neovim + Bat Companion Synergy:"
+      nv_remote=$(grep -E 'nvim.*--server|editPreset:[[:space:]]*["'\'']?nvim-remote|--remote-tab|\{\{filename\}\}' "$lg_cfg" 2>/dev/null || true)
+      if [[ -n "$nv_remote" ]]; then
+        echo "  * Remote Tab Editing: [CONFIGURED] (Uses editPreset: nvim-remote / {{filename}} to prevent nested editor spawns)"
       else
-        echo "  * Bat Diff Pager: [DEFAULT/MISSING] (Configure git.paging.pager: 'bat --color=always --style=changes' for fast syntax diffs without extra dependencies)"
+        echo "  * Remote Tab Editing: [MISSING] (Configure os.editPreset: 'nvim-remote' or os.edit with {{filename}} to avoid nested editor spawns)"
+      fi
+
+      bat_pager=$(grep -E 'diffRenderers|bat.*--style=changes|bat.*--color=always' "$lg_cfg" 2>/dev/null || true)
+      if [[ -n "$bat_pager" ]]; then
+        echo "  * Diff Renderer (git.diffRenderers / bat): [CONFIGURED]"
+      else
+        echo "  * Diff Renderer: [DEFAULT/MISSING] (Configure git.diffRenderers with bat --color=always --style=changes,numbers)"
       fi
     fi
 
@@ -1332,9 +1776,9 @@ case "$target" in
     theme_desc="synchronize theme (ask user for preferred theme)"
     [[ -n "$inferred_thm" ]] && theme_desc="synchronize theme (inferred from system/terminal: $inferred_thm)"
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Set 'git.autoFetch: false' to prevent periodic background git spawns; configure pager: 'bat --color=always --style=changes' for lightweight syntax diffs"
-    echo "  * Configuration: Configure lazygit to use nvim --server / remote tab editing to prevent nested editor spawns, $theme_desc"
-    echo "  * Security: Respect git safe.directory settings; prevent untrusted custom commands"
+    echo "  * Performance: Set 'git.autoFetch: false' and 'gui.animateExplosion: false'; configure git.diffRenderers with bat (--color=always --style=changes,numbers)"
+    echo "  * Configuration: Set 'os.editPreset: \"nvim-remote\"' (or {{filename}} placeholder — never \$FILE) and 'gui.nerdFontsVersion: \"3\"', $theme_desc"
+    echo "  * Security: Respect git safe.directory settings; prevent untrusted customCommands; enforce 0600 on config.yml"
     echo "====================================="
     exit 0
     ;;
@@ -1343,15 +1787,15 @@ case "$target" in
     nv_bin=$(command -v nvim 2>/dev/null || command -v neovim 2>/dev/null || echo "")
     echo "Binary: ${nv_bin:-Not installed}"
     if [[ -n "$nv_bin" ]]; then
-      nv_ver=$("$nv_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
+      nv_ver=$(first_clean_line_or "unknown" "$nv_bin" --version)
       echo "Version: $nv_ver"
     fi
 
     echo "Discovered Configuration Files:"
     nv_init=""
-    for f in "$local_app_data/nvim/init.lua" "$HOME/.config/nvim/init.lua" "$local_app_data/nvim/lazy-lock.json" "$HOME/.config/nvim/lazy-lock.json" "$local_app_data/nvim/lazyvim.json" "$HOME/.config/nvim/lazyvim.json"; do
+    for f in "$local_app_data/nvim/init.lua" "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.lua" "$local_app_data/nvim/lazy-lock.json" "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lazy-lock.json" "$local_app_data/nvim/lazyvim.json" "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/lazyvim.json"; do
       if [[ -f "$f" ]]; then
-        echo "  - [EXISTS] $f"
+        echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
         [[ -z "$nv_init" && "$f" == *init.lua ]] && nv_init="$f"
       fi
     done
@@ -1371,14 +1815,28 @@ case "$target" in
         echo "  * Legacy Remote Providers: [ENABLED] (Set vim.g.loaded_{node,python3,perl,ruby}_provider = 0)"
       fi
 
-      if grep -rq "nvim-treesitter\.configs" "$nv_dir/lua" 2>/dev/null; then
-        echo "  * Treesitter Config Compatibility: [WARNING] ('nvim-treesitter.configs' found — removed in nvim-treesitter main branch / LazyVim v15+)"
+      if grep -RIq --include='*.lua' --exclude-dir=.git "nvim-treesitter\.configs" "$nv_dir" 2>/dev/null; then
+        echo "  * Treesitter Config Compatibility: [WARNING] ('nvim-treesitter.configs' found — removed in nvim-treesitter main branch / LazyVim v15/v16+)"
       else
         echo "  * Treesitter Config Compatibility: [CLEAN] (Compatible with nvim-treesitter main branch)"
       fi
 
+      if has_mason_lspconfig_deprecated "$nv_dir"; then
+        echo "  * Mason-lspconfig Option: [DEPRECATED] 'automatic_installation' found in mason-lspconfig spec under $nv_dir (Mason v2 / LazyVim v15/v16+ uses 'automatic_enable')"
+      fi
+
+      if grep -RIqE --include='*.lua' --exclude-dir=.git 'require[[:space:]]*\([[:space:]]*["'\'']lspconfig["'\''][[:space:]]*\)[[:space:]]*\.[A-Za-z0-9_]+[[:space:]]*[:.]setup' "$nv_dir" 2>/dev/null; then
+        echo "  * Legacy lspconfig.setup: [DEPRECATED] require('lspconfig').<server>.setup found in $nv_dir (Neovim 0.11/0.12 uses native vim.lsp.config + vim.lsp.enable)"
+      fi
+
       if [[ -f "$nv_dir/.neoconf.json" ]] && grep -q '"neodev"' "$nv_dir/.neoconf.json" 2>/dev/null; then
         echo "  * Neoconf Schema (.neoconf.json): [DEPRECATED KEY] ('neodev' found; replace with 'lazydev')"
+      fi
+
+      if grep -rqE 'modeline[[:space:]]*=[[:space:]]*false' "$nv_dir" 2>/dev/null; then
+        echo "  * Modeline Hardening (modeline = false): [ENABLED] (exrc also defaults to false with SHA-256 :trust in Neovim 0.12)"
+      else
+        echo "  * Modeline Hardening: [DEFAULT TRUE] (Set vim.opt.modeline = false; exrc already defaults to false with :trust)"
       fi
 
       bak_count=$(find "$nv_dir" -name "*.bak*" 2>/dev/null | wc -l | tr -d ' ' || echo 0)
@@ -1403,14 +1861,14 @@ case "$target" in
         fi
         echo "  * Mise Shims in PATH: $(if [[ "$has_shims_in_path" == "true" ]]; then echo "[ACTIVE] (LSPs and formatters discoverable via PATH)"; else echo "[CAUTION] (Prepend ~/.local/share/mise/shims to vim.env.PATH in options.lua)"; fi)"
 
-        if grep -rq "mise_env_sync" "$nv_dir/lua" 2>/dev/null || grep -rq '"env".*"--json"' "$nv_dir/lua" 2>/dev/null; then
+        if [[ -d "$nv_dir/lua" ]] && (grep -rq "mise_env_sync" "$nv_dir/lua" 2>/dev/null || grep -rq '"env".*"--json"' "$nv_dir/lua" 2>/dev/null); then
           echo "  * Dynamic Project Env Sync (DirChanged -> mise env --json): [ACTIVE]"
         else
           echo "  * Dynamic Project Env Sync (DirChanged -> mise env --json): [MISSING] (Add DirChanged autocmd in autocmds.lua to sync project [env] vars)"
         fi
 
         mise_cfg=""
-        for mf in "$HOME/.config/mise/config.toml" "$local_app_data/mise/config.toml"; do
+        for mf in "${MISE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/mise}/config.toml" "$roaming_app_data/mise/config.toml" "$local_app_data/mise/config.toml"; do
           [[ -f "$mf" ]] && mise_cfg="$mf" && break
         done
         if [[ -n "$mise_cfg" ]] && grep -qE '^[[:space:]]*rust[[:space:]]*=' "$mise_cfg" 2>/dev/null; then
@@ -1421,16 +1879,18 @@ case "$target" in
           fi
         fi
 
-        mason_file=$(find "$nv_dir" -name "*mason*.lua" 2>/dev/null | head -n 1 || echo "")
-        if [[ -n "$mason_file" ]]; then
-          mason_path_opt=$(grep -E '^[[:space:]]*PATH[[:space:]]*=' "$mason_file" 2>/dev/null | cut -d= -f2- | tr -d ' ",' || echo "default (prepend)")
-          has_opts_extend_lock=$(grep -E 'opts_extend[[:space:]]*=[[:space:]]*\{\}' "$mason_file" 2>/dev/null || true)
-          has_mason_false=$(grep -E 'mason[[:space:]]*=[[:space:]]*false' "$mason_file" 2>/dev/null || true)
-          echo "  * Mason.nvim Config: $mason_file"
-          echo "  * Mason PATH Precedence: $mason_path_opt $(if [[ "$mason_path_opt" =~ append|skip ]]; then echo "[OPTIMIZED] (Mise project tools take precedence)"; else echo "(Set PATH = 'append' to avoid shadowing project-pinned tools in mise)"; fi)"
-          echo "  * Mason LazyVim Extra Lock (opts_extend = {} & mason = false): $(if [[ -n "$has_opts_extend_lock" && -n "$has_mason_false" ]]; then echo "[LOCKED] (LazyVim extras prevented from re-installing Mise tools)"; else echo "[UNLOCKED] (Set opts_extend = {} on mason.nvim and mason = false on Mise LSPs)"; fi)"
-        else
-          echo "  * Mason.nvim: Not explicitly configured (Mise shims serve as primary tool source)"
+        if [[ -d "$nv_dir/lua" ]]; then
+          mason_matches=$(grep -rlE 'mason(\.nvim|-lspconfig)|opts_extend[[:space:]]*=[[:space:]]*\{\}|mason[[:space:]]*=[[:space:]]*false|PATH[[:space:]]*=[[:space:]]*["'\''](append|skip)["'\'']' "$nv_dir/lua" 2>/dev/null || true)
+          mason_path_opt=$(grep -rhE '^[[:space:]]*PATH[[:space:]]*=' "$nv_dir/lua" 2>/dev/null | head -n 1 | cut -d= -f2- | tr -d ' ",'\''' || true)
+          has_opts_extend_lock=$(grep -rlE 'opts_extend[[:space:]]*=[[:space:]]*\{\}' "$nv_dir/lua" 2>/dev/null || true)
+          has_mason_false=$(grep -rlE 'mason[[:space:]]*=[[:space:]]*false' "$nv_dir/lua" 2>/dev/null || true)
+          if [[ -n "$mason_matches" ]]; then
+            echo "  * Mason Lua Files Searched: $nv_dir/lua/**/*.lua"
+            echo "  * Mason PATH Precedence: ${mason_path_opt:-default (prepend)} $(if [[ "$mason_path_opt" =~ append|skip ]]; then echo "[OPTIMIZED] (Mise project tools take precedence)"; else echo "(Set PATH = 'append' to avoid shadowing project-pinned tools in mise)"; fi)"
+            echo "  * Mason LazyVim Extra Lock (opts_extend = {} & mason = false): $(if [[ -n "$has_opts_extend_lock" && -n "$has_mason_false" ]]; then echo "[LOCKED] (LazyVim extras prevented from re-installing Mise tools)"; else echo "[UNLOCKED] (Set opts_extend = {} on mason.nvim and mason = false on Mise LSPs)"; fi)"
+          else
+            echo "  * Mason.nvim: Not explicitly configured in $nv_dir/lua (Mise shims serve as primary tool source)"
+          fi
         fi
 
         mason_pkg_dir="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/mason/packages"
@@ -1442,7 +1902,7 @@ case "$target" in
         fi
 
         tg_cfg=""
-        for tf in "$roaming_app_data/topgrade.toml" "$HOME/.config/topgrade.toml"; do
+        for tf in "$roaming_app_data/topgrade.toml" "${XDG_CONFIG_HOME:-$HOME/.config}/topgrade.toml"; do
           [[ -f "$tf" ]] && tg_cfg="$tf" && break
         done
         if [[ -n "$tg_cfg" ]] && grep -qi "mason" "$tg_cfg"; then
@@ -1455,8 +1915,8 @@ case "$target" in
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Enable vim.loader.enable() for sub-65ms startup; disable legacy remote providers; discover LSPs via mise shims; rotate lsp.log >1MB"
-    echo "  * Configuration: Migrate LSPs/formatters/linters from Mason to mise (aqua:/go:/npm:/github:); lock mason.nvim (PATH='append', opts_extend={}, mason=false) to editor-only adapters; add DirChanged 'mise env --json' sync; ensure LazyVim v15+ compatibility"
-    echo "  * Security: Disable modelines (vim.opt.modeline = false, vim.opt.exrc = false); pin plugin commit hashes in lazy-lock.json; enforce 0600 on config files"
+    echo "  * Configuration: Migrate LSPs/formatters/linters from Mason to mise; lock mason.nvim (PATH='append', opts_extend={}, mason=false) or use Mason v2 automatic_enable; prefer native vim.lsp.config/vim.lsp.enable; add DirChanged 'mise env --json' sync; ensure LazyVim v15/v16+ compatibility"
+    echo "  * Security: Set vim.opt.modeline = false (exrc already defaults to false with SHA-256 :trust in Neovim 0.12); pin plugin commit hashes in lazy-lock.json; enforce 0600 on private config files"
     echo "====================================="
     exit 0
     ;;
@@ -1465,22 +1925,30 @@ case "$target" in
     git_bin=$(command -v git 2>/dev/null || echo "")
     echo "Binary: ${git_bin:-Not installed}"
     if [[ -n "$git_bin" ]]; then
-      git_ver=$(git --version 2>/dev/null || echo "unknown")
+      git_ver=$(first_clean_line_or "unknown" git --version)
       echo "Version: $git_ver"
     fi
 
     echo "Discovered Configuration Files:"
-    for f in "$HOME/.gitconfig" "$HOME/.config/git/config" "/c/ProgramData/Git/config" "/etc/gitconfig"; do
-      [[ -f "$f" ]] && echo "  - [EXISTS] $f"
+    for f in "$HOME/.gitconfig" "${XDG_CONFIG_HOME:-$HOME/.config}/git/config" "/c/ProgramData/Git/config" "/etc/gitconfig"; do
+      [[ -f "$f" ]] && echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
     done
 
-    echo "Active Performance & Windows Git Settings:"
-    echo "  * core.fscache: $(git config --get core.fscache 2>/dev/null || echo 'unset')"
-    echo "  * core.preloadIndex: $(git config --get core.preloadIndex 2>/dev/null || echo 'unset')"
+    echo "Active Performance & Git Settings:"
+    if is_windows; then
+      echo "  * core.fscache: $(git config --get core.fscache 2>/dev/null || echo 'unset')"
+    fi
+    echo "  * core.preloadIndex: $(git config --get core.preloadIndex 2>/dev/null || echo 'default (true)')"
     echo "  * core.untrackedCache: $(git config --get core.untrackedCache 2>/dev/null || echo 'unset')"
+    echo "  * core.fsmonitor: $(git config --get core.fsmonitor 2>/dev/null || echo 'unset')"
+    echo "  * feature.manyFiles: $(git config --get feature.manyFiles 2>/dev/null || echo 'unset')"
     echo "  * core.autocrlf: $(git config --get core.autocrlf 2>/dev/null || echo 'unset')"
     echo "  * credential.helper: $(git config --get credential.helper 2>/dev/null || echo 'unset')"
     echo "  * diff.algorithm: $(git config --get diff.algorithm 2>/dev/null || echo 'unset')"
+    echo "  * merge.conflictStyle: $(git config --get merge.conflictStyle 2>/dev/null || echo 'unset')"
+    echo "  * branch.sort: $(git config --get branch.sort 2>/dev/null || echo 'unset')"
+    echo "  * rerere.enabled: $(git config --get rerere.enabled 2>/dev/null || echo 'unset')"
+    echo "  * rebase.updateRefs: $(git config --get rebase.updateRefs 2>/dev/null || echo 'unset')"
     if [[ -n "$git_bin" ]]; then
       echo "Git Findings:"
       git_check credential.helper "" "gh auth setup-git, or a credential manager"
@@ -1492,9 +1960,15 @@ case "$target" in
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Set core.fscache = true (huge NTFS status/diff speedup), core.preloadIndex = true, pack memory limits"
-    echo "  * Configuration: Set core.autocrlf = input, diff.algorithm = histogram, push.autoSetupRemote = true, delta/bat pager"
-    echo "  * Security: Configure safe.directory, use Git Credential Manager (credential.helper = manager) for secure OAuth tokens"
+    if is_windows; then
+      echo "  * Performance: Set core.fscache = true (NTFS speedup), feature.manyFiles = true (enables index.skipHash & untrackedCache), and per-large-repo native core.fsmonitor = true"
+      echo "  * Configuration: Set core.autocrlf = input, diff.algorithm = histogram, merge.conflictStyle = zdiff3, branch.sort = -committerdate, rerere.enabled = true, rebase.updateRefs = true, push.autoSetupRemote = true"
+      echo "  * Security: Configure safe.directory, use Git Credential Manager (credential.helper = manager) or gh auth setup-git for OAuth tokens"
+    else
+      echo "  * Performance: Set feature.manyFiles = true (index.skipHash + untrackedCache), and per-large-repo native core.fsmonitor = true (watch inotify limits; avoid on network/FUSE mounts)"
+      echo "  * Configuration: Set core.autocrlf = input, diff.algorithm = histogram, merge.conflictStyle = zdiff3, branch.sort = -committerdate, rerere.enabled = true, rebase.updateRefs = true, push.autoSetupRemote = true"
+      echo "  * Security: Configure safe.directory, use SSH keys or gh auth setup-git / libsecret credential helper"
+    fi
     echo "====================================="
     exit 0
     ;;
@@ -1503,29 +1977,56 @@ case "$target" in
     bat_bin=$(command -v bat 2>/dev/null || command -v batcat 2>/dev/null || echo "")
     echo "Binary: ${bat_bin:-Not installed}"
     if [[ -n "$bat_bin" ]]; then
-      bat_ver=$("$bat_bin" --version 2>/dev/null || echo "unknown")
+      bat_ver=$(first_clean_line_or "unknown" "$bat_bin" --version)
       echo "Version: $bat_ver"
     fi
 
     echo "Discovered Configuration Files:"
-    for f in "$roaming_app_data/bat/config" "$HOME/.config/bat/config"; do
-      [[ -f "$f" ]] && echo "  - [EXISTS] $f"
+    bat_cfg_file=""
+    if [[ -n "$bat_bin" ]]; then
+      bat_cfg_file=$("$bat_bin" --config-file 2>/dev/null | tr -d '\r' || true)
+    fi
+    bat_found=0
+    bat_seen=""
+    for f in "${BAT_CONFIG_PATH:-}" "$bat_cfg_file" "$roaming_app_data/bat/config" "${XDG_CONFIG_HOME:-$HOME/.config}/bat/config"; do
+      [[ -n "$f" && -f "$f" ]] || continue
+      case "$bat_seen" in *"|$f|"*) continue ;; esac
+      bat_seen="$bat_seen|$f|"
+      echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
+      bat_found=1
     done
 
     echo "Bat Findings:"
-    if [[ -f "$HOME/.config/bat/config" || -f "$roaming_app_data/bat/config" ]]; then
+    if [[ "$bat_found" -eq 1 ]]; then
       echo "  * Config file: [OK]"
     else
-      echo "  * Config file: [NOT CONFIGURED] (Recommend: --theme and --style in ~/.config/bat/config)"
+      echo "  * Config file: [NOT CONFIGURED] (Recommend: --theme=auto and --style in ${bat_cfg_file:-~/.config/bat/config})"
     fi
     echo "  * Shell startup files (BAT_* variables, cat/bat aliases):"
     rc_lines 'BAT_|alias cat=|alias bat=' || echo "    [NOT CONFIGURED] in the files read: $(rc_read)(files they source are not followed)"
 
+    bat_cfg_dir="${XDG_CONFIG_HOME:-$HOME/.config}/bat"
+    if [[ -n "$bat_bin" ]]; then
+      bat_cfg_dir_cli=$("$bat_bin" --config-dir 2>/dev/null | tr -d '\r' || true)
+      [[ -n "$bat_cfg_dir_cli" ]] && bat_cfg_dir="$bat_cfg_dir_cli"
+    fi
+    bat_has_custom=0
+    if [[ -d "$bat_cfg_dir/themes" ]] && [[ -n "$(ls -A "$bat_cfg_dir/themes" 2>/dev/null || true)" ]]; then
+      bat_has_custom=1
+    fi
+    if [[ -d "$bat_cfg_dir/syntaxes" ]] && [[ -n "$(ls -A "$bat_cfg_dir/syntaxes" 2>/dev/null || true)" ]]; then
+      bat_has_custom=1
+    fi
+
     inferred_thm=$(infer_theme)
-    theme_desc="configure theme matching terminal (or prompt user)"
-    [[ -n "$inferred_thm" ]] && theme_desc="configure theme matching terminal (inferred: $inferred_thm)"
+    theme_desc="configure adaptive --theme=auto with --theme-dark/--theme-light"
+    [[ -n "$inferred_thm" ]] && theme_desc="configure adaptive --theme=auto with --theme-dark/--theme-light (inferred: $inferred_thm)"
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Use --paging=never when piping to pagers/tools, cache custom themes with bat cache --build"
+    if [[ "$bat_has_custom" -eq 1 ]]; then
+      echo "  * Performance: Use --paging=never when piping to tools; rebuild custom theme/syntax cache with 'bat cache --build'"
+    else
+      echo "  * Performance: Use --paging=never when piping to tools (bat cache --build is only needed when custom themes/ or syntaxes/ exist)"
+    fi
     echo "  * Configuration: $theme_desc, set --style=\"numbers,changes,header\""
     echo "  * Security: Safe terminal escape rendering, avoid executing shell scripts from syntax highlighters"
     echo "====================================="
@@ -1536,13 +2037,38 @@ case "$target" in
     fzf_bin=$(command -v fzf 2>/dev/null || echo "")
     echo "Binary: ${fzf_bin:-Not installed}"
     if [[ -n "$fzf_bin" ]]; then
-      fzf_ver=$("$fzf_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
+      fzf_ver=$(first_clean_line_or "unknown" "$fzf_bin" --version)
       echo "Version: $fzf_ver"
     fi
+
+    echo "Discovered Configuration Files:"
+    fzf_rc="${FZF_DEFAULT_OPTS_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/fzf/fzfrc}"
+    for f in "$fzf_rc" "$HOME/.fzfrc"; do
+      if [[ -f "$f" ]]; then
+        echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
+        if grep -qE '(^|[[:space:]])--inline-info([[:space:]]|$)' "$f" 2>/dev/null; then
+          echo "  * [DEPRECATED] --inline-info found in $f (replace with --info=inline-right or --info=inline)"
+        fi
+      fi
+    done
 
     echo "Environment Variables & Synergy Checkpoints:"
     echo "  * FZF_DEFAULT_COMMAND: ${FZF_DEFAULT_COMMAND:-[UNSET]}"
     echo "  * FZF_DEFAULT_OPTS: ${FZF_DEFAULT_OPTS:-[UNSET]}"
+    echo "  * FZF_DEFAULT_OPTS_FILE: ${FZF_DEFAULT_OPTS_FILE:-[UNSET]}"
+    if [[ "${FZF_DEFAULT_OPTS:-}" == *"--inline-info"* ]]; then
+      echo "  * [DEPRECATED] --inline-info in FZF_DEFAULT_OPTS (replace with --info=inline-right)"
+    fi
+
+    echo "Shell Integration:"
+    if rc_lines 'fzf --(bash|zsh|fish)|key-bindings\.(bash|zsh)|completion\.(bash|zsh)' >/dev/null; then
+      rc_lines 'fzf --(bash|zsh|fish)|key-bindings\.(bash|zsh)|completion\.(bash|zsh)'
+      if rc_lines 'key-bindings\.(bash|zsh)|completion\.(bash|zsh)' >/dev/null; then
+        echo "  * [NOTE] Legacy key-bindings/completion sourcing detected; fzf 0.48+ supports unified 'eval \"\$(fzf --bash)\"' / 'source <(fzf --zsh)'"
+      fi
+    else
+      echo "  * Shell Hooks: [NOT CONFIGURED] in the files read: $(rc_read)(Recommend: eval \"\$(fzf --bash)\" / source <(fzf --zsh))"
+    fi
 
     echo "Ripgrep + FZF + Bat Synergy Integration:"
     if [[ "${FZF_DEFAULT_COMMAND:-}" =~ (rg|ripgrep) ]]; then
@@ -1550,7 +2076,7 @@ case "$target" in
     elif [[ "${FZF_DEFAULT_COMMAND:-}" =~ fd ]]; then
       echo "  * Search Generator (fd): [CONFIGURED] (fd directory walker)"
     else
-      echo "  * Search Generator: [DEFAULT/MISSING] (Wire rg: export FZF_DEFAULT_COMMAND=\"rg --files --hidden --glob '!.git/*'\")"
+      echo "  * Search Generator: [DEFAULT] (Built-in --walker is multithreaded in fzf 0.75+; wire 'fd --type f --strip-cwd-prefix --hidden --exclude .git' or 'rg --files' for .gitignore awareness)"
     fi
 
     if [[ "${FZF_DEFAULT_OPTS:-}" =~ bat ]]; then
@@ -1560,8 +2086,8 @@ case "$target" in
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Wire rg (or fd) as backend search generator (FZF_DEFAULT_COMMAND); bound preview range (--line-range :500)"
-    echo "  * Configuration: Set layout=reverse, border, preview window using bat with line-numbered syntax previews"
+    echo "  * Performance: Built-in --walker is already multithreaded (0.75+); use 'fd --type f --strip-cwd-prefix --hidden --exclude .git' or rg for .gitignore filtering; bound preview (--line-range :500)"
+    echo "  * Configuration: Enable shell integration (fzf --bash/--zsh/--fish); store defaults in FZF_DEFAULT_OPTS_FILE (~/.config/fzf/fzfrc) with --info=inline-right (never deprecated --inline-info), layout=reverse, bat preview"
     echo "  * Security: Exclude credentials, .env files, and .git internals from default search index"
     echo "====================================="
     exit 0
@@ -1571,32 +2097,44 @@ case "$target" in
     ss_bin=$(command -v starship 2>/dev/null || echo "")
     echo "Binary: ${ss_bin:-Not installed}"
     if [[ -n "$ss_bin" ]]; then
-      ss_ver=$("$ss_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
+      ss_ver=$(first_clean_line_or "unknown" "$ss_bin" --version)
       echo "Version: $ss_ver"
     fi
 
     echo "Discovered Configuration Files:"
     ss_cfg=""
-    for f in "$HOME/.config/starship.toml" "$roaming_app_data/starship.toml"; do
-      if [[ -f "$f" ]]; then
-        echo "  - [EXISTS] $f"
+    for f in "${STARSHIP_CONFIG:-}" "${XDG_CONFIG_HOME:-$HOME/.config}/starship.toml" "$roaming_app_data/starship.toml"; do
+      if [[ -n "$f" && -f "$f" ]]; then
+        echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
         [[ -z "$ss_cfg" ]] && ss_cfg="$f"
       fi
     done
 
     if [[ -n "$ss_cfg" ]]; then
       echo "Active Starship Configuration ($ss_cfg):"
-      c_to=$(grep -E '^[[:space:]]*command_timeout' "$ss_cfg" 2>/dev/null | awk -F= '{print $2}' | xargs || echo "default (500ms)")
-      echo "  * Configured Timeout: $c_to"
+      c_to=$(toml_section_val "$ss_cfg" "" "command_timeout")
+      echo "  * Configured Timeout: ${c_to:-default (500ms)}"
 
       echo "Mise Companion & Zero-Latency Prompt Integration:"
       has_mise_mod=$(grep -E '^[[:space:]]*\[mise\]' "$ss_cfg" 2>/dev/null || true)
-      mise_mod_dis=$(grep -A 4 '^[[:space:]]*\[mise\]' "$ss_cfg" 2>/dev/null | grep -E '^[[:space:]]*disabled[[:space:]]*=' | cut -d= -f2- | tr -d ' "' || echo "default (false)")
-      echo "  * Native [mise] Prompt Module: $(if [[ -n "$has_mise_mod" && "$mise_mod_dis" != "true" ]]; then echo "[ENABLED] (Unified polyglot tool status)"; else echo "[DISABLED / UNCONFIGURED] (Add [mise] module to starship.toml)"; fi)"
+      mise_mod_dis=$(toml_section_val "$ss_cfg" "mise" "disabled")
+      if [[ -n "$has_mise_mod" && "$mise_mod_dis" == "false" ]]; then
+        echo "  * Native [mise] Prompt Module: [ENABLED] (disabled = false)"
+      elif [[ -n "$has_mise_mod" && -z "$mise_mod_dis" ]]; then
+        echo "  * Native [mise] Prompt Module: [DISABLED] (default (true — disabled unless set false))"
+      else
+        echo "  * Native [mise] Prompt Module: [DISABLED / UNCONFIGURED] (Add [mise] with disabled = false in starship.toml)"
+      fi
+
+      mise_mod_fmt=$(toml_section_val "$ss_cfg" "mise" "format")
+      if [[ "$mise_mod_fmt" == *'$version'* ]]; then
+        echo "  * [WARNING] [mise] format references '\$version' which does not exist in starship [mise] module (valid variables: \$symbol, \$health)"
+      fi
 
       lang_mods_status=()
       for l_mod in nodejs python rust golang ruby dotnet bun package; do
-        if grep -A 4 "^[[:space:]]*\[$l_mod\]" "$ss_cfg" 2>/dev/null | grep -q "disabled = true"; then
+        lm_dis=$(toml_section_val "$ss_cfg" "$l_mod" "disabled")
+        if [[ "$lm_dis" == "true" ]]; then
           lang_mods_status+=("$l_mod:disabled")
         elif grep -q "^[[:space:]]*\[$l_mod\]" "$ss_cfg" 2>/dev/null; then
           lang_mods_status+=("$l_mod:ACTIVE")
@@ -1607,20 +2145,29 @@ case "$target" in
       else
         echo "  * Language Modules Status: Using starship defaults (Per-language modules active by default)"
       fi
-      if [[ -n "$has_mise_mod" && "$mise_mod_dis" != "true" ]]; then
+      if [[ -n "$has_mise_mod" && "$mise_mod_dis" == "false" ]]; then
         fmt_langs=$(grep -E '^[[:space:]]*format[[:space:]]*=' "$ss_cfg" 2>/dev/null | grep -oE '\$(nodejs|python|rust|golang|ruby|dotnet|bun|package)' | tr '\n' ' ' || true)
         if [[ -n "$fmt_langs" ]]; then
           echo "  * [WARNING] Redundant Language Tokens in 'format': ${fmt_langs}(Remove from format when [mise] is enabled)"
         fi
       fi
-      bash_has_mise=$(grep -E '(eval "\$\(mise activate bash\)"|mise activate bash)' "$HOME/.bashrc" 2>/dev/null || true)
-      bash_has_ss=$(grep -E '(eval "\$\(starship init bash\)"|starship init bash)' "$HOME/.bashrc" 2>/dev/null || true)
-      echo "  * Shell Integration (.bashrc): $(if [[ -n "$bash_has_ss" ]]; then echo "starship init [YES]"; else echo "starship init [NO]"; fi), $(if [[ -n "$bash_has_mise" ]]; then echo "mise activate [YES]"; else echo "mise activate [NO]"; fi)"
+    fi
+
+    echo "Shell Integration:"
+    if rc_lines 'starship init' >/dev/null; then
+      echo "  * Starship Init Hooks:"
+      rc_lines 'starship init'
+    else
+      echo "  * Starship Init Hooks: [NOT CONFIGURED] in the files read: $(rc_read)"
+    fi
+    if rc_lines 'mise activate' >/dev/null; then
+      echo "  * Mise Activate Hooks:"
+      rc_lines 'mise activate'
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Set command_timeout = 500 (integer ms); enable native [mise] module and disable redundant language modules ([nodejs], [python], [rust]) to eliminate 50-200ms subshell prompt lag; ensure mise env_cache = true"
-    echo "  * Configuration: Clean minimal prompt layout, directory truncation length 3, consistent Nerd Font symbols"
+    echo "  * Performance: Set command_timeout = 500 (integer ms); enable [mise] (disabled = false) and disable redundant language modules ([nodejs], [python], [rust]); if caching static init, use 'starship init <shell> --print-full-init'"
+    echo "  * Configuration: Clean minimal prompt layout, directory truncation length 3, consistent Nerd Font symbols (note [mise] format supports \$symbol/\$health, not \$version)"
     echo "  * Security: Avoid untrusted custom command execution in prompt modules ([custom.*]); restrict starship.toml permissions to 0600"
     echo "====================================="
     exit 0
@@ -1630,13 +2177,13 @@ case "$target" in
     ytdl_bin=$(command -v yt-dlp 2>/dev/null || echo "")
     echo "Binary: ${ytdl_bin:-Not installed}"
     if [[ -n "$ytdl_bin" ]]; then
-      ytdl_ver=$("$ytdl_bin" --version 2>/dev/null || echo "unknown")
+      ytdl_ver=$(first_clean_line_or "unknown" "$ytdl_bin" --version)
       echo "Version: $ytdl_ver"
     fi
 
     echo "Discovered Configuration Files:"
     ytdl_cfg=0
-    for f in "$roaming_app_data/yt-dlp/config" "$HOME/.config/yt-dlp/config"; do
+    for f in "$roaming_app_data/yt-dlp/config" "${XDG_CONFIG_HOME:-$HOME/.config}/yt-dlp/config" "$HOME/.config/yt-dlp.conf"; do
       [[ -f "$f" ]] || continue
       echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
       ytdl_cfg=1
@@ -1646,13 +2193,40 @@ case "$target" in
       if grep -qE '^[[:space:]]*--cookies' "$f" 2>/dev/null; then
         echo "  * [WARNING] $f references a cookies file (keep that file at 0600)"
       fi
+      if grep -qE '^[[:space:]]*--(external-)?downloader[[:space:]=]+.*aria2c' "$f" 2>/dev/null; then
+        echo "  * [WARNING] Global aria2c downloader in $f causes YouTube HTTP 403/SABR throttling (prefer native -N 4 / --concurrent-fragments 4)"
+      fi
+      if grep -qE '^[[:space:]]*--impersonate([[:space:]=]|$)' "$f" 2>/dev/null; then
+        echo "  * [WARNING] Global --impersonate in $f degrades download speed/stability (use --impersonate per-command only)"
+      fi
     done
     [[ "$ytdl_cfg" -eq 1 ]] || echo "  * Config file: [NOT CONFIGURED] (Recommend: ~/.config/yt-dlp/config)"
 
+    echo "YouTube EJS & JS Runtime Dependencies:"
+    js_rt_found=()
+    for jrt in deno node bun qjs; do
+      command -v "$jrt" >/dev/null 2>&1 && js_rt_found+=("$jrt")
+    done
+    echo "  * JS Runtimes on PATH: ${js_rt_found[*]:-none detected}"
+    ejs_status="not detected"
+    if command -v pacman >/dev/null 2>&1 && pacman -Q yt-dlp-ejs >/dev/null 2>&1; then
+      ejs_status="installed ($(pacman -Q yt-dlp-ejs 2>/dev/null))"
+    elif python3 -c 'import yt_dlp_ejs' >/dev/null 2>&1 || /usr/bin/python3 -c 'import yt_dlp_ejs' >/dev/null 2>&1; then
+      ejs_status="installed (Python yt_dlp_ejs)"
+    fi
+    echo "  * yt-dlp-ejs Solver: $ejs_status"
+    if ! command -v deno >/dev/null 2>&1; then
+      if command -v node >/dev/null 2>&1; then
+        echo "  * [NOTE] deno not found; pass '--js-runtimes node' in config if using Node.js for EJS challenges"
+      elif command -v bun >/dev/null 2>&1; then
+        echo "  * [NOTE] deno not found; pass '--js-runtimes bun' in config if using Bun for EJS challenges"
+      fi
+    fi
+
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Set --concurrent-fragments=4, integrate ffmpeg multithreading, enable aria2c download engine when available"
-    echo "  * Configuration: Default format bestvideo+bestaudio/best, clean output template, embed metadata/subtitles"
-    echo "  * Security: Restrict untrusted cookies, sanitize output filenames to prevent directory traversal"
+    echo "  * Performance: Use native -N 4 (--concurrent-fragments=4) with ffmpeg (never global aria2c or global --impersonate)"
+    echo "  * Configuration: Default format bestvideo+bestaudio/best, clean output template, ensure yt-dlp-ejs + deno (or --js-runtimes node/bun) for YouTube"
+    echo "  * Security: Restrict untrusted cookies (0600), sanitize output filenames, never pass --no-check-certificates"
     echo "====================================="
     exit 0
     ;;
@@ -1661,41 +2235,98 @@ case "$target" in
     hdr_bin=$(command -v herdr 2>/dev/null || echo "")
     echo "Binary: ${hdr_bin:-Not installed}"
     if [[ -n "$hdr_bin" ]]; then
-      hdr_ver=$("$hdr_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
+      hdr_ver=$(first_clean_line_or "unknown" "$hdr_bin" --version)
       echo "Version: $hdr_ver"
     fi
 
     echo "Server & Client Runtime Status:"
-    if command -v herdr >/dev/null 2>&1; then
-      herdr status 2>/dev/null | while read -r line; do
+    if [[ -n "$hdr_bin" ]]; then
+      "$hdr_bin" status 2>/dev/null | while IFS= read -r line; do
         echo "  $line"
       done || echo "  (Herdr status unavailable)"
+      echo "Agent Integration Hooks (herdr integration status):"
+      hdr_int=$("$hdr_bin" integration status 2>/dev/null | strip_ansi || true)
+      if [[ -n "$hdr_int" ]]; then
+        while IFS= read -r iline; do
+          [[ -n "$iline" ]] && echo "  $iline"
+        done <<< "$hdr_int"
+        for ag in pi claude codex; do
+          if command -v "$ag" >/dev/null 2>&1; then
+            ag_line=$(printf '%s\n' "$hdr_int" | grep -iE "(^|[[:space:]])${ag}([[:space:]:]|$)" | head -n 1 || true)
+            if [[ -n "$ag_line" ]] && echo "$ag_line" | grep -qiE 'not installed|missing|outdated|stale'; then
+              echo "  * [NOTE] $ag is installed on PATH but its Herdr hook reports: $ag_line"
+            fi
+          fi
+        done
+      else
+        echo "  (herdr integration status unavailable)"
+      fi
     fi
 
     echo "Discovered Configuration Files:"
+    hdr_cfg_dir="${XDG_CONFIG_HOME:-$HOME/.config}/herdr"
     hdr_cfg=""
-    for f in "$roaming_app_data/herdr/config.toml" "$HOME/.config/herdr/config.toml"; do
-      if [[ -f "$f" ]]; then
-        echo "  - [EXISTS] $f"
+    for f in "${HERDR_CONFIG_PATH:-}" "$roaming_app_data/herdr/config.toml" "$hdr_cfg_dir/config.toml"; do
+      if [[ -n "$f" && -f "$f" ]]; then
+        echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
         [[ -z "$hdr_cfg" ]] && hdr_cfg="$f"
       fi
     done
+    for bdir in "$hdr_cfg_dir" "$roaming_app_data/herdr"; do
+      [[ -d "$bdir" ]] || continue
+      for bf in "$bdir"/config.toml.bak.*; do
+        [[ -f "$bf" ]] || continue
+        echo "  * [WARNING] Stray backup config $bf$(cfg_perm_tag "$bf") (clean up or restrict permissions to 0600)"
+      done
+    done
 
     if [[ -n "$hdr_cfg" ]]; then
-      echo "Active Configuration Parameters:"
-      def_shell=$(grep -E '^[[:space:]]*default_shell[[:space:]]*=' "$hdr_cfg" 2>/dev/null | cut -d= -f2- | tr -d ' "' || echo "system default")
-      theme_name=$(grep -E '^[[:space:]]*name[[:space:]]*=' "$hdr_cfg" 2>/dev/null | cut -d= -f2- | tr -d ' "' || echo "default")
-      toast_deliv=$(grep -E '^[[:space:]]*delivery[[:space:]]*=' "$hdr_cfg" 2>/dev/null | cut -d= -f2- | tr -d ' "' || echo "inline")
-      echo "  * Default Shell: $def_shell"
-      echo "  * Theme: $theme_name"
-      echo "  * Notification Delivery: $toast_deliv"
+      echo "Active Configuration Parameters ($hdr_cfg):"
+      def_shell=$(toml_section_val "$hdr_cfg" "terminal" "default_shell")
+      shell_mode=$(toml_section_val "$hdr_cfg" "terminal" "shell_mode")
+      theme_name=$(toml_section_val "$hdr_cfg" "theme" "name")
+      theme_auto=$(toml_section_val "$hdr_cfg" "theme" "auto_switch")
+      theme_dark=$(toml_section_val "$hdr_cfg" "theme" "dark_name")
+      theme_light=$(toml_section_val "$hdr_cfg" "theme" "light_name")
+      toast_deliv=$(toml_section_val "$hdr_cfg" "ui.toast" "delivery")
+      resume_agents=$(toml_section_val "$hdr_cfg" "session" "resume_agents_on_restore")
+      scrollback_bytes=$(toml_section_val "$hdr_cfg" "advanced" "scrollback_limit_bytes")
+      if is_windows; then
+        echo "  * Default Shell: ${def_shell:-system default}"
+      else
+        echo "  * Default Shell: ${def_shell:-empty (honors \$SHELL)}"
+      fi
+      echo "  * Shell Mode: ${shell_mode:-default}"
+      echo "  * Theme: ${theme_name:-default} (auto_switch=${theme_auto:-false}${theme_dark:+, dark=$theme_dark}${theme_light:+, light=$theme_light})"
+      echo "  * Notification Delivery ([ui.toast]): ${toast_deliv:-off}"
+      echo "  * Session Resume Agents: ${resume_agents:-default}"
+      echo "  * Scrollback Limit Bytes: ${scrollback_bytes:-default}"
     fi
 
-    echo "Runtime State & Session Artifacts:"
-    for sf in "$roaming_app_data/herdr/session.json" "$roaming_app_data/herdr/herdr.sock" "$roaming_app_data/herdr/herdr-server.log" "$HOME/.herdr/packages"; do
-      if [[ -e "$sf" ]]; then
+    echo "Runtime State, Sockets & Session Artifacts:"
+    hdr_state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/herdr"
+    for sf in \
+      "$hdr_cfg_dir/session.json" \
+      "$hdr_cfg_dir/session-snapshots" \
+      "$hdr_cfg_dir/herdr.sock" \
+      "$hdr_cfg_dir/herdr-client.sock" \
+      "$hdr_cfg_dir/herdr.log" \
+      "$hdr_cfg_dir/herdr-server.log" \
+      "$hdr_cfg_dir/herdr-client.log" \
+      "$hdr_state_dir" \
+      "$HOME/.herdr/worktrees" \
+      "$roaming_app_data/herdr/session.json" \
+      "$roaming_app_data/herdr/herdr.sock" \
+      "$roaming_app_data/herdr/herdr-server.log"; do
+      if [[ -e "$sf" || -S "$sf" ]]; then
         sz=$(du -sh "$sf" 2>/dev/null | awk '{print $1}' || echo "present")
-        echo "  - [EXISTS] $(basename "$sf"): $sz ($sf)"
+        echo "  - [EXISTS] $(basename "$sf"): $sz ($sf)$(cfg_perm_tag "$sf")"
+        if [[ -S "$sf" ]] && ! is_windows; then
+          smode=$(stat -c "%a" "$sf" 2>/dev/null || echo "")
+          if [[ -n "$smode" && "$smode" != "600" ]]; then
+            echo "  * [SECURITY WARNING] Socket $sf has mode $smode (recommend 0600)"
+          fi
+        fi
       fi
     done
 
@@ -1706,9 +2337,9 @@ case "$target" in
     mise_bin=$(command -v mise 2>/dev/null || echo "")
     if [[ -n "$mise_bin" ]]; then
       echo "  * Mise Binary Detected: $mise_bin"
-      mise_shims="$HOME/.local/share/mise/shims"
+      mise_shims="${MISE_DATA_DIR:-$HOME/.local/share/mise}/shims"
       if is_windows; then
-        mise_shims="$local_app_data/mise/shims"
+        mise_shims="$(win_path_unix "${MISE_DATA_DIR:-$local_app_data/mise}")/shims"
       fi
       if [[ -d "$mise_shims" ]]; then
         echo "  * Mise Shims for Agent Workspaces: [ACTIVE] ($mise_shims)"
@@ -1718,9 +2349,13 @@ case "$target" in
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Monitor and rotate herdr-server.log; ensure default_shell starts cleanly; prune orphaned sessions"
-    echo "  * Configuration: Set default_shell to pwsh (or bash); $theme_desc; configure system toast delivery; inherit mise shims in multiplexed agent panes"
-    echo "  * Security: Restrict herdr.sock (0600) and workspace directories (0700); secure agent execution boundaries and API socket"
+    echo "  * Performance: Monitor/rotate herdr*.log; bound [advanced] scrollback_limit_bytes; prune orphaned sessions/worktrees; use 'herdr update --handoff' for zero-downtime restarts"
+    if is_windows; then
+      echo "  * Configuration: Set default_shell to pwsh; configure [terminal] shell_mode, [session] resume_agents_on_restore, $theme_desc (auto_switch/dark_name/light_name), [ui.toast] delivery; validate via 'herdr config check' + 'herdr server reload-config'"
+    else
+      echo "  * Configuration: Leave default_shell = \"\" on Unix (honors \$SHELL); configure [terminal] shell_mode, [session] resume_agents_on_restore, $theme_desc (auto_switch/dark_name/light_name), [ui.toast] delivery; validate via 'herdr config check' + 'herdr server reload-config'"
+    fi
+    echo "  * Security: Restrict herdr.sock, herdr-client.sock, and config.toml to 0600 (clean up stray config.toml.bak.*); keep workspace directories at 0700"
     echo "====================================="
     exit 0
     ;;
@@ -1729,7 +2364,7 @@ case "$target" in
     gh_bin=$(command -v gh 2>/dev/null || echo "")
     echo "Binary: ${gh_bin:-Not installed}"
     if [[ -n "$gh_bin" ]]; then
-      gh_ver=$("$gh_bin" --version 2>/dev/null | head -n 1 || echo "unknown")
+      gh_ver=$(first_clean_line_or "unknown" "$gh_bin" --version)
       echo "Version: $gh_ver"
     fi
 
@@ -1743,24 +2378,30 @@ case "$target" in
     echo "Discovered Configuration Files:"
     gh_cfg=""
     gh_hosts=""
-    for f in "$roaming_app_data/GitHub CLI/config.yml" "$HOME/.config/gh/config.yml"; do
+    for f in "$roaming_app_data/GitHub CLI/config.yml" "${XDG_CONFIG_HOME:-$HOME/.config}/gh/config.yml"; do
       if [[ -f "$f" ]]; then
-        echo "  - [EXISTS] $f"
+        echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
         [[ -z "$gh_cfg" ]] && gh_cfg="$f"
       fi
     done
-    for f in "$roaming_app_data/GitHub CLI/hosts.yml" "$HOME/.config/gh/hosts.yml"; do
+    for f in "$roaming_app_data/GitHub CLI/hosts.yml" "${XDG_CONFIG_HOME:-$HOME/.config}/gh/hosts.yml"; do
       if [[ -f "$f" ]]; then
         echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
         [[ -z "$gh_hosts" ]] && gh_hosts="$f"
+        if grep -qE '^[[:space:]]*oauth_token:' "$f" 2>/dev/null; then
+          echo "  * [SECURITY WARNING] $f stores plaintext oauth_token: (prefer OS keyring or expiring tokens)"
+        fi
       fi
     done
 
     echo "Active Configuration Parameters:"
     if command -v gh >/dev/null 2>&1; then
-      for key in git_protocol editor pager prompt browser; do
+      for key in git_protocol editor pager prompt browser telemetry expiring_credentials color_labels; do
         val=$(gh config get "$key" 2>/dev/null || echo "not set")
         echo "  * $key: $val"
+        if [[ "$key" == "telemetry" && "$val" == "enabled" ]]; then
+          echo "  * [NOTE] gh telemetry is enabled (disable with: gh config set telemetry disabled)"
+        fi
       done
     elif [[ -n "$gh_cfg" ]]; then
       echo "  * Config File Found: $gh_cfg"
@@ -1768,7 +2409,7 @@ case "$target" in
 
     echo "Installed GitHub CLI Extensions:"
     if command -v gh >/dev/null 2>&1; then
-      ext_count=$(gh extension list 2>/dev/null | wc -l || true)
+      ext_count=$(gh extension list 2>/dev/null | wc -l | tr -d ' ' || true)
       if [[ "$ext_count" -gt 0 ]]; then
         echo "  * Total Extensions: $ext_count"
         gh extension list 2>/dev/null | while read -r eline; do
@@ -1788,7 +2429,7 @@ case "$target" in
       elif echo "$git_creds" | grep -qiE "manager|osxkeychain|libsecret"; then
         echo "  * Git Credential Helper: [CONFIGURED] (System Git Credential Manager active; 'gh auth setup-git' optional)"
       elif [[ "$gh_proto" == "ssh" ]]; then
-        echo "  * Git Credential Helper: [OK] (git_protocol=ssh uses SSH keys; 'gh auth setup-git' only needed for HTTPS remotes)"
+        echo "  * Git Credential Helper: [OK] (git_protocol: ssh uses SSH keys; 'gh auth setup-git' only needed for HTTPS remotes)"
       else
         echo "  * Git Credential Helper: [NOT CONFIGURED] (Run 'gh auth setup-git' to eliminate token/password prompts for HTTPS remotes)"
       fi
@@ -1800,7 +2441,7 @@ case "$target" in
       echo "  * Syntax Pager: Default less (Recommend 'gh config set pager \"bat --color=always --style=plain\"')"
     fi
     topgrade_cfg=""
-    for tf in "$HOME/.config/topgrade.toml" "$roaming_app_data/topgrade.toml"; do
+    for tf in "${XDG_CONFIG_HOME:-$HOME/.config}/topgrade.toml" "$roaming_app_data/topgrade.toml"; do
       [[ -f "$tf" ]] && topgrade_cfg="$tf" && break
     done
     if [[ -n "$topgrade_cfg" ]]; then
@@ -1808,9 +2449,9 @@ case "$target" in
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Configure pager = 'bat --color=always --style=plain' for zero-latency syntax diff reviews; leverage gh --json queries in scripts"
-    echo "  * Configuration: Set git_protocol = 'ssh'; run 'gh auth setup-git' for seamless git & lazygit credentials; configure PR workflow aliases (co, pv)"
-    echo "  * Security: Restrict ~/.config/gh/hosts.yml permissions to 0600 on Linux/WSL (NTFS ACLs on Windows); enforce least-privilege token scopes; audit third-party extensions before installing"
+    echo "  * Performance: Configure 'pager: bat --color=always --style=plain' in config.yml for zero-latency diff reviews; leverage gh --json queries in scripts"
+    echo "  * Configuration: Set 'git_protocol: ssh' (run 'gh auth setup-git' if using HTTPS remotes); set 'color_labels: enabled' and 'telemetry: disabled'; configure PR workflow aliases"
+    echo "  * Security: Avoid plaintext oauth_token in hosts.yml (prefer OS keyring + expiring_credentials: enabled); restrict hosts.yml to 0600 on Linux/WSL (NTFS ACLs on Windows); audit third-party extensions"
     echo "====================================="
     exit 0
     ;;
@@ -1903,7 +2544,12 @@ case "$target" in
           if ($v) { $p = $v; break }
         }
         if (-not $p) {
-          foreach ($cand in @("$env:ProgramFiles\Mozilla Firefox\firefox.exe", "${env:ProgramFiles(x86)}\Mozilla Firefox\firefox.exe", "$env:LOCALAPPDATA\Mozilla Firefox\firefox.exe", "$env:ProgramFiles\LibreWolf\librewolf.exe")) {
+          $cands = if ($env:SO_APP -eq "librewolf.exe") {
+            @("$env:ProgramFiles\LibreWolf\librewolf.exe", "${env:ProgramFiles(x86)}\LibreWolf\librewolf.exe", "$env:LOCALAPPDATA\Programs\librewolf\librewolf.exe", "$env:LOCALAPPDATA\LibreWolf\librewolf.exe")
+          } else {
+            @("$env:ProgramFiles\Mozilla Firefox\firefox.exe", "${env:ProgramFiles(x86)}\Mozilla Firefox\firefox.exe", "$env:LOCALAPPDATA\Mozilla Firefox\firefox.exe")
+          }
+          foreach ($cand in $cands) {
             if ($cand -and (Test-Path -LiteralPath $cand)) { $p = $cand; break }
           }
         }
@@ -1944,7 +2590,7 @@ case "$target" in
       fi
     fi
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Hardware WebRender compositing & VA-API/D3D11 video decode enabled; auto-unload inactive tabs on low/medium RAM"
+    echo "  * Performance: Hardware WebRender compositing & media.hardware-video-decoding.force-enabled (Firefox 137+ on Linux) / D3D11 video decode (Windows); auto-unload inactive tabs on low/medium RAM"
     echo "  * Configuration: Manage reproducible preferences via profile user.js; keep separate profiles per workflow"
     echo "  * Security: Enable HTTPS-Only Mode, Enhanced Tracking Protection (Strict), DNS-over-HTTPS, and audit extensions"
     echo "====================================="
@@ -2004,7 +2650,8 @@ case "$target" in
       fi
       echo "  * Bubblewrap (bwrap): $(command -v bwrap 2>/dev/null || echo 'not installed')"
       if command -v systemd-analyze >/dev/null 2>&1; then
-        sb_counts=$(LC_ALL=C systemd-analyze security 2>/dev/null | LC_ALL=C awk '$2 ~ /^[0-9]/ { if ($2 >= 8.0) u++; else if ($2 >= 5.0) m++; else o++ } END { printf "%d %d %d", o+0, m+0, u+0 }' || echo "0 0 0")
+        sa_raw=$(LC_ALL=C systemd-analyze security 2>/dev/null || true)
+        sb_counts=$(printf '%s\n' "$sa_raw" | LC_ALL=C awk '$2 ~ /^[0-9]/ { if ($2 >= 8.0) u++; else if ($2 >= 5.0) m++; else o++ } END { printf "%d %d %d\n", o+0, m+0, u+0 }')
         read -r sb_ok sb_med sb_unsafe <<< "$sb_counts"
         if [[ "${sb_unsafe:-0}" -gt 0 ]]; then
           echo "  * systemd Service Exposure: [WARNING] $sb_unsafe unsafe/exposed (>=8.0), $sb_med medium, $sb_ok OK"
@@ -2075,9 +2722,8 @@ case "$target" in
     ;;
 esac
 
-# 2. Package / Tool Handling
 case "$target" in
-  pacman|yay|paru|makepkg|pacman-contrib) echo "Category: Package Manager / Arch Linux Package & Build Stack" ;;
+  pacman|yay|paru|makepkg|paccache|pacman-contrib) echo "Category: Package Manager / Arch Linux Package & Build Stack" ;;
   flatpak) echo "Category: Package Manager / Flatpak Sandboxed Applications" ;;
   kde|kde-plasma|baloo) echo "Category: Desktop Environment / KDE Plasma & KWin" ;;
   podman|docker|lazydocker) echo "Category: Containers / Container Runtime & Lazydocker" ;;
@@ -2085,6 +2731,7 @@ case "$target" in
   btop|htop|btop4win) echo "Category: System Monitor / Resource & Process Viewer" ;;
   syncthing) echo "Category: File Synchronization / Syncthing" ;;
   python|python3) echo "Category: Language Runtime / Python" ;;
+  uv) echo "Category: Python Package & Project Manager / uv" ;;
   sqlite3) echo "Category: Database CLI / SQLite3" ;;
   *) echo "Category: Package / Tool ($target)" ;;
 esac
@@ -2100,7 +2747,7 @@ case "$target" in
   python) binary_lookup="python3" ;;
 esac
 
-bin_path=$(command -v "$target" 2>/dev/null || command -v "$binary_lookup" 2>/dev/null || echo "")
+bin_path=$(command -v -- "$target" 2>/dev/null || command -v -- "$binary_lookup" 2>/dev/null || echo "")
 
 if [[ -z "$bin_path" ]]; then
   echo "Status: NOT FOUND IN PATH"
@@ -2136,15 +2783,30 @@ echo "Status: INSTALLED"
 echo "Binary Path: $bin_path"
 
 version="unknown"
-for flag in "--version" "-V" "-v" "version"; do
-  if ver_out=$("$bin_path" $flag 2>/dev/null | tr -d '\0\r' | head -n 1); then
-    if [[ -n "$ver_out" ]]; then
-      version="$ver_out"
-      break
+if [[ "$target" == "sqlite3" ]]; then
+  version=$(first_clean_line_or "unknown" "$bin_path" -batch -init /dev/null --version)
+else
+  for flag in "--version" "-V" "-v" "version"; do
+    if raw_ver=$("$bin_path" "$flag" 2>/dev/null); then
+      ver_out=$(printf '%s\n' "$raw_ver" | strip_ansi | awk 'NF && !found { out=$0; found=1 } END { if (found) printf "%s", out }')
+      if [[ -n "$ver_out" ]]; then
+        version="$ver_out"
+        break
+      fi
     fi
-  fi
-done
+  done
+fi
 echo "Version: $version"
+
+st_cli_cfg=""
+st_cli_db=""
+if [[ "$target" == "syncthing" ]]; then
+  st_paths_out=$("$bin_path" paths 2>/dev/null | strip_ansi || true)
+  if [[ -n "$st_paths_out" ]]; then
+    st_cli_cfg=$(printf '%s\n' "$st_paths_out" | awk '/Configuration file:/ { getline; gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit }')
+    st_cli_db=$(printf '%s\n' "$st_paths_out" | awk '/Database location:/ { getline; gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit }')
+  fi
+fi
 
 # Candidate Config Locations (Cross-Platform)
 config_candidates=(
@@ -2171,8 +2833,8 @@ config_candidates=(
 
 # Tool-specific known paths
 case "$target" in
-  pacman|yay|paru|makepkg)
-    config_candidates+=("/etc/pacman.conf" "/etc/makepkg.conf" "$HOME/.config/yay/config.json")
+  pacman|yay|paru|makepkg|paccache|pacman-contrib)
+    config_candidates+=("/etc/pacman.conf" "/etc/makepkg.conf" "/etc/makepkg.conf.d" "${XDG_CONFIG_HOME:-$HOME/.config}/pacman/makepkg.conf" "$HOME/.makepkg.conf" "/etc/conf.d/pacman-contrib" "${XDG_CONFIG_HOME:-$HOME/.config}/yay/config.json")
     ;;
   kde|kde-plasma)
     config_candidates+=("$HOME/.config/kdeglobals" "$HOME/.config/kwinrc" "$HOME/.config/baloofilerc")
@@ -2180,17 +2842,31 @@ case "$target" in
   flatpak)
     config_candidates+=("$HOME/.local/share/flatpak/overrides/global" "/var/lib/flatpak/overrides/global")
     ;;
-  podman|docker|lazydocker)
-    config_candidates+=("$HOME/.config/containers/containers.conf" "$HOME/.config/containers/registries.conf" "$HOME/.config/containers/storage.conf" "$HOME/.docker/config.json" "/etc/docker/daemon.json" "$HOME/.config/lazydocker/config.yml" "$roaming_app_data/lazydocker/config.yml")
+  podman)
+    config_candidates+=("${XDG_CONFIG_HOME:-$HOME/.config}/containers/containers.conf" "${XDG_CONFIG_HOME:-$HOME/.config}/containers/containers.conf.d" "${XDG_CONFIG_HOME:-$HOME/.config}/containers/registries.conf" "${XDG_CONFIG_HOME:-$HOME/.config}/containers/storage.conf" "${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd" "/etc/containers/containers.conf" "/etc/containers/systemd")
+    ;;
+  lazydocker)
+    config_candidates+=("${XDG_CONFIG_HOME:-$HOME/.config}/lazydocker/config.yml" "$roaming_app_data/lazydocker/config.yml")
+    ;;
+  docker)
+    config_candidates+=("$HOME/.docker/config.json" "${XDG_CONFIG_HOME:-$HOME/.config}/docker/daemon.json" "/etc/docker/daemon.json")
     ;;
   fd|fdfind)
-    config_candidates+=("$HOME/.config/fd/ignore" "$HOME/.config/fd/config" "$roaming_app_data/fd/ignore")
+    config_candidates+=("${XDG_CONFIG_HOME:-$HOME/.config}/fd/ignore" "$roaming_app_data/fd/ignore")
     ;;
   btop|htop|btop4win)
-    config_candidates+=("$HOME/.config/btop/btop.conf" "$HOME/.config/htop/htoprc" "$local_app_data/btop/btop.conf")
+    config_candidates+=("${XDG_CONFIG_HOME:-$HOME/.config}/btop/btop.conf" "${XDG_CONFIG_HOME:-$HOME/.config}/htop/htoprc" "$local_app_data/btop/btop.conf")
     ;;
   syncthing)
-    config_candidates+=("$HOME/.local/state/syncthing/config.xml" "$HOME/.config/syncthing/config.xml" "$local_app_data/Syncthing/config.xml")
+    [[ -n "$st_cli_cfg" ]] && config_candidates+=("$st_cli_cfg")
+    config_candidates+=("${XDG_STATE_HOME:-$HOME/.local/state}/syncthing/config.xml" "${XDG_CONFIG_HOME:-$HOME/.config}/syncthing/config.xml" "$local_app_data/Syncthing/config.xml")
+    ;;
+  uv)
+    [[ -n "${UV_CONFIG_FILE:-}" ]] && config_candidates+=("$UV_CONFIG_FILE")
+    config_candidates+=("${XDG_CONFIG_HOME:-$HOME/.config}/uv/uv.toml" "$roaming_app_data/uv/uv.toml" "/etc/uv/uv.toml")
+    ;;
+  python|python3)
+    config_candidates+=("${PIP_CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/pip/pip.conf}" "$roaming_app_data/pip/pip.ini" "${PYTHON_HISTORY:-${XDG_STATE_HOME:-$HOME/.local/state}/python_history}" "$HOME/.python_history")
     ;;
   sqlite3)
     config_candidates+=("$HOME/.sqliterc")
@@ -2201,9 +2877,13 @@ echo "Discovered Config Locations:"
 found_configs=0
 declare -A seen_paths
 for cfg in "${config_candidates[@]}"; do
+  [[ -z "$cfg" ]] && continue
   [[ -n "${seen_paths[$cfg]:-}" ]] && continue
   seen_paths["$cfg"]=1
-  if [[ -e "$cfg" ]]; then
+  if [[ -d "$cfg" ]]; then
+    echo "  - [EXISTS DIR] $cfg"
+    found_configs=$((found_configs + 1))
+  elif [[ -e "$cfg" ]]; then
     echo "  - [EXISTS] $cfg$(cfg_perm_tag "$cfg")"
     found_configs=$((found_configs + 1))
   fi
@@ -2223,27 +2903,127 @@ case "$target" in
       False) echo "  * System pip protected (EXTERNALLY-MANAGED): [NOTE] this Python has no marker, so pip can change it (fine for pyenv or a virtualenv; otherwise use venv, uv or pipx)" ;;
       *)     echo "  * System pip protected (EXTERNALLY-MANAGED): unknown" ;;
     esac
+    if [[ "$py_ext" == "False" ]]; then
+      pip_cfg_found=""
+      for pf in "${PIP_CONFIG_FILE:-}" "${XDG_CONFIG_HOME:-$HOME/.config}/pip/pip.conf" "$roaming_app_data/pip/pip.ini"; do
+        [[ -n "$pf" && -f "$pf" ]] && pip_cfg_found="$pf" && break
+      done
+      pip_req_venv="${PIP_REQUIRE_VIRTUALENV:-}"
+      if [[ -z "$pip_req_venv" && -n "$pip_cfg_found" ]]; then
+        pip_req_venv=$(grep -iE '^[[:space:]]*require-virtualenv[[:space:]]*=' "$pip_cfg_found" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d ' "' || true)
+      fi
+      if [[ "${pip_req_venv,,}" == "true" || "$pip_req_venv" == "1" ]]; then
+        echo "  * pip require-virtualenv: [OK] ($pip_req_venv)"
+      else
+        echo "  * pip require-virtualenv: [NOTE] unset (without EXTERNALLY-MANAGED, set PIP_REQUIRE_VIRTUALENV=true or require-virtualenv = true in pip.conf)"
+      fi
+    fi
     echo "  * Virtualenv active: ${VIRTUAL_ENV:-no}"
     echo "  * uv: $(command -v uv 2>/dev/null || echo 'not installed')"
+    echo "  * PYTHONSAFEPATH: ${PYTHONSAFEPATH:-unset}"
+    py_hist="${PYTHON_HISTORY:-${XDG_STATE_HOME:-$HOME/.local/state}/python_history}"
+    [[ ! -f "$py_hist" && -f "$HOME/.python_history" ]] && py_hist="$HOME/.python_history"
+    if [[ -f "$py_hist" ]]; then
+      echo "  * Python History ($py_hist):$(cfg_perm_tag "$py_hist")"
+    fi
+    py_rt_info=$("$bin_path" -c 'import sys; gil = sys._is_gil_enabled() if hasattr(sys, "_is_gil_enabled") else "n/a"; jit = hasattr(sys, "_jit"); lazy = sys.version_info >= (3, 15); print(f"gil={gil} jit_api={jit} py315_lazy={lazy}")' 2>/dev/null | tr -d '\r' || true)
+    [[ -n "$py_rt_info" ]] && echo "  * Runtime Capabilities: $py_rt_info (PYTHON_LAZY_IMPORTS=${PYTHON_LAZY_IMPORTS:-unset})"
+    ;;
+  uv)
+    echo "Active uv Environment & Cache:"
+    uv_cache_dir=$("$bin_path" cache dir 2>/dev/null | tr -d '\r' || true)
+    if [[ -n "$uv_cache_dir" && -d "$uv_cache_dir" ]]; then
+      uv_cache_sz=$(du -sh "$uv_cache_dir" 2>/dev/null | awk '{print $1}' || echo "unknown")
+      echo "  * Cache Directory: $uv_cache_dir ($uv_cache_sz)"
+    elif [[ -n "$uv_cache_dir" ]]; then
+      echo "  * Cache Directory: $uv_cache_dir (not created yet)"
+    fi
+    uv_tools_out=$("$bin_path" tool list 2>/dev/null || true)
+    if [[ -n "$uv_tools_out" ]]; then
+      uv_tool_cnt=$(printf '%s\n' "$uv_tools_out" | grep -cE '^[^[:space:]-]' || true)
+      echo "  * Installed uv Tools: $uv_tool_cnt"
+    else
+      echo "  * Installed uv Tools: 0"
+    fi
+    uv_cfg=""
+    for uf in "${UV_CONFIG_FILE:-}" "${XDG_CONFIG_HOME:-$HOME/.config}/uv/uv.toml" "$roaming_app_data/uv/uv.toml" "/etc/uv/uv.toml"; do
+      [[ -n "$uf" && -f "$uf" ]] && uv_cfg="$uf" && break
+    done
+    if [[ -n "$uv_cfg" ]]; then
+      echo "Active uv Configuration ($uv_cfg):"
+      uv_bc=$(toml_section_val "$uv_cfg" "" "compile-bytecode")
+      uv_lm=$(toml_section_val "$uv_cfg" "" "link-mode")
+      uv_en=$(toml_section_val "$uv_cfg" "" "exclude-newer")
+      echo "  * compile-bytecode: ${uv_bc:-${UV_COMPILE_BYTECODE:-default (false)}}"
+      echo "  * link-mode: ${uv_lm:-${UV_LINK_MODE:-default (clone/hardlink)}}"
+      echo "  * exclude-newer: ${uv_en:-unset}"
+    else
+      echo "  * UV_COMPILE_BYTECODE=${UV_COMPILE_BYTECODE:-unset}, UV_LINK_MODE=${UV_LINK_MODE:-unset}"
+    fi
+    if command -v mise >/dev/null 2>&1 && command -v topgrade >/dev/null 2>&1; then
+      tg_uv_dis=""
+      for tf in "$roaming_app_data/topgrade.toml" "${XDG_CONFIG_HOME:-$HOME/.config}/topgrade.toml" "${XDG_CONFIG_HOME:-$HOME/.config}/topgrade.d"/*.toml; do
+        [[ -f "$tf" ]] && tg_uv_dis="$tg_uv_dis $(toml_extract_array "$tf" "disable")"
+      done
+      if [[ -n "${tg_uv_dis// /}" ]] && ! echo "$tg_uv_dis" | grep -qi "uv"; then
+        echo "  * [NOTE] Both mise and topgrade detected; add 'uv' to topgrade disable = [...] if uv is managed by mise"
+      fi
+    fi
     ;;
   sqlite3)
     if [[ -f "$HOME/.sqliterc" ]]; then
       echo "Active ~/.sqliterc:$(cfg_perm_tag "$HOME/.sqliterc")"
       grep -vE '^[[:space:]]*(--|$)' "$HOME/.sqliterc" 2>/dev/null | sed 's/^/    /' | head -n 10 || true
+      if grep -qiE 'journal_mode[[:space:]]*=[[:space:]]*WAL' "$HOME/.sqliterc" 2>/dev/null; then
+        echo "  * [WARNING] PRAGMA journal_mode=WAL in ~/.sqliterc mutates every opened DB header and fails on read-only DBs/scripts"
+      fi
     else
-      echo "  * ~/.sqliterc: [NOT CONFIGURED] (Recommend: .headers on, .mode box)"
+      echo "  * ~/.sqliterc: [NOT CONFIGURED] (Recommend: .output /dev/null, PRAGMA foreign_keys = ON;, PRAGMA busy_timeout = 5000;, .output stdout, .headers on, .mode box)"
     fi
     ;;
-  pacman|yay|paru|makepkg)
+  pacman|yay|paru|makepkg|paccache|pacman-contrib)
     echo "Active Arch Linux Package & Build Settings:"
-    if [[ -f /etc/pacman.conf ]]; then
+    if [[ -r /etc/pacman.conf ]]; then
       echo "  * ParallelDownloads (/etc/pacman.conf): $(grep -E '^[[:space:]]*ParallelDownloads' /etc/pacman.conf 2>/dev/null | awk -F= '{print $2}' | tr -d ' ' || echo 'commented/disabled')"
-      echo "  * SigLevel (/etc/pacman.conf): $(grep -E '^[[:space:]]*SigLevel' /etc/pacman.conf 2>/dev/null | head -n 1 | awk -F= '{print $2}' | sed 's/^[[:space:]]*//' || echo 'default')"
+      pac_dl_user=$(grep -E '^[[:space:]]*DownloadUser[[:space:]]*=' /etc/pacman.conf 2>/dev/null | head -n 1 | awk -F= '{print $2}' | tr -d ' ' || true)
+      if [[ -n "$pac_dl_user" ]]; then
+        echo "  * DownloadUser (/etc/pacman.conf): $pac_dl_user [OK]"
+      else
+        echo "  * DownloadUser (/etc/pacman.conf): [WARNING] unset (Pacman 7+ privilege-drop sandbox disabled; recommend DownloadUser = alpm)"
+      fi
+      if grep -qE '^[[:space:]]*DisableSandbox(Filesystem|Syscalls)?([[:space:]]|$)' /etc/pacman.conf 2>/dev/null; then
+        echo "  * [SECURITY WARNING] DisableSandbox* option active in /etc/pacman.conf (weakens Pacman 7+ download sandbox)"
+      fi
+      pac_sigs=$(grep -E '^[[:space:]]*SigLevel[[:space:]]*=' /etc/pacman.conf 2>/dev/null || true)
+      echo "  * SigLevel (/etc/pacman.conf): $(printf '%s\n' "$pac_sigs" | head -n 1 | awk -F= '{print $2}' | sed 's/^[[:space:]]*//' || echo 'default')"
+      if printf '%s\n' "$pac_sigs" | grep -qiE '\b(Never|TrustAll)\b'; then
+        echo "  * [SECURITY WARNING] Weak SigLevel (Never/TrustAll) found in /etc/pacman.conf"
+      fi
     fi
-    if [[ -f /etc/makepkg.conf ]]; then
-      echo "  * MAKEFLAGS (/etc/makepkg.conf): $(grep -E '^[[:space:]]*MAKEFLAGS=' /etc/makepkg.conf 2>/dev/null | tail -n 1 || echo "commented (Recommend MAKEFLAGS=\"-j${detected_threads}\")")"
+    for mf in /etc/makepkg.conf /etc/makepkg.conf.d/*.conf "${XDG_CONFIG_HOME:-$HOME/.config}/pacman/makepkg.conf" "$HOME/.makepkg.conf"; do
+      [[ -r "$mf" ]] || continue
+      mk_flags=$(grep -E '^[[:space:]]*MAKEFLAGS=' "$mf" 2>/dev/null | tail -n 1 || true)
+      mk_opts=$(grep -E '^[[:space:]]*OPTIONS=' "$mf" 2>/dev/null | tail -n 1 || true)
+      mk_rust=$(grep -E '^[[:space:]]*RUSTFLAGS=' "$mf" 2>/dev/null | tail -n 1 || true)
+      [[ -n "$mk_flags" ]] && echo "  * MAKEFLAGS ($mf): $mk_flags"
+      [[ -n "$mk_opts" ]] && echo "  * OPTIONS ($mf): $mk_opts"
+      [[ -n "$mk_rust" ]] && echo "  * RUSTFLAGS ($mf): $mk_rust"
+    done
+    yay_cfg="${XDG_CONFIG_HOME:-$HOME/.config}/yay/config.json"
+    if [[ -r "$yay_cfg" ]]; then
+      yay_sudo=$(grep -E '"sudoloop"[[:space:]]*:' "$yay_cfg" 2>/dev/null | head -n 1 | awk -F: '{print $2}' | tr -d ' ,' || true)
+      yay_clean=$(grep -E '"cleanAfter"[[:space:]]*:' "$yay_cfg" 2>/dev/null | head -n 1 | awk -F: '{print $2}' | tr -d ' ,' || true)
+      yay_rm=$(grep -E '"removemake"[[:space:]]*:' "$yay_cfg" 2>/dev/null | head -n 1 | awk -F: '{print $2}' | tr -d ' ,"' || true)
+      yay_diff=$(grep -E '"diffmenu"[[:space:]]*:' "$yay_cfg" 2>/dev/null | head -n 1 | awk -F: '{print $2}' | tr -d ' ,' || true)
+      echo "  * yay Config ($yay_cfg): sudoloop=${yay_sudo:-false}, cleanAfter=${yay_clean:-false}, removemake=${yay_rm:-ask}, diffmenu=${yay_diff:-true}"
+      if [[ "$yay_sudo" == "true" ]]; then
+        echo "  * [WARNING] yay sudoloop=true keeps sudo credentials alive during untrusted AUR builds"
+      fi
     fi
-    echo "  * paccache.timer: $(first_line_or inactive systemctl is-active paccache.timer)"
+    if [[ -r /etc/conf.d/pacman-contrib ]]; then
+      echo "  * paccache Config (/etc/conf.d/pacman-contrib): $(grep -E '^[[:space:]]*PACCACHE_ARGS=' /etc/conf.d/pacman-contrib 2>/dev/null || echo 'default')"
+    fi
+    echo "  * paccache.timer: $(first_line_or inactive systemctl is-active paccache.timer) ($(first_line_or disabled systemctl is-enabled paccache.timer))"
     ;;
   kde|kde-plasma)
     echo "Active KDE Plasma & KWin Parameters:"
@@ -2263,14 +3043,63 @@ case "$target" in
     elif [[ -f "$fp_ov" ]]; then
       echo "  * Global Override ($fp_ov): [OK] no global filesystem=host escape"
     fi
+    for ov_dir in "$HOME/.local/share/flatpak/overrides" "/var/lib/flatpak/overrides"; do
+      [[ -d "$ov_dir" ]] || continue
+      for ovf in "$ov_dir"/*; do
+        [[ -r "$ovf" && -f "$ovf" ]] || continue
+        [[ "$ovf" == "$fp_ov" ]] && continue
+        if grep -qE '^[[:space:]]*filesystems?=([^#]*;)?(host|host-os|host-etc|home|/)($|;|:rw)' "$ovf" 2>/dev/null; then
+          echo "  * Override ($ovf): [WARNING] grants broad filesystem access (host/host-os/host-etc/home//)"
+        fi
+      done
+    done
     ;;
-  podman|lazydocker)
-    if [[ -f "$HOME/.config/containers/containers.conf" ]]; then
-      echo "Active Rootless Podman Limits:"
-      grep -E '^[[:space:]]*(pids_limit|log_size_max|runtime)[[:space:]]*=' "$HOME/.config/containers/containers.conf" 2>/dev/null | sed 's/^/  * /' || true
+  podman)
+    echo "Active Rootless Podman & Quadlet Status:"
+    for cf in "${XDG_CONFIG_HOME:-$HOME/.config}/containers/containers.conf" "${XDG_CONFIG_HOME:-$HOME/.config}/containers/containers.conf.d"/*.conf "/etc/containers/containers.conf"; do
+      [[ -r "$cf" && -f "$cf" ]] || continue
+      echo "  * Inspecting $cf:"
+      grep -E '^[[:space:]]*(pids_limit|log_size_max|runtime|network_backend)[[:space:]]*=' "$cf" 2>/dev/null | sed 's/^/    /' || true
+      if grep -qE '^[[:space:]]*[^#]*slirp4netns' "$cf" 2>/dev/null; then
+        echo "  * [WARNING] Removed 'slirp4netns' referenced in $cf (Podman 6 uses pasta/netavark)"
+      fi
+      if grep -qE '^[[:space:]]*log_max_size[[:space:]]*=' "$cf" 2>/dev/null; then
+        echo "  * [WARNING] Typo 'log_max_size' in $cf (valid containers.conf key is 'log_size_max')"
+      fi
+    done
+    if command -v pasta >/dev/null 2>&1 || command -v passt >/dev/null 2>&1; then
+      echo "  * Rootless Network (pasta/passt): [AVAILABLE]"
+    else
+      echo "  * Rootless Network (pasta/passt): [NOT FOUND] (Podman 6 requires pasta for rootless networking)"
+    fi
+    quad_cnt=0
+    for qd in "${XDG_CONFIG_HOME:-$HOME/.config}/containers/systemd" "/etc/containers/systemd"; do
+      [[ -d "$qd" ]] || continue
+      for qf in "$qd"/*.container "$qd"/*.pod "$qd"/*.volume "$qd"/*.network "$qd"/*.kube "$qd"/*.image "$qd"/*.build "$qd"/*.artifact; do
+        [[ -e "$qf" ]] && quad_cnt=$((quad_cnt + 1))
+      done
+    done
+    echo "  * Quadlet Units Discovered: $quad_cnt"
+    ;;
+  lazydocker)
+    echo "Active Lazydocker & Socket Status:"
+    for ldf in "${XDG_CONFIG_HOME:-$HOME/.config}/lazydocker/config.yml" "$roaming_app_data/lazydocker/config.yml"; do
+      [[ -r "$ldf" && -f "$ldf" ]] || continue
+      echo "  * Inspecting $ldf:"
+      grep -E '^[[:space:]]*(dockerCompose|containerStatusHealthStyle|reporting)[[:space:]]*:' "$ldf" 2>/dev/null | sed 's/^/    /' || true
+      if grep -qE '^[[:space:]]*optionsColor:' "$ldf" 2>/dev/null; then
+        echo "  * [DEPRECATED] optionsColor in $ldf (use gui.theme.optionsTextColor)"
+      fi
+    done
+    if ! is_windows; then
+      echo "  * User podman.socket: $(first_line_or inactive systemctl --user is-active podman.socket)"
+      echo "  * DOCKER_HOST: ${DOCKER_HOST:-[UNSET]}"
     fi
     ;;
   docker)
+    if [[ -f /etc/containers/nodocker ]] || "$bin_path" --version 2>/dev/null | grep -qi "podman"; then
+      echo "  * Wrapper: [NOTE] docker CLI is backed by podman-docker compatibility wrapper"
+    fi
     if [[ -f "$HOME/.docker/config.json" ]]; then
       if grep -q '"auths"' "$HOME/.docker/config.json" 2>/dev/null && ! grep -qE '"credsStore"[[:space:]]*:[[:space:]]*"[^"]+"' "$HOME/.docker/config.json" 2>/dev/null; then
         if grep -A 5 '"auths"' "$HOME/.docker/config.json" 2>/dev/null | grep -q '"auth"'; then
@@ -2282,18 +3111,54 @@ case "$target" in
         echo "  * Docker Credentials ($HOME/.docker/config.json): [OK]"
       fi
     fi
-    if [[ -r /etc/docker/daemon.json ]]; then
-      echo "  * Daemon Config (/etc/docker/daemon.json): readable"
-      grep -E '"(log-driver|max-size|live-restore|userns-remap)"' /etc/docker/daemon.json 2>/dev/null | sed 's/^[[:space:]]*/    /' || true
-    fi
+    for djson in "${XDG_CONFIG_HOME:-$HOME/.config}/docker/daemon.json" "/etc/docker/daemon.json"; do
+      if [[ -r "$djson" ]]; then
+        echo "  * Daemon Config ($djson): readable"
+        grep -E '"(log-driver|max-size|live-restore|userns-remap)"' "$djson" 2>/dev/null | sed 's/^[[:space:]]*/    /' || true
+      fi
+    done
     ;;
   syncthing)
-    st_cfg="$HOME/.local/state/syncthing/config.xml"
-    [[ ! -f "$st_cfg" ]] && st_cfg="$HOME/.config/syncthing/config.xml"
-    [[ ! -f "$st_cfg" ]] && st_cfg="$local_app_data/Syncthing/config.xml"
-    if [[ -f "$st_cfg" ]]; then
-      echo "Active Syncthing GUI & Relay Settings:"
-      echo "  * GUI Listen Address: $(grep -A 4 '<gui ' "$st_cfg" 2>/dev/null | grep -oE '<address>[^<]+</address>' | sed -E 's/<\/?address>//g' || echo 'unknown')"
+    st_cfg="${st_cli_cfg:-}"
+    for sc in "${XDG_STATE_HOME:-$HOME/.local/state}/syncthing/config.xml" "${XDG_CONFIG_HOME:-$HOME/.config}/syncthing/config.xml" "$local_app_data/Syncthing/config.xml"; do
+      [[ -z "$st_cfg" && -f "$sc" ]] && st_cfg="$sc" && break
+    done
+    if [[ -n "$st_cfg" && -r "$st_cfg" ]]; then
+      echo "Active Syncthing GUI & Relay Settings ($st_cfg):"
+      st_gui_blk=$(awk '/<gui[ >]/,/<\/gui>/' "$st_cfg" 2>/dev/null || true)
+      st_gui_addr=$(printf '%s\n' "$st_gui_blk" | grep -oE '<address>[^<]+</address>' | head -n 1 | sed -E 's/<\/?address>//g' || true)
+      st_gui_tls=$(printf '%s\n' "$st_gui_blk" | grep -oE 'tls="(true|false)"' | head -n 1 | cut -d'"' -f2 || true)
+      st_gui_user=$(printf '%s\n' "$st_gui_blk" | grep -oE '<user>[^<]*</user>' | head -n 1 | sed -E 's/<\/?user>//g' || true)
+      st_relays=$(grep -oE '<relaysEnabled>[^<]+</relaysEnabled>' "$st_cfg" 2>/dev/null | head -n 1 | sed -E 's/<\/?relaysEnabled>//g' || true)
+      echo "  * GUI Listen Address: ${st_gui_addr:-unknown} (tls=${st_gui_tls:-false}, user=${st_gui_user:-[NONE]})"
+      echo "  * Relays Enabled: ${st_relays:-default (true)}"
+      if [[ -n "$st_gui_addr" && "$st_gui_addr" != 127.0.0.1:* && "$st_gui_addr" != "[::1]:"* ]] && [[ "$st_gui_tls" != "true" || -z "$st_gui_user" ]]; then
+        echo "  * [SECURITY WARNING] Syncthing GUI listens beyond loopback ($st_gui_addr) without both TLS and authentication user"
+      fi
+    fi
+    st_db="${st_cli_db:-$(dirname "${st_cfg:-${XDG_STATE_HOME:-$HOME/.local/state}/syncthing/config.xml}")}"
+    if [[ -d "$st_db/index-v2" ]]; then
+      echo "  * Database Engine: SQLite v2 ($st_db/index-v2)"
+    fi
+    if [[ -d "$st_db/index-v0.14.0.db" ]]; then
+      echo "  * [NOTE] Leftover v1 LevelDB index ($st_db/index-v0.14.0.db) found — safe to remove after verifying v2 SQLite index-v2/ migration"
+    fi
+    if ! is_windows; then
+      echo "  * User Service (syncthing.service): $(first_line_or inactive systemctl --user is-active syncthing.service)"
+    fi
+    ;;
+  btop|htop|btop4win)
+    echo "Active System Monitor Parameters:"
+    for bf in "${XDG_CONFIG_HOME:-$HOME/.config}/btop/btop.conf" "$local_app_data/btop/btop.conf"; do
+      if [[ -r "$bf" ]]; then
+        echo "  * btop ($bf):"
+        grep -E '^[[:space:]]*(update_ms|proc_tree|shown_boxes|color_theme)[[:space:]]*=' "$bf" 2>/dev/null | sed 's/^/    /' || true
+      fi
+    done
+    hf="${XDG_CONFIG_HOME:-$HOME/.config}/htop/htoprc"
+    if [[ -r "$hf" ]]; then
+      echo "  * htop ($hf) (note: close htop before editing htoprc as htop overwrites it on exit):"
+      grep -E '^(delay|show_cpu_frequency|show_cpu_temperature|hide_userland_threads|tree_view)=' "$hf" 2>/dev/null | sed 's/^/    /' || true
     fi
     ;;
 esac
@@ -2301,10 +3166,10 @@ esac
 # Tool Security & Hardening Check
 echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
 case "$target" in
-  pacman|yay|paru|makepkg)
-    echo "  * Performance: Set ParallelDownloads = 5 in /etc/pacman.conf; set MAKEFLAGS=\"-j${detected_threads}\" in /etc/makepkg.conf; use zstd -T0 compression"
-    echo "  * Configuration: Enable Color, ILoveCandy, VerbosePkgLists; enable paccache.timer for automated cache pruning; set yay cleanAfter = true"
-    echo "  * Security: Enforce SigLevel = Required DatabaseOptional; keep archlinux-keyring-wkd-sync.timer active; audit PKGBUILDs before building"
+  pacman|yay|paru|makepkg|paccache|pacman-contrib)
+    echo "  * Performance: Set ParallelDownloads = 5 in /etc/pacman.conf; set MAKEFLAGS=\"-j${detected_threads}\" and '!debug' in /etc/makepkg.conf (plus /etc/makepkg.conf.d/rust.conf); COMPRESSZST already uses zstd -T0"
+    echo "  * Configuration: Enable Color, ILoveCandy, VerbosePkgLists; configure /etc/conf.d/pacman-contrib + paccache.timer; set yay cleanAfter = true"
+    echo "  * Security: Keep DownloadUser = alpm and avoid DisableSandbox*; enforce SigLevel = Required DatabaseOptional (never Never/TrustAll); avoid yay sudoloop = true; audit PKGBUILDs"
     ;;
   kde|kde-plasma)
     echo "  * Performance: Reduce or disable AnimationDurationFactor on low-power iGPUs; disable Baloo file indexing when using ripgrep/fd"
@@ -2314,42 +3179,55 @@ case "$target" in
   flatpak)
     echo "  * Performance: Prune unused runtimes (flatpak uninstall --unused); share host GPU/VA-API extensions"
     echo "  * Configuration: Prefer --user Flathub installations for rootless updates integrated with topgrade"
-    echo "  * Security: Avoid global filesystem=host overrides; grant narrow XDG portal paths per application"
+    echo "  * Security: Avoid global or per-app filesystem=host/home overrides across ~/.local/share/flatpak/overrides and /var/lib/flatpak/overrides; grant narrow XDG portal paths"
     ;;
-  podman|lazydocker)
-    echo "  * Performance: Use crun lightweight OCI runtime, bound log_size_max (10MB), native overlayfs storage driver"
-    echo "  * Configuration: Pair rootless podman socket with lazydocker TUI; prune dangling images periodically"
+  podman)
+    echo "  * Performance: Use crun lightweight OCI runtime + pasta rootless networking (never removed slirp4netns), bound log_size_max (10MB), native overlayfs storage driver"
+    echo "  * Configuration: Manage rootless services as systemd Quadlets (~/.config/containers/systemd/) instead of deprecated 'podman generate systemd'; prune dangling images periodically"
     echo "  * Security: Rootless container execution, enforce pids_limit (2048), restrict containers.conf permissions to 0600"
     ;;
+  lazydocker)
+    echo "  * Performance: Pair with rootless podman.socket (DOCKER_HOST=unix://\$XDG_RUNTIME_DIR/podman/podman.sock) to inspect containers without a heavy daemon"
+    echo "  * Configuration: Set commandTemplates.dockerCompose: 'podman compose' when using Podman; use gui.theme.optionsTextColor (not deprecated optionsColor)"
+    echo "  * Security: Restrict ~/.config/lazydocker/config.yml permissions to 0600; audit custom commands"
+    ;;
   docker)
-    echo "  * Performance: Enable BuildKit, bound container json-file logs (max-size 10m, max-file 3), prune unused build cache"
-    echo "  * Configuration: Pair with lazydocker TUI; bound WSL2 backend RAM when using Docker Desktop on Windows"
+    echo "  * Performance: Bound container json-file logs (max-size 10m, max-file 3); prune unused build cache and images (docker system prune)"
+    echo "  * Configuration: Pair with lazydocker TUI; use rootless ~/.config/docker/daemon.json on Linux or bound WSL2 backend RAM on Windows"
     echo "  * Security: Prefer rootless mode or userns-remap; store registry tokens in OS keychain via credsStore; avoid mounting docker.sock into untrusted containers"
     ;;
   fd|fdfind)
-    echo "  * Performance: Bound worker threads (-j${detected_threads}); exclude heavy build/cache trees (.git, node_modules, target, .venv)"
-    echo "  * Configuration: Shared ignore patterns in ~/.config/fd/ignore paired with ripgrep and fzf"
+    echo "  * Performance: fd automatically scales worker threads to logical CPUs; exclude heavy build/cache trees (.git, node_modules, target, .venv)"
+    echo "  * Configuration: Maintain shared ignore patterns in ~/.config/fd/ignore paired with ripgrep and fzf"
     echo "  * Security: Enforce 0600 on ~/.config/fd/ignore"
     ;;
   btop|htop|btop4win)
-    echo "  * Performance: Set update_ms = 2000 (btop) / delay = 15 (htop) to minimize monitor CPU overhead on low-core hosts"
-    echo "  * Configuration: Show CPU frequency/temperature, per-core graphs, and zram/swap usage; unify theme (tokyo-night)"
+    inferred_thm=$(infer_theme)
+    thm_rec="unify theme (or ask user)"
+    [[ -n "$inferred_thm" ]] && thm_rec="unify theme (inferred: $inferred_thm)"
+    echo "  * Performance: Set update_ms = 2000 (btop) / delay = 20 (htop = 2.0s) to minimize monitor CPU overhead"
+    echo "  * Configuration: Show CPU frequency/temperature, per-core graphs, and zram/swap usage; $thm_rec; close htop before editing htoprc"
     echo "  * Security: Run unprivileged without CAP_SYS_PTRACE/sudo unless inspecting root processes; enforce 0600 on config"
     ;;
   syncthing)
-    echo "  * Performance: Bound maxFolderConcurrency and hashing threads to host CPU/RAM tier; disable NAT/global discovery when LAN-only"
-    echo "  * Configuration: Enable local discovery and filesystem watcher (fsWatcherEnabled=true)"
+    echo "  * Performance: Bound maxFolderConcurrency and hashing threads to host CPU/RAM tier; verify v2 SQLite index-v2/ migration and disable NAT/global discovery when LAN-only"
+    echo "  * Configuration: Enable local discovery and fsWatcherEnabled=true; run via 'syncthing serve' / systemctl --user enable --now syncthing.service"
     echo "  * Security: Bind GUI strictly to 127.0.0.1:8384 with TLS + bcrypt authentication; enforce 0600 on config.xml"
     ;;
   sqlite3)
-    echo "  * Performance: Default PRAGMA journal_mode=WAL, synchronous=NORMAL, temp_store=MEMORY, bounded cache_size"
-    echo "  * Configuration: Set .headers on and .mode box in ~/.sqliterc for readable interactive queries"
+    echo "  * Performance: Keep WAL/synchronous pragmas per-DB rather than global ~/.sqliterc; use .output /dev/null + PRAGMA temp_store = MEMORY; + PRAGMA busy_timeout = 5000; + .output stdout"
+    echo "  * Configuration: Set PRAGMA foreign_keys = ON;, .headers on, and .mode box in ~/.sqliterc for readable interactive queries"
     echo "  * Security: Enforce 0600 on ~/.sqliterc; avoid loading untrusted SQLite extensions"
     ;;
+  uv)
+    echo "  * Performance: Enable compile-bytecode = true (UV_COMPILE_BYTECODE=1) and link-mode = 'hardlink' (or 'copy' across filesystems); periodically prune cache (uv cache prune)"
+    echo "  * Configuration: Manage settings in ~/.config/uv/uv.toml; install CLI tools via 'uv tool install'; disable 'uv' in topgrade.toml when managed by mise"
+    echo "  * Security: Configure exclude-newer cooldown in uv.toml for supply-chain protection; run 'uv audit' and commit uv.lock"
+    ;;
   python|python3)
-    echo "  * Performance: Prefer uv for fast dependency resolution and virtualenv creation; enable bytecode compilation on install"
-    echo "  * Configuration: Isolate project dependencies per virtualenv/uv environment; keep global Python clean"
-    echo "  * Security: Respect EXTERNALLY-MANAGED system Python protection; pin dependencies with hashes in lockfiles"
+    echo "  * Performance: Prefer uv for fast dependency resolution and bytecode compilation; evaluate Python 3.15+ '-X lazy_imports' (PYTHON_LAZY_IMPORTS=1) and free-threaded/JIT builds where supported"
+    echo "  * Configuration: Isolate project dependencies per virtualenv/uv environment; set PIP_REQUIRE_VIRTUALENV=true (or pip.conf require-virtualenv = true) when EXTERNALLY-MANAGED is absent"
+    echo "  * Security: Respect EXTERNALLY-MANAGED protection; set PYTHONSAFEPATH=1; keep PYTHON_HISTORY at 0600; pin dependencies with hashes in lockfiles"
     ;;
   *)
     echo "  * Security: Least privilege, minimal network exposure, file permissions"

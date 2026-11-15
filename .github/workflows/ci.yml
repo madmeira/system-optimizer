@@ -46,7 +46,7 @@ jobs:
       - name: Test Hardware & Target Probes (valid JSON output)
         shell: bash
         run: |
-          for p in hardware-probe system-probe detect-targets security-audit; do
+          for p in hardware-probe system-probe detect-targets security-audit tool-drift-check; do
             echo "== $p --json"
             ./scripts/$p.sh --json | "$PY" -m json.tool > /dev/null
           done
@@ -70,3 +70,7 @@ jobs:
       - name: Windows Targets Smoke Test (Windows branch of target-inspect on a real host)
         shell: bash
         run: bash tests/inspect-windows.sh
+
+      - name: Dynamic Tool Drift & Schema Introspection Smoke Test
+        shell: bash
+        run: bash tests/drift-check-smoke.sh

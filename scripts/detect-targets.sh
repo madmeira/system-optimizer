@@ -40,7 +40,7 @@ if is_windows; then
 
   # 5. Package Managers & Runtimes on Windows
   package_runtime_candidates=(
-    "winget" "scoop" "choco" "wsl" "docker" "cargo" "mise" "bun" "node" "python"
+    "winget" "scoop" "choco" "wsl" "docker" "cargo" "mise" "uv" "bun" "node" "python"
   )
 
   # 6. Developer Tools & CLI Utilities on Windows
@@ -52,7 +52,7 @@ if is_windows; then
 else
   # Linux Package Managers
   available_pms=()
-  for pm in pacman yay paru apt dnf zypper apk flatpak snap nix brew cargo pipx mise asdf; do
+  for pm in pacman yay paru apt dnf zypper apk flatpak snap nix brew cargo pipx uv mise asdf; do
     if command -v "$pm" >/dev/null 2>&1; then
       available_pms+=("$pm")
     fi
@@ -72,7 +72,7 @@ else
 
   # Linux Package Managers & Runtimes
   package_runtime_candidates=(
-    "pacman" "yay" "paru" "makepkg" "flatpak" "cargo" "podman" "docker" "mise" "python3" "python"
+    "pacman" "yay" "paru" "makepkg" "paccache" "flatpak" "cargo" "podman" "docker" "mise" "uv" "python3" "python"
   )
 
   # Linux Developer Tools & CLI Utilities
