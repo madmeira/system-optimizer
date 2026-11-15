@@ -8,10 +8,10 @@ This reference guide provides engineering heuristics, hardening standards, upstr
 
 ### CPU & Concurrency
 - **Logical Threads (`nproc` / Logical Processors)**:
-  - *Package Compilation (`cargo`, `ninja`, `makepkg`)*: Set `jobs = threads`, `MAKEFLAGS="-j$(nproc)"`.
-  - *Package Downloads (`winget`, `pacman`, `yay`)*: Concurrency aligned with network bandwidth and disk I/O; `winget` direct WinINet downloader, `ParallelDownloads = 5` in pacman.
-  - *Search & Indexing (`ripgrep`, `fd`, `fzf`)*: Bounded to detected logical thread count (`--threads $(nproc)`).
-  - *Compression (`zstd`)*: Multithreaded compression level 3 (`zstd -T$(threads) -3`).
+  - *Package Compilation & Runtimes (`makepkg`, `mise`, `topgrade`)*: Set `MAKEFLAGS="-j$(nproc)"`, `mise` `jobs = <nproc>`, and `topgrade` `[mise] jobs = <nproc>`. Omit redundant `cargo` `build.jobs` (Cargo already defaults to logical CPU threads).
+  - *Package Downloads (`winget`, `pacman`, `yay`)*: Concurrency aligned with network bandwidth and disk I/O; `winget` direct WinINet downloader (`ParallelDownloads = 5` is already Arch's default in `/etc/pacman.conf`).
+  - *Search & Indexing (`ripgrep`, `fd`, `fzf`)*: Rely on built-in auto-detection (`rg` defaults to `--threads=0` with single-file/directory heuristics; `fd` defaults to logical cores; `fzf` `--walker` is multithreaded). Do NOT hardcode `--threads` or `-j`.
+  - *Compression (`zstd`)*: Multithreaded compression (`zstd -T0 -3`; note `makepkg` already defaults to `COMPRESSZST=(zstd -c -T0 -)`).
 - **Power Plans & Scaling**:
   - *Windows*: High Performance or Ultimate Performance power plan (`powercfg /s 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c`), ensuring 100% min/max processor states on AC and preventing core parking from introducing wake latency on desktop workstations.
   - *Linux*: CPU governors: `schedutil` (balanced), `performance` (max throughput); Energy Performance Preference (EPP): `balance_performance` on AC.
@@ -26,9 +26,9 @@ This reference guide provides engineering heuristics, hardening standards, upstr
 - **Medium RAM (4GB - 16GB)**:
   - Balanced concurrency (`threads * 2` for I/O tasks).
   - Standard in-memory buffers and caching.
-  - Bound WSL2 VM memory to 6GB-8GB with `autoMemoryReclaim = dropcache`.
+  - Bound WSL2 VM memory to 6GB-8GB with `autoMemoryReclaim = dropcache` under `[experimental]`.
 - **High RAM (> 16GB)**:
-  - Aggressive in-memory caching, memory-mapped I/O.
+  - Generous tool buffers and in-memory caches (`sqlite3` `cache_size = -16000`).
   - Bound WSL2 VM memory to 8GB-12GB, reserving ample headroom for Windows host GPU/gaming/compilation.
 
 ### Storage & Filesystem
@@ -36,7 +36,7 @@ This reference guide provides engineering heuristics, hardening standards, upstr
   - *TRIM Verification*: Ensure `fsutil behavior query DisableDeleteNotify` returns `0` (TRIM operations enabled for SSDs).
   - *Periodic Optimization*: Run weekly volume re-trim via elevated PowerShell (`Optimize-Volume -DriveLetter C -ReTrim -Verbose` — *user-run admin command*).
   - *NTFS 8.3 Short Names*: Disable 8.3 name generation on secondary data volumes (`fsutil 8dot3name set D: 1` — *user-run admin command*) to eliminate directory enumeration overhead on large repositories (e.g. `node_modules`).
-  - *WSL Disk Compaction*: Set `sparseVhd = true` in `~/.wslconfig` so Windows automatically reclaims unallocated space from `ext4.vhdx` when files are deleted inside WSL.
+  - *WSL Disk Compaction*: **Do NOT set `sparseVhd=true`** — Microsoft documents `ext4.vhdx` data-corruption risk with sparse VHDs. Compact offline when needed via `wsl --shutdown` + `wsl --manage <distro> --resize` or `Optimize-VHD`.
 - **Linux (Ext4 / Btrfs / NVMe / SSD)**:
   - *Mount Flags*: Ensure `noatime` is enabled to eliminate write overhead on file reads.
   - *Discard*: Enable periodic TRIM timer (`systemctl enable --now fstrim.timer`).
@@ -44,13 +44,13 @@ This reference guide provides engineering heuristics, hardening standards, upstr
 
 ### GPU & Hardware Video Acceleration
 - **Windows (DirectX / Direct3D 11/12 & NVIDIA NVDEC/NVENC)**:
-  - Video Players (`mpv`): Set `vo=gpu-next`, `gpu-api=d3d11`, `hwdec=nvdec-copy` on NVIDIA RTX GPUs. Direct3D 11 is rock-solid on Windows 11 and supports native HDR presentation (`target-colorspace-hint=yes`).
-  - Terminal Emulators (`windows-terminal`): Enable the GPU-accelerated Atlas rendering engine with `disableAnimations: true`.
+  - Video Players (`mpv`): Use `vo=gpu-next` (default in 0.41+), `gpu-api=d3d11`, `profile=high-quality`, zero-copy `hwdec=auto-safe`, `tone-mapping=auto`, and `target-colorspace-hint=auto` (or `yes` when HDR display mode is active). Avoid `nvdec-copy` unless CPU-side video filters require copyback.
+  - Terminal Emulators (`windows-terminal`): Windows Terminal 1.18+ enables the Atlas GPU rendering engine by default; set `"disableAnimations": true` to remove tab/pane transition lag.
   - Hardware-Accelerated GPU Scheduling (HAGS): Ensure HAGS is enabled in Windows Graphics Settings to reduce frame latency.
 - **Linux (VA-API & Vulkan)**:
   - Intel: `intel-media-driver` or `i965` driver.
   - AMD: `radeonsi` Mesa driver.
-  - Video Players (`mpv`): `hwdec=vaapi`, `vo=gpu`, `gpu-context=wayland`.
+  - Video Players (`mpv`): `vo=gpu-next`, `gpu-api=vulkan`, `profile=high-quality`, zero-copy `hwdec=auto-safe` (`vaapi,vulkan,auto` / `nvdec,vulkan,auto`) on modern GPUs; reserve `vo=gpu` + `gpu-api=opengl` strictly for legacy Intel Gen7/Haswell iGPUs.
 
 ---
 
@@ -62,18 +62,18 @@ The `system-optimizer` skill dynamically derives configuration parameters direct
 
 | Hardware Metric | Probed Range / Category | Decision & Configured Parameters |
 | :--- | :--- | :--- |
-| **CPU Logical Threads (`nproc`)** | Any (e.g. 4, 8, 12, 16, 32) | • `ripgrep`: `--threads=<nproc>`<br>• `cargo`: `jobs = <nproc>`<br>• `zstd`: `-T<nproc> -3`<br>• `WSL`: `processors = max(2, floor(nproc / 2))` or matching physical cores to prevent host starvation |
+| **CPU Logical Threads (`nproc`)** | Any (e.g. 4, 8, 12, 16, 32) | • `mise` / `topgrade`: `jobs = <nproc>`<br>• `makepkg`: `MAKEFLAGS="-j<nproc>"`<br>• `zstd`: `-T<nproc> -3`<br>• `WSL`: `processors = max(2, floor(nproc / 2))` or matching physical cores<br>• Omit redundant `cargo` `build.jobs`, `rg --threads`, and `fd -j` (auto-detected) |
 | **RAM Tier** | **Low (<= 4 GB)** | • Enforce memory limits: Git `pack.windowMemory = 256m`<br>• WSL: `memory = 1.5GB`<br>• Enforce Windows Memory Compression (`Enable-MMAgent -mc`) or Linux zram (`vm.swappiness=160`)<br>• Browser: Aggressive background tab discarding enabled<br>• PowerToys: Disable all non-essential background modules |
-| | **Medium (4 GB - 16 GB)** | • Standard caching buffers: Git `pack.windowMemory = 512m`<br>• WSL: `memory = floor(RAM / 2)` (e.g. 8GB on 16GB host) with `autoMemoryReclaim = dropcache`<br>• Standard in-memory caching |
-| | **High (> 16 GB)** | • Aggressive in-memory caching and memory-mapped I/O<br>• WSL: `memory = floor(RAM * 0.6)` (leaving ample RAM for host apps & games)<br>• Pi Agent: token compaction reserve `16384`–`32768` |
-| **GPU Architecture** | **NVIDIA Discrete GPU (RTX / GTX)** | • `mpv`: `hwdec=nvdec-copy`, `vo=gpu-next`, `gpu-api=d3d11` (or `vulkan`) for NVDEC hardware decode<br>• `rustdesk`: NVENC hardware video encode (H.264/AV1)<br>• Terminal: GPU-accelerated Atlas DirectX rasterization engine<br>• Windows: Hardware-Accelerated GPU Scheduling (HAGS) enabled |
-| | **AMD Radeon** | • `mpv`: `hwdec=d3d11va` (Windows) / `vaapi` with `radeonsi` (Linux)<br>• `rustdesk`: AMF hardware video encode |
-| | **Intel Arc / Iris Xe** | • `mpv`: `hwdec=d3d11va` (Windows) / `vaapi` with `intel-media-driver` (Linux)<br>• `rustdesk`: QSV hardware video encode |
-| | **Integrated / Low-Power GPU** | • `mpv`: `vo=gpu` (instead of `gpu-next`), conservative spline36 scaling, disabled heavy debanding<br>• Terminal: Disable translucent acrylic / blur effects to eliminate redraw lag |
-| **Storage Media** | **NVMe / SATA SSD** | • Enforce TRIM: `fsutil DisableDeleteNotify = 0` / `fstrim.timer`<br>• Secondary drives: Disable 8.3 short names (`fsutil 8dot3name set <drive> 1`)<br>• WSL: Enable `sparseVhd = true` for auto-compacting virtual disks<br>• `ripgrep`: Enable `--mmap` for fast memory-mapped file scans<br>• Git: Enable `core.fscache = true` and `core.untrackedCache = true` |
-| | **Rotational HDD** | • Disable `--mmap` to avoid disk head thrashing on non-contiguous blocks<br>• Bound concurrent directory walking threads |
-| **Display Capabilities** | **HDR Display Mode Active** | • `mpv`: Enable `target-colorspace-hint=yes` for native HDR passthrough to Windows DWM |
-| | **SDR Display** | • `mpv`: Enable `hdr-compute-peak=yes` with `tone-mapping=bt.2446a` for dynamic tone-mapping |
+| | **Medium (4 GB - 16 GB)** | • Standard caching buffers: Git `pack.windowMemory = 512m`<br>• WSL: `memory = floor(RAM / 2)` (e.g. 8GB on 16GB host) with `[experimental] autoMemoryReclaim = dropcache`<br>• Standard in-memory caching |
+| | **High (> 16 GB)** | • Generous tool buffers (`sqlite3` `cache_size = -16000`)<br>• WSL: `memory = floor(RAM * 0.6)` (leaving ample RAM for host apps & games)<br>• Pi Agent: `compaction.reserveTokens` defaults to `16384`; tune `compaction.modelOverrides` / `keepRecentTokens` per provider |
+| **GPU Architecture** | **NVIDIA Discrete GPU (RTX / GTX)** | • `mpv`: `vo=gpu-next`, `gpu-api=d3d11` (Windows) or `vulkan` (Linux), `profile=high-quality`, zero-copy `hwdec=auto-safe` (or `nvdec,vulkan,auto`; avoid `nvdec-copy` unless CPU filters are active)<br>• `rustdesk`: NVENC hardware video encode (H.264/AV1)<br>• Terminal: Atlas GPU rasterization (default in Windows Terminal 1.18+)<br>• Windows: Hardware-Accelerated GPU Scheduling (HAGS) enabled |
+| | **AMD Radeon** | • `mpv`: `vo=gpu-next`, `hwdec=auto-safe` (`d3d11va,vulkan,auto` on Windows; `vaapi,vulkan,auto` with `radeonsi` on Linux)<br>• `rustdesk`: AMF hardware video encode |
+| | **Intel Arc / Iris Xe** | • `mpv`: `vo=gpu-next`, `hwdec=auto-safe` (`d3d11va,vulkan,auto` on Windows; `vaapi,vulkan,auto` with `intel-media-driver` on Linux)<br>• `rustdesk`: QSV hardware video encode |
+| | **Legacy / Low-Power iGPU** | • `mpv`: `vo=gpu`, `gpu-api=opengl` (for Gen7/Haswell), `profile=fast`, disabled heavy debanding<br>• Terminal: Disable translucent acrylic / blur effects to eliminate redraw lag |
+| **Storage Media** | **NVMe / SATA SSD** | • Enforce TRIM: `fsutil DisableDeleteNotify = 0` / `fstrim.timer`<br>• Secondary Windows drives: Disable 8.3 short names (`fsutil 8dot3name set <drive> 1`)<br>• WSL: Avoid `sparseVhd=true` (ext4 corruption risk)<br>• Git: Enable `core.untrackedCache = true` (`feature.manyFiles = true`), plus `core.fscache = true` on **Windows only** |
+| | **Rotational HDD** | • Bound concurrent directory walking if I/O saturates; avoid aggressive parallel indexing |
+| **Display Capabilities** | **HDR Display Mode Active** | • `mpv`: Set `target-colorspace-hint=yes` for native HDR passthrough to Windows DWM / Wayland |
+| | **SDR Display** | • `mpv`: Keep `vo=gpu-next` defaults `tone-mapping=auto`, `hdr-compute-peak=auto`, `target-colorspace-hint=auto` (paired with `profile=high-quality`) |
 | | **High Refresh Display (>= 120Hz)** | • `mpv`: Enable `video-sync=display-resample` and `interpolation=yes` to eliminate panning judder |
 
 ### Dynamic Theme Inference Policy (Zero Hardcoding)
@@ -258,6 +258,22 @@ Write-Host "Done. State backups stored in: $BackupDir"
 
 ---
 
+### 2.5 Dynamic Tool-Drift & Live Schema Verification Workflow
+
+Because CLI flags, default values, and TOML/YAML/JSON keys evolve rapidly across releases, `system-optimizer` never relies solely on memorized static flags:
+
+1. **Pre-Proposal Drift Check (`./scripts/tool-drift-check.sh`)**:
+   - Run `./scripts/tool-drift-check.sh [--json] [target ...]` in Phase 2.5.
+   - Compares installed binary versions against the skill's verified baseline manifest and executes fast (<2s, offline) live CLI/schema introspection (`mise settings ls`, `herdr --default-config` & `herdr config check`, `starship print-config --default`, `pi` `settings.schema.json`, `mpv --vo=help`, and `--help` across `rg`/`fd`/`eza`/`fzf`/`bat`/`yt-dlp`/`syncthing`/`uv`/`gh`).
+   - Scans active user configs for deprecated or renamed keys and emits `[VERIFIED]`, `[VERSION AHEAD]`, `[SCHEMA DRIFT]`, or `[DEPRECATED CONFIG]`.
+   - Whenever `[VERSION AHEAD]` or `[SCHEMA DRIFT]` appears — or before emitting any unfamiliar flag/key — verify the exact syntax directly against the installed binary (`<tool> --help`, `mise settings ls`, `starship print-config --default`, `herdr --default-config`, `lazygit --config`, `mpv --list-options`, `settings.schema.json`). Surface every `[DEPRECATED CONFIG]` finding in the Phase 4 Triad proposal table.
+2. **Post-Apply Native Validation Gate (Phase 5)**:
+   - Immediately after writing user-approved config changes, run the tool's native validator (`herdr config check` before `herdr server reload-config`, `mise doctor` / `mise settings`, `nvim --headless +q`, `bat --diagnostic`, `git config --list >/dev/null`, `sshd -t` in elevated scripts).
+   - If any validator reports an unknown/deprecated key or parse error, fix it against the live schema or roll back immediately with `scripts/backup-config.sh --restore <backup-file>`.
+
+---
+---
+
 ## 3. Windows Subsystem for Linux (WSL 2) Tuning
 
 WSL 2 on Windows 11 provides a high-performance lightweight virtualized Linux kernel. Tuning both the Windows host config (`~/.wslconfig`) and the in-distro config (`/etc/wsl.conf`) is essential for balance and speed.
@@ -285,10 +301,10 @@ guiApplications=false
 # Automatically reclaim cached memory from Linux back to Windows
 autoMemoryReclaim=dropcache
 
-# Automatically shrink ext4.vhdx when files are deleted inside WSL
-sparseVhd=true
+# WARNING: Do NOT enable sparseVhd=true — Microsoft documents ext4.vhdx corruption risk.
+# Compact manually offline when needed via: wsl --shutdown && wsl --manage <distro> --resize
 
-# Tunnel DNS queries through Windows networking (fixes VPN DNS issues)
+# Tunnel DNS queries through Windows networking (default true in modern WSL under [wsl2])
 dnsTunneling=true
 
 # Low-latency mirrored networking mode
@@ -351,7 +367,7 @@ appendWindowsPath=true
 ### Windows Terminal (`windows-terminal` / `wt`)
 - **Configuration File**: `%LOCALAPPDATA%\Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json`
 - **Performance**:
-  - Atlas GPU text rendering engine enabled.
+  - Atlas GPU text rendering engine (enabled by default in Windows Terminal 1.18+).
   - `"disableAnimations": true`: Eliminates transition latency when switching tabs or splitting panes.
   - `"copyFormatting": "none"`: Copies clean raw text without bloated HTML/RTF styling.
   - `"copyOnSelect": false`: Prevents accidental clipboard overwrites.
@@ -367,7 +383,7 @@ appendWindowsPath=true
 - **Performance Optimization**:
   - Profile loading speed: Benchmark via `pwsh -NoProfile -Command "Measure-Command { . \$PROFILE }"` (target < 150ms).
   - Defer heavy module imports (`Import-Module`) until command invocation.
-  - Pre-generate or statically cache starship and zoxide prompts to eliminate subshell forks.
+  - Pre-generate or statically cache `starship init pwsh --print-full-init` and `zoxide init` prompts to eliminate subshell forks.
 - **Configuration & Ergonomics (PSReadLine)**:
   - `Set-PSReadLineOption -PredictionSource HistoryAndPlugin`: Enables fast inline predictive IntelliSense based on past command history.
   - `Set-PSReadLineOption -PredictionViewStyle ListView`: Displays multi-line interactive completion suggestions.
@@ -392,19 +408,19 @@ appendWindowsPath=true
 - **Configuration**: `%APPDATA%\topgrade.toml` (Windows) or `~/.config/topgrade.toml` (Linux). Supports drop-in snippet overrides in `~/.config/topgrade.d/*.toml`.
 - **Triad Tuning**:
   - *Performance*:
-    - Parallel execution: Configure step concurrency and set `[mise] jobs = $(nproc)` to match hardware CPU thread budget.
+    - Parallel execution: Set `[mise] jobs = $(nproc)` and `[git] max_concurrency = 5` to align with CPU/network budget (Topgrade has no global step concurrency setting).
     - Disable missing or uninstalled package hooks (`disable = [...]`) to eliminate probing latency across inactive steps.
     - Enable `cleanup = true`: Orchestrates post-upgrade disk reclamation, automatically cleaning package manager caches and triggering `mise prune` to delete obsolete runtimes and tools.
   - *Configuration*:
-    - Coordinate holistic update pipeline across OS package managers (`pacman`, `yay`, `winget`), subsystems (`wsl`), developer tools (`git`, `cargo`), and polyglot runtimes (`mise`).
-    - Dedicated `[mise]` table: Enable `bump = true` to allow Topgrade to upgrade installed tools to their latest matching versions (`mise upgrade`).
+    - Coordinate holistic update pipeline across OS package managers (`pacman`, `yay`, `winget`), subsystems (`wsl`), developer tools (`git`, `cargo`, `github_cli_extensions`), and polyglot runtimes (`mise`).
+    - Dedicated `[mise]` table: Enable `bump = true` (plus `interactive = false`, `quiet = false`) to allow Topgrade to upgrade installed tools (`mise upgrade`).
     - Post-Upgrade Synchronization: Add `"Mise Reshim" = "mise reshim"` to `[post_commands]` ensuring binary shims, dynamic environment paths, and editor language servers are synchronized immediately after runtime updates.
-    - Prevent Duplicate Updater Conflicts: Add redundant tool self-updaters (e.g. `uv`, `bun_packages`, `npm`) to `disable = [...]` if their binaries/runtimes are already managed by `mise`, eliminating dual-update race conditions and filesystem permission collisions.
-    - Windows specific: Set `accept_all_updates = true` and `winget_use_sudo = false`. Set `pre_sudo = true` and `sudo_loop = true` on Linux for non-blocking single authentication.
+    - Prevent Duplicate Updater Conflicts: Add redundant tool self-updaters (e.g. `"uv"`, `"cargo"`, `"pi"`, `"bun_packages"`, `"npm"`) to `disable = [...]` if their binaries/runtimes are already managed by `mise`, eliminating dual-update race conditions. Do NOT add manual `gh extension upgrade --all` in `[git]` or `[commands]` — Topgrade 17+ includes a native `github_cli_extensions` step.
+    - Windows & Linux specifics: Verify `[windows]` defaults `accept_all_updates = true` and `winget_use_sudo = false` (these live under `[windows]`, NOT `[misc]`). On Linux, `[misc]` `pre_sudo = true`, `[git] fallback_to_fetch_default = true`, `[misc] notify_end = "on_failure"`, and `[cargo]` `git = false`, `quiet = true`, `locked = true` keep runs clean.
   - *Security*:
     - Restrict untrusted shell hooks in `pre_commands` and `post_commands`; execute only verified binaries with explicit arguments.
     - Set `ask_retry = false` to prevent unattended batch execution hangs on network drops or DNS failures.
-    - Enforce privilege boundaries: Keep Topgrade elevating via `sudo` exclusively for OS package managers; run `mise` steps unprivileged in user space (`allow_root = false`).
+    - Enforce privilege boundaries: Keep `[misc] allow_root = false` so Topgrade elevates via `sudo` only for OS package managers while running `mise` unprivileged. **Security caveat on `sudo_loop = true` (`--sudoloop`)**: upstream warns that walking away from an active terminal allows someone else to Ctrl+C and inherit the cached `sudo` ticket — enable only on physically trusted single-user workstations.
 - **Production Tuned Configuration (`topgrade.toml`)**:
   ```toml
   [misc]
@@ -412,42 +428,50 @@ appendWindowsPath=true
   ask_retry = false
   cleanup = true
   pre_sudo = true
-  sudo_loop = true
-  # Disable steps that are either uninstalled or managed exclusively via mise
-  disable = ["uv", "go", "gcloud"]
+  allow_root = false
+  notify_end = "on_failure"
+  # Disable steps that are uninstalled or managed exclusively via mise
+  disable = ["uv", "cargo", "pi"]
+
+  [windows]
+  accept_all_updates = true
+  winget_use_sudo = false
+
+  [git]
+  max_concurrency = 5
+  fallback_to_fetch_default = true
 
   [mise]
   # Enables automatic version bumps for tools managed by mise
   bump = true
+  interactive = false
   # Concurrency bound to CPU threads
   jobs = 4
 
   [post_commands]
-  # Synchronize shims and prune orphaned tool versions immediately after updates
+  # Synchronize shims immediately after runtime updates
   "Mise Reshim" = "mise reshim"
   ```
 
 ### Polyglot Tool & Runtime Manager (`mise`)
-- **Configuration**: `~/.config/mise/config.toml` (Linux/macOS) or `%LOCALAPPDATA%\mise\config.toml` (Windows). Global settings can also reside in `settings.toml`.
+- **Configuration**: `~/.config/mise/config.toml` (Linux/macOS; drop-ins in `~/.config/mise/conf.d/*.toml`) or `%APPDATA%\mise\config.toml` / `~/.config/mise/config.toml` (Windows; `%LOCALAPPDATA%\mise` holds data/shims). Do not use obsolete `settings.toml`.
 - **Triad Tuning**:
   - *Performance*:
     - Thread Concurrency: Bound `jobs = $(nproc)` (e.g. 4, 8, 16, 32 depending on detected hardware CPU threads) to saturate network and I/O parallelism during multi-tool installations.
     - Subshell PATH & Environment Latency: Enable `env_cache = true` with `env_cache_ttl = "1h"`. This avoids spawning a full `mise hook-env` evaluation on every shell prompt or subshell invocation, cutting terminal startup and prompt latency by 80-90%.
     - Remote Metadata Query Caching: Set `fetch_remote_versions_cache = "1h"` and `fetch_remote_versions_timeout = "5s"` to eliminate interactive shell freezes during outbound network timeouts or GitHub API rate-limiting.
-    - Fast Binary Installations: Set `cargo.binstall = true` (and `cargo.binstall_quickinstall = true` where applicable) to fetch pre-compiled Rust binaries from GitHub releases instead of invoking local `cargo build --release` from source, saving gigabytes of RAM and minutes of CPU compilation time.
+    - Fast Binary Installations: Keep `cargo.binstall = true` (default in `mise 2026.11+`, plus `cargo.binstall_quickinstall = true`) to fetch pre-compiled Rust binaries from GitHub releases instead of invoking local `cargo build --release` from source.
     - Windows Native Shims: Configure `windows_shim_mode = "exe"` on Windows for high-performance native PE shims instead of slower `.cmd` / `.bat` wrappers.
     - Git Submodule / Backend Speed: Enable `libgit2 = true` and `gix = true` for high-throughput native git operations.
   - *Configuration*:
-    - Version Pinning: Set `pin = true` so tool additions record exact semantic versions in `mise.toml` rather than floating ranges, ensuring absolute environment reproducibility and preventing breaking changes.
-    - Storage Hygiene & Lifecycle: Set `cache_prune_age = "7d"` and `always_keep_download = false` to prevent downloaded tarballs, zips, and build artifacts from consuming tens of gigabytes of disk space on fast NVMe/SSDs.
-    - Runtime Ergonomics: Set `node.corepack = true` for seamless yarn/pnpm management, and configure `python.uv_venv_auto = "source"` to automatically source uv virtual environments upon directory navigation.
-    - Topgrade Integration: Align `jobs` with Topgrade's `[mise] jobs` setting, configure `bump = true` in Topgrade, and rely on Topgrade's post-run `cleanup = true` to invoke `mise prune -y`.
+    - Version Pinning: Set `pin = true` so tool additions record exact semantic versions in `mise.toml` rather than floating ranges.
+    - Storage Hygiene & Lifecycle: Set `cache_prune_age = "7d"`, `download_cache = true`, and `download_cache_max_size = "2GiB"` (replacing deprecated `always_keep_download`, which emits a runtime `WARN` and is removed in `2027.11.0`). In `mise 2026.11+`, `upgrade.auto_prune = true` and `upgrade.prune_after = "24h"` also prune old upgraded versions automatically alongside Topgrade's `cleanup = true`.
+    - Runtime Ergonomics: Set `node.corepack = true` for yarn/pnpm management, and configure `python.uv_venv_auto = "source"` to automatically source `uv` virtual environments upon directory navigation.
+    - Topgrade Integration: Align `jobs` with Topgrade's `[mise] jobs` setting, configure `bump = true` in Topgrade, and run `mise doctor` / `mise settings ls` to validate config keys.
   - *Security & Supply-Chain Integrity*:
-    - Aqua & Cosign Supply-Chain Verification: Enable `aqua.slsa = true` and `aqua.cosign = true` to cryptographically verify SLSA provenance and Cosign cryptographic signatures for tools installed via the Aqua registry backend.
-    - GitHub Attestations & Verification: Enable `github_attestations = true` to verify build attestations for pre-compiled GitHub release assets.
-    - Node.js Distribution Verification: Enable `node.verify = true` to validate SHA256 checksums and PGP signatures on Node.js official binaries.
-    - Restrict Config Permissions: Enforce `0600` permissions on `~/.config/mise/config.toml` to protect environment variables and private registry tokens.
-    - Restrict Root Execution: Set `allow_root = false` to prevent accidental elevation when running maintenance tasks with `sudo`.
+    - Supply-Chain Cooldowns: Configure `minimum_release_age` (e.g. `"3d"` or `"7d"`) with `minimum_release_age_excludes` for trusted fast-moving tools to mitigate newly published compromised upstream releases.
+    - Provenance & Cryptographic Verification: `aqua.slsa = true`, `aqua.cosign = true`, `aqua.github_attestations = true`, `aqua.minisign = true`, `github_attestations = true`, `slsa = true`, `node.verify = true`, and `npm.provenance = true` are enabled by default in `mise 2026.11+` — verify they remain enabled (and consider `locked_verify_provenance`).
+    - Restrict Config Permissions: Enforce `0600` permissions on `~/.config/mise/config.toml` to protect environment variables and private registry tokens. *(Note: `allow_root` is NOT a `mise` setting — it belongs in `topgrade.toml`'s `[misc]` section.)*
 - **Production Tuned Configuration (`~/.config/mise/config.toml`)**:
   ```toml
   # Global Mise Production Configuration - Aligned with System Optimizer Triad
@@ -458,24 +482,28 @@ appendWindowsPath=true
   env_cache_ttl = "1h"                   # Cache TTL for environment evaluations
   fetch_remote_versions_cache = "1h"     # Metadata cache to avoid network stalls
   fetch_remote_versions_timeout = "5s"   # Fail-fast network timeout
-  cargo.binstall = true                  # Fetch pre-compiled Rust binaries
+  cargo.binstall = true                  # Fetch pre-compiled Rust binaries (default)
   libgit2 = true                         # Native git library for fast cloning
+  gix = true                             # Pure-Rust git backend
   windows_shim_mode = "exe"              # Fast native shims on Windows
 
   # Configuration & Ergonomics
   pin = true                             # Always pin exact version numbers
   cache_prune_age = "7d"                 # Auto-expire download caches
-  always_keep_download = false           # Delete downloaded archives after install
+  download_cache = true                  # Keep bounded download cache (replaces always_keep_download)
+  download_cache_max_size = "2GiB"       # Upper bound for cached downloads
   not_found_auto_install = true          # Auto-prompt to install missing tools
   node.corepack = true                   # Automatic Corepack management for Node
   python.uv_venv_auto = "source"         # Auto-source uv virtualenvs
 
   # Supply-Chain Security & Integrity
+  minimum_release_age = "3d"             # Cooldown before adopting brand-new releases
   aqua.slsa = true                       # Verify SLSA provenance for aqua packages
   aqua.cosign = true                     # Verify Cosign cryptographic signatures
+  aqua.minisign = true                   # Verify Minisign signatures
   github_attestations = true             # Verify GitHub artifact build attestations
+  npm.provenance = true                  # Verify npm provenance attestations
   node.verify = true                     # Checksum & signature check for Node.js
-  allow_root = false                     # Disallow running mise under root/sudo
 
   [tools]
   # Managed polyglot runtimes and CLI developer tools
@@ -528,8 +556,7 @@ The combination of `topgrade` and `mise` forms the foundational modern workstati
    - *Immediate Shim Synchronization*: Topgrade's `[post_commands]` executes `mise reshim` to immediately refresh binary shims and dynamic PATH pointers. Developers never encounter stale symlinks or "command not found" errors after an update run.
 
 5. **Privilege Boundary Enforcement**:
-   - Topgrade handles `sudo` elevation for OS-level updates (`pre_sudo = true`, `sudo_loop = true`), but executes user tool updates without root privileges.
-   - Mise enforces `allow_root = false`, preventing unintentional execution of user tool plugins or arbitrary post-install scripts as `root`.
+   - Topgrade handles `sudo` elevation for OS-level updates (`pre_sudo = true`, `[misc] allow_root = false` in `topgrade.toml`), executing user `mise` tool updates strictly unprivileged in user space.
 
 6. **Rust Tooling & Pre-compiled Binstall vs From-Source Rebuilds (`cargo` + `mise` + `topgrade`)**:
    - *The Bottleneck*: Topgrade has a default `[cargo]` step that runs `cargo install-update -a` (using `cargo-update`), which scans and compiles installed Rust CLI binaries from source code. On developer workstations, recompiling utilities like `ripgrep`, `bat`, `eza`, `starship`, `zoxide`, and `bottom` from source saturates CPU threads, exhausts memory, and causes 15–45 minute workstation update pauses.
@@ -537,65 +564,77 @@ The combination of `topgrade` and `mise` forms the foundational modern workstati
    - *De-duplication in Topgrade*: Topgrade's from-source `cargo` step is disabled via `disable = ["cargo"]` (or scoped strictly to private internal crates), while `[mise] bump = true` handles instantaneous binary updates.
 
 ### Rust Package Manager & Toolchain (`cargo`)
-- **Configuration**: `~/.cargo/config.toml` (Linux/macOS) or `%USERPROFILE%\.cargo\config.toml` (Windows).
+- **Configuration**: `~/.cargo/config.toml` (Linux/macOS) or `%USERPROFILE%\.cargo\config.toml` (Windows). *(Flag deprecated extensionless `~/.cargo/config` and rename to `config.toml`.)*
 - **Triad Tuning**:
   - *Performance*:
-    - Concurrency: Set `build.jobs = $(nproc)` to saturate CPU logical cores during local crate compilation.
-    - Sparse Registry Protocol: Ensure `registries.crates-io.protocol = "sparse"` (default in modern Cargo) to eliminate multi-minute git index clones.
+    - Concurrency: Omit `build.jobs` — Cargo already defaults to logical CPU threads and avoids stale hardcoded core counts.
+    - Sparse Registry Protocol: `registries.crates-io.protocol = "sparse"` is already the built-in default since Cargo 1.68 (do not emit redundantly).
+    - Linker: `rustc 1.100+` on `x86_64-unknown-linux-gnu` already links with bundled `rust-lld` by default (omit redundant `-fuse-ld=lld`; optionally configure `mold` only if installed and needed).
     - Git Fetch CLI: Set `net.git-fetch-with-cli = true` to leverage host system Git credentials and SSH multiplexing.
     - De-duplication via Mise: Delegate global Rust CLI utility installations to `mise` with `cargo.binstall = true` (`mise use -g cargo:ripgrep`), reserving native `cargo install` strictly for packages without release binaries.
+    - Cache Hygiene: Inspect `~/.cargo/registry/cache` and `~/.cargo/git/db` disk usage; clean stale downloads with `cargo-cache` or `cargo-sweep` (`cargo gc` / `-Z gc` remain nightly-only).
   - *Configuration*:
-    - Set default build profiles (`opt-level = 3`, `lto = "thin"`, `codegen-units = 16` for development/release balance).
+    - Scope release optimization flags (`opt-level = 3`, `lto = "thin"`, `codegen-units = 16`) strictly under `[profile.release]` (avoid global `build.rustflags = ["-C", "target-cpu=native"]`, which breaks cross-compilation and busts shared build caches).
   - *Security*:
     - Supply-Chain Security: Integrate `cargo-audit` and `cargo-vet` into CI/maintenance workflows.
     - Enforce verified checksums for all crate dependencies in `Cargo.lock`.
 - **Production Tuned Configuration (`~/.cargo/config.toml`)**:
   ```toml
-  # Cargo Production Performance Configuration
-  [build]
-  jobs = 4                          # Bound to host logical CPU threads
-  rustflags = ["-C", "target-cpu=native"]
-
+  # Cargo Production Configuration
   [net]
   git-fetch-with-cli = true         # Leverage system git & SSH multiplexing
   retry = 2
 
-  [registries.crates-io]
-  protocol = "sparse"               # High-speed HTTP sparse index protocol
+  [profile.release]
+  opt-level = 3
+  lto = "thin"
+  codegen-units = 16
   ```
-### Search Utility (`ripgrep` / `rg`)
-- **Configuration**: `$RIPGREP_CONFIG_PATH` pointing to `~/.config/ripgrep/config` or `%APPDATA%\ripgrep\config`.
+### Search Utilities (`ripgrep` / `rg` & `fd`)
+- **`ripgrep` Configuration**: `$RIPGREP_CONFIG_PATH` pointing to `~/.config/ripgrep/config` or `%APPDATA%\ripgrep\config`.
+- **`fd` Configuration**: `fd` (`10.5+`) has **no** config file (never check `~/.config/fd/config`); place global ignore patterns in `~/.config/fd/ignore` (`%APPDATA%\fd\ignore` on Windows).
 - **Triad Tuning**:
-  - *Performance*: Bound worker threads dynamically to detected CPU logical threads (`--threads=$(nproc)`); enable `--mmap` for fast memory-mapped searches on SSDs/NVMe; set `--max-columns=300` and `--max-columns-preview` to prevent runaway memory when matching huge minified JavaScript / JSON files.
-  - *Configuration*: Enable `--smart-case` by default; configure standard ignore globs (`--glob=!.git/*`, `--glob=!node_modules/*`, `--glob=!target/*`, `--glob=!dist/*`, `--glob=!.venv/*`).
-  - *Security*: Ignore hidden git internals to prevent credential leakage in search output; sanitize regex queries.
-
+  - *Performance*: Do **NOT** pass `--mmap` or `--threads=$(nproc)` in `ripgreprc` (and do not pass `-j` to `fd`): `rg` (`15.2+`) already auto-detects CPU cores (`--threads=0`) while staying single-threaded on single files, and automatically enables `--mmap` only when its heuristic determines it is faster (forcing `--mmap` degrades parallel directory traversal via kernel `mmap` contention and risks `SIGBUS` on truncated files). Keep `--max-columns=300` and `--max-columns-preview` to prevent runaway output on minified files.
+  - *Configuration*: Enable `--smart-case` and standard ignore globs (`--glob=!.git/*`, `--glob=!node_modules/*`, `--glob=!target/*`, `--glob=!dist/*`, `--glob=!.venv/*`).
+  - *Security*: Ignore hidden `.git` internals to prevent credential leakage in search output; sanitize regex queries.
 ### Directory Navigation (`zoxide`)
 - **Database & State**: `%LOCALAPPDATA%\zoxide\db.zo` (Windows) or `~/.local/share/zoxide/db.zo` (Linux).
 - **Triad Tuning**:
-  - *Performance*: Pre-cache or fast-initialize zoxide in shell profiles (`pwsh` `$PROFILE` and `bash` `~/.bashrc`) rather than spawning slow dynamic subshells on every terminal startup. Periodically prune dead/stale directory paths with `zoxide remove`.
-  - *Configuration*: Standard aliases: `z` (jump) and `zi` (interactive fuzzy search with `fzf`). Set `_ZO_EXCLUDE_DIRS = "$HOME", "/tmp", "C:\Windows"` to avoid polluting the database with root/temp paths.
+  - *Performance*: Initialize `zoxide init <shell>` once in shell startup (`~/.bashrc`, `~/.zshrc`, `config.fish`, or `$PROFILE`). Periodically prune dead/stale directory paths with `zoxide remove`.
+  - *Configuration*: Standard aliases: `z` (jump) and `zi` (interactive fuzzy search with `fzf`). `_ZO_EXCLUDE_DIRS` is a **`os.PathListSeparator`-delimited environment variable** (`:` on Unix, `;` on Windows; `$HOME` is excluded by default) — e.g. `export _ZO_EXCLUDE_DIRS="/tmp:/var/tmp"` on Linux/macOS or `$env:_ZO_EXCLUDE_DIRS = "$env:TEMP;C:\Windows"` on Windows.
   - *Security*: Restrict `db.zo` file permissions (`0600`) to maintain directory privacy.
 
 ### Modern File Lister (`eza`)
-- **Configuration**: `%APPDATA%\eza\theme.yml` or `~/.config/eza/theme.yml`.
+- **Configuration**: `${EZA_CONFIG_DIR:-~/.config/eza}/theme.yml` or `%APPDATA%\eza\theme.yml`.
 - **Triad Tuning**:
   - *Performance*: Avoid default `--git` scanning on deep directory trees or network shares; bind `--git` strictly to the detailed long listing alias (`ll`).
-  - *Configuration*: Standard ergonomic aliases in `pwsh` and `bash`:
+  - *Configuration*: Standard ergonomic aliases in `pwsh`, `bash`, and `zsh`:
     - `ls='eza --icons=auto'`
     - `ll='eza -l --icons=auto --git --header --time-style=relative'`
     - `la='eza -la --icons=auto --git --header'`
     - `lt='eza --tree --level=2 --icons=auto'`
-    - Keep the `=auto`: recent eza versions take an optional value for this option, so without it `ls /sys` reads the path as that value and fails with `invalid value '/sys'`.
-  - *Security*: Keep `--no-dereference` active by default so symlinks are never traversed into restricted directories.
-
+    - Keep `=auto`: recent `eza` versions take an optional value for `--icons=WHEN`, so without `=auto`, `ls /sys` reads `/sys` as the icon mode and fails.
+  - *Security*: Do **NOT** pass `--no-dereference` (`eza 0.23+` rejects it as an unexpected argument); `eza` already does not dereference symlinks by default unless `-X`/`--dereference`/`--follow-symlinks` is passed.
 ### Git Terminal UI (`lazygit`)
-- **Configuration**: `%APPDATA%\lazygit\config.yml` or `~/.config/lazygit/config.yml`.
+- **Configuration**: `%APPDATA%\lazygit\config.yml` or `~/.config/lazygit/config.yml` (`lazygit --config` prints the active defaults).
 - **Triad Tuning**:
-  - *Performance*: Set `git.autoFetch: false` (vital on Windows to prevent background git subprocesses from continuously triggering Microsoft Defender file scans and high CPU usage); set `animateExplosion: false`.
-  - *Configuration*: Integrate with Neovim via RPC remote tab editing (`edit: 'nvim --server "$NVIM" --remote-tab "$FILE"'`) to avoid nested editor freezes; synchronize theme palette with active terminal/editor or prompt user.
+  - *Performance*: Set `git.autoFetch: false` (vital on Windows to prevent background git subprocesses from continuously triggering Microsoft Defender file scans) and `gui.animateExplosion: false` (under `gui:`, not bare top-level `animateExplosion`).
+  - *Configuration*:
+    - Diff rendering (`lazygit 0.66+` migrated `git.paging` → `git.pagers` → `git.diffRenderers`):
+      ```yaml
+      gui:
+        nerdFontsVersion: "3"
+        animateExplosion: false
+      git:
+        autoFetch: false
+        diffRenderers:
+          - colorArg: always
+            command: bat --color=always --style=changes,numbers
+      os:
+        editPreset: "nvim-remote"
+      ```
+    - Prefer `os.editPreset: "nvim-remote"` (or `os.edit` with `{{filename}}` — never `$FILE` or removed `os.editCommand`/`os.editCommandTemplate`); replace deprecated `gui.showIcons` with `gui.nerdFontsVersion: "3"`; synchronize theme palette with active terminal/editor or prompt user.
   - *Security*: Respect git `safe.directory` rules; avoid untrusted custom commands.
-
 ### Modal Text Editor (`neovim` / `nvim`)
 - **Configuration**: `%LOCALAPPDATA%\nvim\init.lua` (Windows) or `~/.config/nvim/init.lua` (Linux), plus modular `lua/config/*.lua` and `lua/plugins/*.lua` (LazyVim / `lazy.nvim`).
 - **Production Performance `init.lua` / `lua/config/options.lua` Template**:
@@ -635,7 +674,7 @@ The combination of `topgrade` and `mise` forms the foundational modern workstati
 
   -- 5. Security: block arbitrary execution from downloaded files
   vim.opt.modeline = false
-  vim.opt.exrc = false
+  -- vim.opt.exrc already defaults to false in Neovim 0.12 (using cryptographic :trust prompts if enabled)
   ```
 - **Triad Tuning**:
   - *Performance*:
@@ -646,15 +685,16 @@ The combination of `topgrade` and `mise` forms the foundational modern workstati
     - Rotate or truncate oversized `~/.local/state/nvim/lsp.log` when it exceeds 1 MB.
   - *Configuration*:
     - Integrate with system clipboard (`win32yank`/`powershell` on Windows, `wl-clipboard`/`xclip` on Linux).
+    - **Neovim `0.11` / `0.12` Native LSP & `vim.pack`**: For non-LazyVim setups, migrate deprecated `require("lspconfig").<server>.setup()` calls to native `vim.lsp.config("<server>", { ... })` + `vim.lsp.enable("<server>")` (Neovim `0.12` also adds built-in `vim.pack`).
     - Single-source LSP, linter, formatter, and debugger provisioning via `mise` (`aqua:`, `go:`, `npm:`, `github:` backends), locking `mason.nvim` strictly to editor-only VSIX/custom-registry bundles (`codelldb`, `js-debug-adapter`, `roslyn`).
     - Async `DirChanged` + `VimEnter` hook running `mise env --json` to dynamically sync project `.mise.toml` `[env]` variables (`GOPATH`, `JAVA_HOME`, virtualenvs, custom project vars) when switching projects inside a running Neovim instance.
-    - **LazyVim v15+ & Modern Plugin Hygiene**:
-      - **`nvim-treesitter` (`main` branch rewrite)**: Never call `require("nvim-treesitter.configs").setup(opts)` (removed in the `main` branch rewrite). Use `opts_extend = { "ensure_installed" }` with `opts = { ensure_installed = { ... } }` and let LazyVim's built-in setup handle initialization. Ensure `tree-sitter` CLI (`>= 0.26.1`) is available via system package or `mise`.
-      - **Avoid Redundant Fold/Bigfile Overrides**: Do not override `vim.opt.foldexpr = "v:lua.vim.treesitter.foldexpr()"` or create custom `BigFileDisable` `BufReadPre` autocmds when using LazyVim/`snacks.nvim` — LazyVim already uses `v:lua.lazyvim.util.ui.foldexpr()` and `snacks.nvim` provides `bigfile = { enabled = true, size = 1.5 * 1024 * 1024 }`.
-      - **`blink.cmp` + `crates.nvim`**: Set `completion = { cmp = { enabled = false } }` on `saecki/crates.nvim` when using `blink.cmp` so `:checkhealth` does not warn about missing `nvim-cmp` (completion is served via `crates.nvim`'s in-process LSP).
-      - **Modern AI & Lua Dev Extras**: Prefer `lazyvim.plugins.extras.ai.sidekick` (`folke/sidekick.nvim` — Next Edit Suggestions + integrated CLI agent terminals) over legacy `ai.copilot-chat`, and replace deprecated `"neodev"` keys in `.neoconf.json` with `"lazydev"` (`folke/lazydev.nvim`).
+    - **LazyVim `v15` / `v16+` & Modern Plugin Hygiene**:
+      - **`nvim-treesitter` (`main` branch rewrite)**: Never call `require("nvim-treesitter.configs").setup(opts)` (removed in the `main` branch rewrite; LazyVim `16.x` uses native `vim.treesitter.start` and requires Neovim `>= 0.12` for unpinned `main`). Use `opts_extend = { "ensure_installed" }` with `opts = { ensure_installed = { ... } }` and ensure `tree-sitter` CLI (`>= 0.26.1`) is installed.
+      - **Avoid Redundant Fold/Bigfile Overrides**: Do not override `vim.opt.foldexpr` or create custom `BigFileDisable` `BufReadPre` autocmds when using LazyVim/`snacks.nvim` — LazyVim `16+` uses `v:lua.LazyVim.treesitter.foldexpr()` and `v:lua.vim.lsp.foldexpr()` (replacing deprecated `v:lua.lazyvim.util.ui.foldexpr()`), and `snacks.nvim` provides `bigfile = { enabled = true, size = 1.5 * 1024 * 1024 }`.
+      - **`blink.cmp` + `crates.nvim`**: LazyVim `15/16+` defaults to `blink.cmp` and `snacks.nvim`. Set `completion = { cmp = { enabled = false } }` on `saecki/crates.nvim` so `:checkhealth` does not warn about missing `nvim-cmp`.
+      - **Modern AI & Lua Dev Extras**: Prefer `lazyvim.plugins.extras.ai.copilot-native` (native Neovim 0.12 LSP inline completions) or `ai.sidekick` (`folke/sidekick.nvim`) over legacy `ai.copilot-chat`, and replace deprecated `"neodev"` keys in `.neoconf.json` with `"lazydev"` (`folke/lazydev.nvim`).
       - **Backup File Hygiene**: Never leave `.bak.*` files inside `~/.config/nvim/lua/` (keep backups strictly in `~/.config/system-optimizer/backups/neovim/`).
-  - *Security*: Disable insecure modelines (`vim.opt.modeline = false`) and untrusted local `.nvim.lua` (`vim.opt.exrc = false`); enforce plugin lockfile commit pinning in `lazy-lock.json`; enforce `0600` permissions on config files.
+  - *Security*: Disable insecure modelines (`vim.opt.modeline = false`; note `exrc` already defaults to `false` in Neovim 0.12 with cryptographic SHA-256 `:trust` verification); enforce plugin lockfile commit pinning in `lazy-lock.json`; validate cleanly via `nvim --headless +q`.
 
 #### Neovim & Mise Polyglot LSP, Formatter & Toolchain Architecture
 The integration between Neovim and Mise establishes a unified, reproducible development environment where language servers, linters, and formatters are managed by Mise (with SLSA/Cosign verification) and shared identically across terminal, Git hooks, CI, and Neovim.
@@ -685,13 +725,13 @@ The integration between Neovim and Mise establishes a unified, reproducible deve
 ```
 
 1. **Migrating Mason Packages to Mise & Locking Down `mason.nvim`**:
-   - **Why**: By default, `mason.nvim` and LazyVim `lang.*` extras (`lang.go`, `lang.python`, `lang.typescript`, `lang.rust`, `lang.json`, `lang.markdown`, `util.dot`) install duplicate private copies of language servers, formatters, and linters into `~/.local/share/nvim/mason/packages/`. Even setting `ensure_installed = {}` is bypassed unless `opts_extend = {}` is set on `mason.nvim`, `automatic_installation = false` is set on `mason-lspconfig.nvim`, and `mason = false` is set on each Mise-managed server in `nvim-lspconfig`.
+   - **Why**: By default, `mason.nvim` and LazyVim `lang.*` extras (`lang.go`, `lang.python`, `lang.typescript`, `lang.rust`, `lang.json`, `lang.markdown`, `util.dot`) install duplicate private copies of language servers, formatters, and linters into `~/.local/share/nvim/mason/packages/`. In `mason-lspconfig.nvim` v2 / LazyVim `16+`, `automatic_installation` was replaced by `automatic_enable` (calling `vim.lsp.enable()`); prevent Mason from installing Mise-managed LSPs via `opts_extend = {}` on `mason.nvim` and `opts.servers.<name>.mason = false` in `nvim-lspconfig` (or `automatic_enable = false` in standalone setups).
    - **Mise Backend Mapping for Neovim Tools**:
      - *Aqua Registry (cryptographically verified binaries)*: `aqua:LuaLS/lua-language-server`, `aqua:JohnnyMorganz/StyLua`, `aqua:mvdan/sh` (`shfmt`), `aqua:koalaman/shellcheck`, `aqua:astral-sh/ruff`, `aqua:mvdan/gofumpt`, `aqua:golangci/golangci-lint`, `aqua:artempyanykh/marksman`, `aqua:tamasfe/taplo`.
      - *Go Backend*: `go:golang.org/x/tools/gopls`, `go:golang.org/x/tools/cmd/goimports` (plus `dlv` via Go/system).
      - *NPM Backend*: `npm:@vtsls/language-server`, `npm:vscode-langservers-extracted` (`vscode-json-language-server`, `vscode-eslint-language-server`), `npm:pyright`, `npm:bash-language-server`, `npm:markdownlint-cli2`, `npm:markdown-toc`.
      - *GitHub Releases Backend*: `github:Samsung/netcoredbg` (C#/.NET debugger).
-     - *Toolchain Built-ins*: `rust = { version = "latest", components = "rust-analyzer" }` (IMPORTANT: `rustup`'s default profile only installs `cargo`/`clippy`/`rustfmt` and creates a proxy symlink `~/.cargo/bin/rust-analyzer -> rustup`; without `components = "rust-analyzer"`, invoking `~/.local/share/mise/shims/rust-analyzer` triggers `rust-analyzer is unavailable for the active toolchain -> falling back to mise/shims/rust-analyzer -> error: infinite recursion detected`).
+     - *Toolchain Built-ins*: `rust = { version = "stable", components = "rust-analyzer" }` (IMPORTANT: `rustup`'s default profile only installs `cargo`/`clippy`/`rustfmt` and creates a proxy symlink `~/.cargo/bin/rust-analyzer -> rustup`; without `components = "rust-analyzer"`, invoking `~/.local/share/mise/shims/rust-analyzer` triggers `rust-analyzer is unavailable for the active toolchain -> falling back to mise/shims/rust-analyzer -> error: infinite recursion detected`).
    - **Editor-Only Packages Retained in Mason**: Reserve Mason strictly for VSIX bundles or custom-registry editor adapters that do not belong in global CLI toolchains: `codelldb` (C/C++/Rust LLDB VSIX), `js-debug-adapter` (VSCode JS DAP bundle), and `roslyn` (from `github:Crashdummyy/mason-registry`). Uninstall all migrated packages from `~/.local/share/nvim/mason/packages/`.
    - **Recommended `lua/plugins/mason.lua` Configuration**:
      ```lua
@@ -714,7 +754,8 @@ The integration between Neovim and Mise establishes a unified, reproducible deve
        },
        {
          "mason-org/mason-lspconfig.nvim",
-         opts = { ensure_installed = {}, automatic_installation = false },
+         -- Mason v2 / LazyVim 16+ uses automatic_enable (not removed automatic_installation)
+         opts = { ensure_installed = {}, automatic_enable = false },
        },
        {
          "jay-babu/mason-nvim-dap.nvim",
@@ -772,24 +813,26 @@ The integration between Neovim and Mise establishes a unified, reproducible deve
      2. Topgrade executes `mise reshim` via `[post_commands]`.
      3. Neovim automatically picks up updated language servers upon next launch or `:LspRestart`, while `MasonUpdateAll` only needs to check the 2–3 remaining editor-only adapters.
 ### Syntax Pager & Fuzzy Finder (`bat` + `fzf`)
-- **`bat` Tuning (`%APPDATA%\bat\config` / `~/.config/bat/config`)**:
-  - *Performance*: Set `--paging=never` when used as a sub-pager for lazygit or git diff; pre-cache themes with `bat cache --build`.
-  - *Configuration*: Synchronize `--theme` with the inferred terminal/editor theme (or prompt user), set `--style="numbers,changes,header"`.
-- **`fzf` Tuning (`FZF_DEFAULT_COMMAND`, `FZF_DEFAULT_OPTS`)**:
-  - *Performance*: Set `FZF_DEFAULT_COMMAND` to multithreaded `fd --type f --hidden --exclude .git` or `rg --files --hidden --glob '!.git/*'`.
-  - *Configuration*: Set layout to reverse, border, preview window using bat with line preview limits (`--preview 'bat --color=always --line-range :300 {}'`).
+- **`bat` (`0.26+`) Tuning (`$(bat --config-file)` / `$BAT_CONFIG_PATH` / `~/.config/bat/config`)**:
+  - *Performance*: Set `--paging=never` when used as a sub-pager for lazygit or git diff; run `bat cache --build` **only** when custom `.tmTheme`/`.sublime-syntax` files exist under `$(bat --config-dir)/{themes,syntaxes}`. Validate with `bat --diagnostic`.
+  - *Configuration*: Prefer adaptive `--theme=auto` paired with `--theme-dark="<theme>"` and `--theme-light="<theme>"` (`BAT_THEME_DARK` / `BAT_THEME_LIGHT`) aligned to the inferred terminal/editor palette, and set `--style="numbers,changes,header"`.
+- **`fzf` (`0.75+`) Tuning (`FZF_DEFAULT_COMMAND`, `FZF_DEFAULT_OPTS`, `FZF_DEFAULT_OPTS_FILE`)**:
+  - *Performance*: `fzf`'s built-in `--walker=file,follow,hidden` (`--walker-skip=.git,node_modules`) is already **multithreaded** when `FZF_DEFAULT_COMMAND` is unset. Wire `fd --type f --strip-cwd-prefix --hidden --exclude .git` or `rg --files --hidden --glob '!.git/*'` when `.gitignore`-aware filtering is desired.
+  - *Configuration*: Initialize shell keybindings/completion natively with `eval "$(fzf --bash)"`, `source <(fzf --zsh)`, or `fzf --fish | source` (replacing legacy `/usr/share/fzf/key-bindings.*` scripts). Use `--info=inline-right` (replacing deprecated `--inline-info`), `--style=minimal` or `default`, `FZF_DEFAULT_OPTS_FILE` (`~/.config/fzf/fzfrc`), and `bat` previews clamped to `--line-range :300`.
   - *Security*: Exclude sensitive files (`.git/`, `.env*`, `id_rsa*`) from the default search index.
 
-### Shell Prompt (`starship`)
+### Shell Prompt (`starship` `1.27+`)
 - **Configuration**: `~/.config/starship.toml` or `%APPDATA%\starship.toml`.
-- **Production Performance `starship.toml` Template (with native `mise` integration)**:
+- **Important `[mise]` Module Behavior (`starship 1.27+`)**:
+  - `[mise]` defaults to `disabled = true` and exposes **only `$symbol` and `$health`** (default `format = "on [$symbol$health]($style) "`) — it has **no `$version` variable** (putting `$version` in `[mise] format` renders empty).
+  - Choose one of two patterns: (a) keep per-language modules enabled while relying on `mise` `env_cache = true` for fast shim resolution, or (b) enable `[mise] disabled = false` with `format = "on [$symbol$health]($style) "` to show Mise health status without spawning per-language version queries.
+- **Production Performance `starship.toml` Template**:
   ```toml
   # Starship Production Performance Configuration
   # Bounds prompt command evaluation to prevent terminal hitching
   command_timeout = 500
   add_newline = false
 
-  # Core prompt modules
   format = """
   $directory\
   $git_branch\
@@ -816,59 +859,38 @@ The integration between Neovim and Mise establishes a unified, reproducible deve
   modified = "!"
   staged = "+"
 
-  # Native Mise module: displays active polyglot tools without spawning slow language subshells
+  # Native Mise module: exposes $symbol and $health (not $version)
   [mise]
   disabled = false
-  format = "via [$symbol$version]($style) "
+  format = "on [$symbol$health]($style) "
   symbol = " "
   style = "bold yellow"
 
-  # Disable individual per-language version modules to eliminate 50-200ms prompt lag
-  # (Also remove $nodejs, $python, $rust, $golang, $dotnet, $bun, $package from custom format strings when [mise] is enabled)
+  # Disable slow per-language modules only if you intentionally omit runtime versions from the prompt
   [nodejs]
   disabled = true
-
   [python]
   disabled = true
-
   [rust]
   disabled = true
-
   [golang]
   disabled = true
 
-  [ruby]
-  disabled = true
-
-  [php]
-  disabled = true
-
-  [java]
-  disabled = true
-
-  [dotnet]
-  disabled = true
-
-  [bun]
-  disabled = true
-
-  [package]
-  disabled = true
   [character]
   success_symbol = "[❯](bold green)"
   error_symbol = "[❯](bold red)"
   ```
-
-- **Shell Integration (`bash` & `pwsh`)**:
+- **Shell Integration (`bash`, `zsh`, `fish` & `pwsh`)**:
+  - Note: When caching init output to a file for fast shell startup, always pass **`--print-full-init`** (`starship init bash` alone emits only a `source <(...)` subshell stub!).
   - *Bash* (`~/.bashrc`):
     ```bash
     # Activate mise with environment caching
     if command -v mise >/dev/null 2>&1; then
       eval "$(mise activate bash)"
     fi
-    # Fast Starship prompt hook
+    # Fast Starship prompt hook (use --print-full-init when caching to a static file)
     if command -v starship >/dev/null 2>&1; then
-      eval "$(starship init bash)"
+      eval "$(starship init bash --print-full-init)"
     fi
     ```
   - *PowerShell 7* (`$PROFILE`):
@@ -877,143 +899,216 @@ The integration between Neovim and Mise establishes a unified, reproducible deve
     if (Get-Command mise -ErrorAction SilentlyContinue) {
       Invoke-Expression (&mise activate pwsh | Out-String)
     }
-    # Fast Starship prompt hook
+    # Fast Starship prompt hook (use --print-full-init when caching)
     if (Get-Command starship -ErrorAction SilentlyContinue) {
-      Invoke-Expression (&starship init pwsh | Out-String)
+      Invoke-Expression (&starship init pwsh --print-full-init | Out-String)
     }
     ```
-
 - **Triad Tuning**:
-  - *Performance*:
-    - Set `command_timeout = 500` (integer milliseconds in `starship.toml`).
-    - Disable redundant per-language modules (`[nodejs]`, `[python]`, `[rust]`, `[golang]`). In traditional setups, each active language module spawns a separate binary (`node --version`, `python --version`) through shims on every prompt draw.
-    - Enable the native `[mise]` module, which queries the current environment directly in a single pass.
-    - Enable `env_cache = true` with `env_cache_ttl = "1h"` in `mise/config.toml` to guarantee sub-millisecond directory transitions.
+  - *Performance*: Set `command_timeout = 500` (integer ms); enable `env_cache = true` (`1h` TTL) in `mise`; use `--print-full-init` if caching init scripts.
   - *Configuration*: Minimalist clean layout; directory truncation length 3; consistent Nerd Font symbols.
   - *Security*: Avoid executing arbitrary remote network queries in custom prompt modules (`[custom.*]`); restrict `starship.toml` permissions to `0600`.
-### Media Player (`mpv`)
-- **Configuration**: `%APPDATA%\mpv\mpv.conf` (Windows) or `~/.config/mpv/mpv.conf` (Linux).
+### Media Player (`mpv` `0.41+`)
+- **Configuration**: `%APPDATA%\mpv\mpv.conf` (Windows) or `~/.config/mpv/mpv.conf` (Linux). Enforce `0600`.
 - **Triad Tuning**:
   - *Performance*:
-    - Discrete GPU / modern iGPU: `vo=gpu-next` with `gpu-api=d3d11` (Windows) or `gpu-api=vulkan` (Linux), paired with hardware decoding tailored to detected GPU (`hwdec=nvdec-copy` on NVIDIA RTX, `hwdec=d3d11va` on AMD/Intel Windows, `hwdec=vaapi` on Linux).
-    - Legacy Intel iGPU (Haswell / Ivy Bridge / HD Graphics 4xxx): conservative `vo=gpu`, `gpu-api=opengl`, and `hwdec=auto-safe` to avoid Vulkan/shader pipeline stalls.
-    - `interpolation=yes`, `video-sync=display-resample`: Smooth motion on high-refresh displays; `scale=ewa_lanczossharp`, `cscale=spline36`, `deband=yes` on capable GPUs.
-  - *Configuration*: Native HDR passthrough (`target-colorspace-hint=yes`) or dynamic SDR tone-mapping (`hdr-compute-peak=yes`, `tone-mapping=bt.2446a`); bound `ytdl-format` to `1080p/best`.
+    - Discrete GPU / modern iGPU: `vo=gpu-next` (default in `mpv 0.41+`), `gpu-api=d3d11` (Windows) or `gpu-api=vulkan` (Linux), `profile=high-quality` (replaces legacy alias `gpu-hq`), and zero-copy **`hwdec=auto-safe`** (or `nvdec,vulkan,auto` / `vaapi,vulkan,auto` / `d3d11va,vulkan,auto` — avoid `nvdec-copy` unless CPU-side video filters require GPU→RAM copyback).
+    - Legacy Intel iGPU (Haswell / Ivy Bridge / HD Graphics 4xxx): conservative `vo=gpu`, `gpu-api=opengl`, `profile=fast`, and `hwdec=auto-safe`.
+    - `interpolation=yes`, `video-sync=display-resample`: Smooth motion on high-refresh displays.
+  - *Configuration*: Keep `tone-mapping=auto` (`hdr-compute-peak=auto`, libplacebo spline/dynamic ST.2094 under `vo=gpu-next`) and `target-colorspace-hint=auto` (set `target-colorspace-hint=yes` only when HDR display mode is active so SDR panels do not get washed-out PQ signals); bound `ytdl-format` to `1080p/best`.
   - *Security*: Enforce TLS certificate verification (never pass `no-check-certificates` in `ytdl-raw-options`); restrict untrusted Lua scripts; enforce `0600` on `mpv.conf`.
-### Media Downloader (`yt-dlp`)
+
+### Media Downloader (`yt-dlp` `2026+`)
 - **Configuration**: `%APPDATA%\yt-dlp\config` or `~/.config/yt-dlp/config`.
 - **Triad Tuning**:
-  - *Performance*: Configure `--concurrent-fragments=4` and multithreaded download connections; integrate `ffmpeg` for post-processing.
-  - *Configuration*: Default to `bestvideo+bestaudio/best`, embed subtitles and chapter markers.
-  - *Security*: Restrict untrusted cookie injection, sanitize output filenames.
+  - *Performance*: Use yt-dlp's native downloader with `-N 4` (`--concurrent-fragments 4`) and integrate `ffmpeg`. **Warn against global `--downloader aria2c`** in `yt-dlp/config`: `aria2c` bypasses dynamic range chunking, SABR handling, and session state, triggering YouTube HTTP 403s or severe throttling (if used for generic HTTP files, scope with `--downloader "dash,m3u8:native"`).
+  - *Configuration*: YouTube extraction now requires **`yt-dlp-ejs`** + an active JS runtime (`--js-runtimes deno|node|bun|quickjs`; only `deno` is enabled by default — configure `--js-runtimes node` or `bun` if `deno` is absent). Keep `--no-remote-components` (default) when `yt-dlp-ejs` is installed via package manager; default format `bestvideo+bestaudio/best`, embed subtitles and chapter markers.
+  - *Security*: **Warn against setting `--impersonate` globally** in `yt-dlp/config` (upstream warns it degrades speed/stability; use per-command/extractor only). Restrict untrusted cookie injection; sanitize output filenames.
 
-### Remote Desktop (`rustdesk`)
-- **Configuration**: `%APPDATA%\RustDesk\config` (Windows) or `~/.config/rustdesk` (Linux).
+### Remote Desktop (`rustdesk` `1.5+`)
+- **Configuration**: `%APPDATA%\RustDesk\config\RustDesk2.toml` (and `C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config\RustDesk2.toml` for Windows service mode) or `~/.config/rustdesk/RustDesk2.toml` (Linux).
 - **Triad Tuning**:
-  - *Performance*: Hardware video acceleration (Direct3D/NVENC on Windows, VA-API on Linux) for low-CPU 60 FPS streaming.
+  - *Performance*: Hardware video acceleration (NVENC/Direct3D on Windows, VA-API/NVENC on Linux) for low-CPU 60 FPS streaming.
   - *Configuration*: Custom private ID and relay server settings; tray minimization.
-  - *Security*: Enforce strong one-time passwords, restrict direct IP access, whitelist approved peer IDs.
+  - *Security*: Audit `RustDesk2.toml` `[options]` for `verification-method = 'use-permanent-password'`, `direct-server = 'Y'` (disable direct IP access if relay-only is desired), `approve-mode`, `enable-lan-discovery`, and `allow-linux-headless`; whitelist approved peer IDs.
 
-### Git Version Control (`git`)
-- **Configuration**: `~/.gitconfig`, `%PROGRAMDATA%\Git\config`.
-- **Windows Triad Tuning**:
-  - `core.fscache = true`: Caches filesystem stat calls, significantly speeding up status and diff on NTFS.
-  - `core.preloadIndex = true`: Parallelizes index preloading across CPU cores.
-  - `core.untrackedCache = true`: Uses filesystem timestamps to avoid scanning unchanged directories.
-  - `core.autocrlf = input` (or `true` on Windows): Consistent newline handling.
-  - `credential.helper = manager`: Integrates with secure Windows Credential Manager.
-  - `diff.algorithm = histogram`: Clean readable diffs.
-
-### GitHub CLI (`gh`)
-- **Configuration**: `~/.config/gh/config.yml`, `~/.config/gh/hosts.yml` (Linux/macOS) or `%APPDATA%\GitHub CLI\` (Windows).
+### Git Version Control (`git` `2.56+`)
+- **Configuration**: `~/.gitconfig` (or `~/.config/git/config`), `%PROGRAMDATA%\Git\config`. Validate with `git config --list >/dev/null`.
+- **Cross-Platform Triad Tuning**:
+  - `feature.manyFiles = true`: Enables `index.version = 4`, `index.skipHash = true`, and `core.untrackedCache = true` together for large worktrees.
+  - `diff.algorithm = histogram` & `merge.conflictStyle = zdiff3`: Cleaner diffs and 3-way conflict markers showing the common ancestor.
+  - `branch.sort = -committerdate` & `tag.sort = version:refname`: Surfaces active branches and semantic tags first.
+  - `rerere.enabled = true` & `rerere.autoUpdate = true`: Remembers and auto-stages recurring conflict resolutions.
+  - `fetch.prune = true`, `push.autoSetupRemote = true`, `rebase.autoStash = true`, `rebase.autoSquash = true`, `rebase.updateRefs = true`.
+  - `core.fsmonitor = true` *(per-large-repo, native filesystems only — avoid on NFS, `/mnt/c`, or submodule-heavy superprojects; Linux uses built-in `inotify` daemon)*.
+  - `core.autocrlf = input` on Linux/macOS (`true` on Windows). *(Note: `core.preloadIndex = true` has been Git's default since v2.1.0.)*
+- **Windows-Only Tuning**:
+  - `core.fscache = true`: Git-for-Windows NTFS stat cache (does **not** exist in upstream/Linux Git — scope strictly to Windows).
+  - `credential.helper = manager`: Integrates with Windows Credential Manager.
+### GitHub CLI (`gh` `2.104+`)
+- **Configuration**: `~/.config/gh/config.yml`, `~/.config/gh/hosts.yml` (Linux/macOS) or `%APPDATA%\GitHub CLI\` (Windows). *(Note: `config.yml` is **YAML** (`key: value`), not TOML `=`.)*
 - **Synergies**:
-  - **Git & LazyGit Credential Helper**: Running `gh auth setup-git` configures `credential.helper` so Git and LazyGit operations authenticate transparently via GitHub CLI's keyring/tokens without password prompts.
+  - **Git & LazyGit Credential Helper (HTTPS)**: Running `gh auth setup-git` configures `credential.helper` for **HTTPS** GitHub remotes (SSH remotes use your SSH agent/keys directly).
   - **LazyGit TUI Integration**: Custom LazyGit keybindings invoke `gh pr view --web`, `gh pr checkout`, and `gh pr create` directly from branch and commit views.
   - **Bat Syntax Pager**: Setting `gh config set pager "bat --color=always --style=plain"` gives zero-latency syntax-highlighted diffs during `gh pr diff` and `gh pr view` reviews.
-  - **Topgrade Automated Maintenance**: Topgrade coordinates `gh extension upgrade --all` during workstation updates.
+  - **Topgrade Automated Maintenance**: Topgrade `17+` includes a native `github_cli_extensions` step (and `github_cli_skills`) — do not add redundant `gh extension upgrade --all` commands.
   - **Neovim Remote Review**: Setting `gh config set editor "nvim"` or using `octo.nvim` connects GitHub CLI data with modal editing.
   - **Autonomous AI Coding Agents (`pi` & `herdr`)**: Non-interactive agent runs execute `gh pr`, `gh issue`, and `gh run watch` to inspect CI and create pull requests without browser interaction.
 - **Triad Tuning**:
-  - *Performance*:
-    - Use `bat --color=always --style=plain` as the review pager to avoid terminal lockup and provide fast syntax highlighting.
-    - Leverage lean JSON queries with `--json` and `jq` in scripts and shell functions instead of parsing unstructured terminal output.
-    - Coordinate batch extension upgrades in Topgrade to prevent background update lag.
-  - *Configuration*:
-    - Set `git_protocol = "ssh"` (or `"https"` with `gh auth setup-git`).
-    - Run `gh auth setup-git` to register GitHub CLI as the Git credential helper.
-    - Enable interactive prompt ergonomics: `prompt = "enabled"`.
-    - Configure productive PR workflow aliases: `co: "pr checkout"`, `pv: "pr view"`, `pc: "pr create"`, `il: "issue list"`.
+  - *Performance*: Use `bat --color=always --style=plain` as `pager`; leverage `--json` + `jq` in scripts; let Topgrade's native `github_cli_extensions` step batch extension updates.
+  - *Configuration* (`~/.config/gh/config.yml`):
+    ```yaml
+    git_protocol: ssh   # or https (with `gh auth setup-git`)
+    prompt: enabled
+    pager: bat --color=always --style=plain
+    color_labels: enabled
+    aliases:
+      co: pr checkout
+      pv: pr view
+      pc: pr create
+      il: issue list
+    ```
   - *Security*:
-    - Restrict `~/.config/gh/hosts.yml` permissions to `0600` (contains OAuth/PAT tokens).
-    - Audit installed extensions (`gh extension list`) to mitigate supply-chain risks.
-    - Request only necessary OAuth scopes (`repo`, `read:org`, `gist`) rather than admin scopes.
-### Pi Coding Agent Harness (`pi`)
-- **Configuration**: `~/.pi/agent/settings.json`, `~/.pi/agent/auth.json`.
+    - Prefer OS keyring credential storage (`gh auth login`) over plaintext `oauth_token:` in `hosts.yml`; enforce `0600` on `~/.config/gh/hosts.yml`.
+    - Inspect `telemetry: disabled` (default — warn if enabled) and `expiring_credentials: enabled` (auto-refreshing expiring tokens).
+    - Audit installed extensions (`gh extension list`, e.g. `gh-dash`, `gh-poi`; note `gh-copilot` is retired) and request least-privilege OAuth scopes.
+### Pi Coding Agent Harness (`pi` `1.5.2+`)
+- **Configuration**: `${PI_CODING_AGENT_DIR:-~/.pi/agent}/settings.json` (validates against `dist/settings.schema.json`), `auth.json` (`0600`), `mcp-auth.json` (`0600`), `models.json`, `mcp.json`, `trust.json`, `keybindings.json`, and `sessions/`. *(Note: core Pi 1.5+ has no `model-router.json` or `~/.pi/web-search.json` — those are optional third-party extension artifacts.)*
 - **Mise Toolchain Synergy**:
-  - Autonomous agents frequently execute shell commands (`bash -c "npm test"` or `pwsh -Command "pytest"`). Non-interactive subshells bypass interactive `.bashrc` activation hooks, which can lead to `command not found` or executing the wrong system binary.
-  - Adding `~/.local/share/mise/shims` (or `%LOCALAPPDATA%\mise\shims`) to the agent subshell execution path ensures agents always execute the project-pinned toolchains (Node.js, Python, Rust, Go, UV, Bun) defined in `.mise.toml`.
-- **Triad Tuning**:
-  - *Performance*: Session archival (`~/.pi/agent/sessions/`) older than 30 days, web search cache pruning, compaction token reserve tuning (`16384`).
-  - *Configuration*: Model router latency tuning, thinking budget assignment, terminal progress indicators, toolchain shim inheritance.
-  - *Security*: Restrict `auth.json` permissions (`0600`), explicit tool permission deny rules for sensitive files (`.ssh`, `.secrets`).
-
-### Terminal Workspace & Agent Multiplexer (`herdr`)
-- **Configuration**: `%APPDATA%\herdr\config.toml` (Windows) or `~/.config/herdr/config.toml` (Linux).
-- **Runtime State & Sockets**: `%APPDATA%\herdr\` (`session.json`, `herdr.sock`, `herdr-server.log`).
-- **Mise Workspace Toolchain Synergy**:
-  - When Herdr spawns worker terminal panes across Git worktrees, ensuring child shells inherit active `mise` shims guarantees that concurrent agent workers can run builds, tests, and formatting concurrently without environment drift.
+  - Autonomous agents frequently execute shell commands (`bash -c "npm test"` or `pwsh -Command "pytest"`). Non-interactive subshells bypass interactive `.bashrc` activation hooks, causing `command not found` or system binary drift.
+  - Adding `~/.local/share/mise/shims` (or `%LOCALAPPDATA%\mise\shims`, or configuring Pi's `shellPath` / `shellCommandPrefix`) ensures agents execute project-pinned toolchains defined in `.mise.toml`.
 - **Triad Tuning**:
   - *Performance*:
-    - Monitor and truncate `herdr-server.log` and `herdr-client.log` to prevent disk bloat during long AI agent sessions.
-    - Clean up orphaned session artifacts and stale sockets on restart (`herdr server stop` before updates).
-    - Ensure `default_shell = "pwsh"` or `"/bin/bash"` launches cleanly with fast static prompt/module loading.
-  - *Configuration*:
-    - Set `default_shell = "pwsh"` on Windows (or `"bash"`).
-    - Theme synchronization: Set `name` to match inferred terminal/editor color palette or prompt user.
-    - UI ergonomics: Enable `show_agent_labels_on_pane_borders = true`, set `status_indicators = "symbols"`.
-    - Native desktop notifications: Configure `[ui.toast]` `delivery = "system"` for unobtrusive notification center delivery.
+    - Prompt cache warming: Set `"cacheWarming": "idle"` (default in 1.5.2, supersedes legacy `experimental.preservePromptCache`) and `PI_CACHE_RETENTION=long`; configure `transport` (`"auto" | "sse" | "websocket" | "websocket-cached"`).
+    - Built-in `codemode` & deferred MCP: Enable `defaultTools: ["+codemode"]` and MCP `exposure: "codemode"` / `"deferred"` to avoid context bloat from direct MCP tool schemas.
+    - Note `compaction.reserveTokens = 16384` is already the built-in default (tune `compaction.modelOverrides` or `keepRecentTokens` only if needed); prune `sessions/` >30d and monitor `mcp.log` (rotates at 5 MB).
+  - *Configuration*: Configure `PI_CLIPBOARD_OSC52=1` (helpful inside `herdr` remote sessions), `terminal.showTerminalProgress`, `tuiMode: "fullscreen"`, and `selfUpdateCommand` / `PI_SELF_UPDATE_COMMAND` (disable Topgrade's `"pi"` step when `pi` is managed by `mise`).
   - *Security*:
-    - Strictly enforce local user access on `herdr.sock` and `config.toml` (`0600` permissions).
-    - Restrict workspace directory permissions (`0700`).
-    - Never expose the Herdr socket API to external network interfaces without TLS/SSH tunneling.
-    - Isolate AI coding agent execution panes using Git worktrees and explicit directory boundaries.
+    - Enforce `0600` on **both** `auth.json` and `mcp-auth.json`.
+    - Use built-in `defaultProjectTrust` (`"ask"` or `"never"`, stored in `trust.json`, never `"always"` globally) and tool gating (`defaultTools` / `--tools` / `--exclude-tools`) — note `permissions.deny` is **not** a built-in Pi setting (path-level denies require OS/container sandboxing or a `tool_call` extension).
+    - Review `enableInstallTelemetry` (`false` or `PI_TELEMETRY=0` if strict privacy is desired) and install npm extensions/updates with `--ignore-scripts`.
+### Terminal Workspace & Agent Multiplexer (`herdr` `0.9.5+`)
+- **Configuration**: `${HERDR_CONFIG_PATH:-~/.config/herdr/config.toml}` (Linux/macOS) or `%APPDATA%\herdr\config.toml` (Windows).
+- **Runtime State & Sockets**:
+  - *Linux/macOS*: `~/.config/herdr/` (`session.json`, `session-snapshots/`, `herdr.sock`, `herdr-client.sock`, `herdr.log`, `herdr-server.log`, `herdr-client.log`), `~/.local/state/herdr/` (`agent-detection/`, `client-shell/`), `~/.herdr/worktrees` *(there is no `~/.herdr/packages`)*.
+  - *Windows*: `%APPDATA%\herdr\` (`session.json`, `session-snapshots/`, `herdr.sock`, `herdr-server.log`) and `~/.herdr/worktrees`.
+- **Mise & Pi Workspace Synergy**:
+  - Configure `[terminal] shell_mode` (`"auto" | "login" | "non_login"`) so pane shells consistently load `mise` shims/activations, and leave `default_shell = ""` on Linux/macOS to honor `$SHELL` (use `"pwsh"` on Windows).
+  - Run `herdr integration status` / `herdr integration install <agent>` (`pi`, `claude`, `codex`, etc.) and set `[session] resume_agents_on_restore = true` (`startup_per_agent_delay_ms = 100`) so Herdr automatically resumes agent conversations across server restarts.
+- **Triad Tuning**:
+  - *Performance*:
+    - Bound per-pane memory on Low/Medium RAM hosts with `[advanced] scrollback_limit_bytes = 10000000` (10 MB per pane).
+    - Rotate/truncate oversized `herdr-server.log` and `herdr-client.log`.
+    - Check `herdr status` for `update.restart_needed` / `server_binary_stale` and use **`herdr update --handoff`** for zero-downtime live session handoffs (instead of `herdr server stop` before updates).
+  - *Configuration*:
+    - Validate before reloading: **`herdr config check`** then **`herdr server reload-config`** (run `herdr --default-config` to inspect schema).
+    - Theme synchronization: `[theme] auto_switch = true` (`dark_name` / `light_name`) or `name = "<inferred>"`.
+    - UI & remote ergonomics: `[ui] show_agent_labels_on_pane_borders = true`, `status_indicators = "symbols"`, `host_cursor = "auto"`, `[ui.toast] delivery = "system"` (valid: `"off"|"herdr"|"terminal"|"system"`), `[terminal] new_cwd = "follow"`, `kitty_graphics = true`, `[remote] manage_ssh_config = true`.
+  - *Security*: Enforce `0600` permissions on `config.toml`, `herdr.sock`, and `herdr-client.sock` (`0700` on workspace dirs); never expose Herdr sockets externally without TLS/SSH tunneling; isolate worker panes in Git worktrees.
+
+### Python & UV Package/Runtime Manager (`uv` `0.13+` & `python` `3.13–3.15+`)
+- **Configuration**: `~/.config/uv/uv.toml` (`%APPDATA%\uv\uv.toml`, or `$UV_CONFIG_FILE`), `~/.config/pip/pip.conf` (`%APPDATA%\pip\pip.ini`).
+- **Triad Tuning**:
+  - *Performance*: Enable `compile-bytecode = true` (`UV_COMPILE_BYTECODE=1`) for faster app startups, tune `link-mode` (`UV_LINK_MODE`), prune unused cache artifacts with `uv cache prune`, and upgrade installed CLI tools with `uv tool upgrade --all` (disable Topgrade's `"uv"` step if `uv` itself is managed by `mise`). On Python `3.15+`, evaluate `-X lazy_imports` (`PYTHON_LAZY_IMPORTS`), free-threaded builds (`sys._is_gil_enabled()`), experimental JIT (`sys._jit`), and Linux `-X perf` / `-X perf_jit` (avoid deprecated `-b`).
+  - *Configuration*: Centralize CLI tools under `uv tool` / `mise`, and pair with `python.uv_venv_auto = "source"` in `mise`.
+  - *Security*:
+    - Protect `mise`/`pyenv` Python from accidental global package pollution: set `PIP_REQUIRE_VIRTUALENV=true` and `[global] require-virtualenv = true` in `pip.conf`.
+    - Set `PYTHONSAFEPATH=1` (`-P`, prevents CWD `sys.path` hijacking), store `PYTHON_HISTORY` in `~/.local/state/python_history` with `0600` permissions, use `exclude-newer` cooldowns in `uv.toml`, and run `uv audit` for vulnerability checks.
+
+### File Synchronization (`syncthing` `v2.0+` / `v2.1.7`)
+- **Configuration & Data (v2.0+ SQLite Architecture)**:
+  - Resolve active paths via **`syncthing paths`** (legacy `-home`/`-paths`/`-logfile`/`-no-browser` single-dash flags were removed in v2.0; use subcommands `syncthing serve`, `syncthing paths`, `syncthing cli` and GNU flags `-C`/`--config`, `-D`/`--data`, `-H`/`--home`).
+  - Fresh Linux v2 installs store both `config.xml` and SQLite `index-v2/` (`folder.*.db`) under `${XDG_STATE_HOME:-$HOME/.local/state}/syncthing/` unless `${XDG_CONFIG_HOME:-$HOME/.config}/syncthing/config.xml` already exists.
+- **Triad Tuning**:
+  - *Performance*: Syncthing v2 replaced LevelDB (`index-v0.14.0.db`) and v1 `databaseTuning` with SQLite (`index-v2/`). Check for leftover `index-v0.14.0.db` directories after upgrading to reclaim disk space, and tune `syncthing serve` `--db-maintenance-interval=8h` / `--db-delete-retention-interval=10920h` if needed.
+  - *Configuration*: Manage via user service `systemctl --user enable --now syncthing.service`.
+  - *Security*: Enforce `tls="true"` on `<gui>`, bind to `127.0.0.1:8384` (never `0.0.0.0` without reverse-proxy auth), require `<user>` + bcrypt `<password>`, and disable global discovery/relays (`<relaysEnabled>false`) on LAN-only setups.
+
+### Arch Package Management (`pacman` `7.1+`, `makepkg`, `yay` `13.1+`, `paccache`)
+- **Configuration Layers**:
+  - `/etc/pacman.conf` (root-owned — elevated apply script only)
+  - `makepkg` precedence: `/etc/makepkg.conf` → `/etc/makepkg.conf.d/*.conf` (`rust.conf`, etc.) → `${XDG_CONFIG_HOME:-$HOME/.config}/pacman/makepkg.conf` (prefer user config or `/etc/makepkg.conf.d/99-system-optimizer.conf` to avoid `.pacnew` conflicts)
+  - `~/.config/yay/config.json` (manage via `yay --save`) and `/etc/conf.d/pacman-contrib` (`PACCACHE_ARGS`)
+- **Triad Tuning**:
+  - *Performance*: `ParallelDownloads = 5` and `COMPRESSZST=(zstd -c -T0 -)` are already Arch upstream defaults. Set `MAKEFLAGS="-j$(nproc)"` and consider `!debug` in `OPTIONS` (avoids multi-GB `-debug` AUR packages and SSD wear). Enable `paccache.timer` with `PACCACHE_ARGS="-k2"` in `/etc/conf.d/pacman-contrib`, and prune uninstalled packages (`paccache -ruk0`) plus `~/.cache/yay`.
+  - *Configuration*: Use `yay --save --cleanAfter --removemake --diffmenu --pgpfetch --batchinstall`.
+  - *Security*: Audit `/etc/pacman.conf` for Pacman 7's **`DownloadUser = alpm`** privilege-drop + Landlock/seccomp sandboxing; flag any **`DisableSandbox`**, **`DisableSandboxFilesystem`**, or **`DisableSandboxSyscalls`**; ensure `SigLevel = Required DatabaseOptional` globally and no `[repo]` sets `Never`/`TrustAll`; avoid `"sudoloop": true` in `yay` during untrusted AUR builds.
+
+### Rootless Containers & TUI (`podman` `6.2+`, `lazydocker` `0.25+`, `docker`)
+- **Configuration**: `~/.config/containers/containers.conf` (and `containers.conf.d/*.conf`), `~/.config/containers/systemd/*.{container,pod,volume,network}`, `~/.config/lazydocker/config.yml`.
+- **Triad Tuning**:
+  - *Performance*: Place keys in the exact `containers.conf(5)` tables (`[containers]` `pids_limit = 2048`, `log_size_max = 10485760` — note `log_max_size` is ignored — `log_driver = "journald"`; `[engine]` `runtime = "crun"`, `cgroup_manager = "systemd"`, `events_logger = "journald"`, `image_parallel_copies`).
+  - *Configuration*:
+    - **Podman 6 networking**: `slirp4netns` was removed — use `[network]` `default_rootless_network_cmd = "pasta"` (`passt` package) and `network_backend = "netavark"`.
+    - **Quadlet units**: Replace deprecated `podman generate systemd` with Quadlet units under `~/.config/containers/systemd/`.
+    - **LazyDocker + Podman**: Enable `systemctl --user enable --now podman.socket`, export `DOCKER_HOST="unix://${XDG_RUNTIME_DIR}/podman/podman.sock"`, set `commandTemplates.dockerCompose: "podman compose"`, and use `gui.theme.optionsTextColor` (not deprecated `optionsColor`).
+    - **Docker**: BuildKit (`buildx`) is default since Docker 23+ (no `DOCKER_BUILDKIT=1` needed); detect `podman-docker` (`/etc/containers/nodocker`) before auditing `daemon.json` (`~/.config/docker/daemon.json` for rootless).
+  - *Security*: Rootless user namespaces (`crun` + `pasta`), bounded `pids_limit` and `log_size_max`, and no privileged root daemon socket exposure.
+
+### System Monitors & Embedded Database (`btop` `1.4+`, `htop` `3.5+`, `sqlite3` `3.54+`)
+- **`btop` (`~/.config/btop/btop.conf`)**: Set `update_ms = 2000`, `proc_tree`, `shown_boxes` (including `gpu0` in `btop 1.4+`), and `color_theme` dynamically inferred from terminal/editor (never hardcoded).
+- **`htop` (`~/.config/htop/htoprc`)**: Close `htop` before editing (`htop` overwrites `htoprc` on exit). Set `delay=20` (tenths of a second = 2.0s parity with `btop` `update_ms = 2000`), `show_cpu_frequency=1`, `show_cpu_temperature=1`, `hide_userland_threads=1` on high-core hosts, and `tree_view=1`.
+- **`sqlite3` (`~/.sqliterc`)**:
+  - **NEVER set `PRAGMA journal_mode=WAL` in `~/.sqliterc`**: it mutates the on-disk header of every opened database, fails on read-only DBs, leaves `-wal`/`-shm` sidecars, and prints `wal` to stdout.
+  - Wrap interactive PRAGMAs in `.output /dev/null` ... `.output stdout` so `sqlite3` scripts/version probes are not polluted:
+    ```sql
+    .output /dev/null
+    PRAGMA foreign_keys = ON;
+    PRAGMA busy_timeout = 5000;
+    PRAGMA temp_store = MEMORY;
+    PRAGMA cache_size = -16000;
+    .output stdout
+    .headers on
+    .mode box
+    .nullvalue 'NULL'
+    ```
+
+### Encrypted DNS Resolver (`controld` / `ctrld` `v1.5+`)
+- **Configuration**: `/etc/controld/ctrld.toml` (root-owned, `0600` — inspect and apply only via elevated privileges per Safety Contract #4).
+- **Triad Tuning**:
+  - *Performance*: Set `[service]` `cache_enable = true`, `cache_size = 4096`, and use **`type = "doh3"`** (`--proto doh3`, DNS-over-HTTP/3 QUIC on `443/udp`) as primary transport with `"doh"` failover (avoids `853/udp` DoQ firewall blocks).
+  - *Configuration*: `[listener.0]` `ip = "127.0.0.1"`, `port = 53`, `restricted = true`; `[service]` `log_level = "notice"`, `intercept_mode` (`"off"|"dns"|"hard"`).
+  - *Security*: Disable unnecessary LAN discovery (`discover_mdns = false`, `discover_arp = false`, `discover_dhcp = false`, `discover_ptr = false`) and keep `0600 root:root` on `/etc/controld/ctrld.toml`.
+
+### Web Browsers (`firefox` / `librewolf` `137+`)
+- **Hardware Video Decoding (Linux VA-API)**: In Firefox/LibreWolf `137+`, `media.ffmpeg.vaapi.enabled` was removed — enable **`media.hardware-video-decoding.force-enabled`** (in `about:config` / `user.js`) instead. Keep `gfx.webrender.all = true`, strict Enhanced Tracking Protection / uBlock Origin, and RAM-tier tab-discarding policies.
 ---
 ## 5.2 Tier 2: Broader Cross-Tool Workstation Synergies
 
 | Synergy Pair / Trio | Architectural Benefit & Triad Rationale | Configuration Integration Pattern |
 |---|---|---|
-| **`lazygit` + `neovim` + `bat`** | Configure lazygit to use `nvim --server` / remote tab editing to prevent nested editor spawns, and configure pager: `"bat --color=always --style=changes"` for fast syntax-highlighted diffs without extra pager dependencies. | In `lazygit/config.yml`: set `os.editCommand: nvim`, `os.editCommandTemplate: '{{editor}} --server "$NVIM" --remote-tab "{{filename}}"'` (or `editPreset: 'nvim-remote'`), and `git.paging.pager: "bat --color=always --style=changes"`. |
-| **`ripgrep` / `fd` + `fzf` + `bat`** | Wire `rg` or `fd` as the backend file generator for fzf (`FZF_DEFAULT_COMMAND`), with `bat` rendering line-numbered, syntax-highlighted previews for files and code hits. | Export `FZF_DEFAULT_COMMAND='rg --files --hidden --glob "!.git/*"'` (or `fd --type f --hidden --exclude .git`) and `FZF_DEFAULT_OPTS="--preview 'bat --style=numbers --color=always --line-range :500 {}'"`. |
-| **`mpv` + `yt-dlp` + GPU HWDEC** | Stream web video directly to mpv via yt-dlp, using native hardware decoding (`nvdec-copy` on NVIDIA RTX, `vaapi` on Intel/AMD, `d3d11va` on Windows) and D3D11/Vulkan color management, bypassing heavy browser CPU/RAM consumption. | In `mpv.conf`: `vo=gpu-next`, `hwdec=nvdec-copy` (or `vaapi`/`d3d11va`), `ytdl-format="bestvideo[height<=?1080]+bestaudio/best"`, `target-colorspace-hint=yes`. |
-| **`winget` + `wsl` + `windows-terminal`** | Align WinGet download concurrency, WSL2 mirrored networking / memory bounding (`autoMemoryReclaim=dropcache`), and Windows Terminal Atlas GPU text rendering. | In `settings.json`: `useAtlasEngine=true`; in `.wslconfig`: `networkingMode=mirrored`, `autoMemoryReclaim=dropcache`, `sparseVhd=true`, `memory=4GB`/`8GB`; in WinGet: `downloader=default`, `source.autoUpdateIntervalInMinutes=120`. |
-| **`gh` + `git` + `lazygit`** | Register GitHub CLI as the Git credential helper to eliminate token prompts, and integrate PR/issue reviews directly within the terminal UI. | Run `gh auth setup-git` to register `gh auth git-credential` with Git; configure `git.paging.pager: "bat --color=always --style=plain"`; configure LazyGit custom commands for PR checkouts. |
-| **`gh` + `topgrade`** | Coordinated maintenance and supply-chain auditing of third-party GitHub CLI extensions during system upgrades. | Include `gh extension upgrade --all` in Topgrade `[git]` or `[commands]` maintenance steps. |
+| **`lazygit` + `neovim` + `bat`** | Configure lazygit to use `os.editPreset: "nvim-remote"` to prevent nested editor spawns, and `git.diffRenderers` with `bat --color=always --style=changes,numbers` for fast syntax-highlighted diffs. | In `lazygit/config.yml`: set `os.editPreset: "nvim-remote"`, `gui.nerdFontsVersion: "3"`, and `git.diffRenderers: [{ colorArg: always, command: "bat --color=always --style=changes,numbers" }]`. |
+| **`ripgrep` / `fd` + `fzf` + `bat`** | Wire `fd --strip-cwd-prefix` or `rg` as the `.gitignore`-aware file generator for `fzf` (`FZF_DEFAULT_COMMAND`), with `bat --theme=auto` rendering line-numbered previews. | Export `FZF_DEFAULT_COMMAND='fd --type f --strip-cwd-prefix --hidden --exclude .git'` (or `rg --files --hidden --glob "!.git/*"`), and `FZF_DEFAULT_OPTS="--info=inline-right --preview 'bat --style=numbers --color=always --line-range :300 {}'"`. |
+| **`mpv` + `yt-dlp` + GPU HWDEC** | Stream web video directly to `mpv` via `yt-dlp` (`yt-dlp-ejs`), using zero-copy hardware decoding (`hwdec=auto-safe`) and `vo=gpu-next`, bypassing heavy browser CPU/RAM consumption. | In `mpv.conf`: `vo=gpu-next`, `profile=high-quality`, `hwdec=auto-safe`, `tone-mapping=auto`, `target-colorspace-hint=auto` (`yes` when HDR mode active), `ytdl-format="bestvideo[height<=?1080]+bestaudio/best"`. |
+| **`winget` + `wsl` + `windows-terminal`** | Align WinGet download concurrency, WSL2 mirrored networking / `[experimental] autoMemoryReclaim=dropcache`, and Windows Terminal AtlasEngine (default in 1.18+). | In `settings.json`: `disableAnimations=true`; in `.wslconfig`: `networkingMode=mirrored`, `[experimental] autoMemoryReclaim=dropcache`, `memory=4GB`/`8GB` (no `sparseVhd`); in WinGet: `downloader=default`, `source.autoUpdateIntervalInMinutes=120`. |
+| **`gh` + `git` + `lazygit`** | Register GitHub CLI as the Git credential helper for HTTPS remotes (`gh auth setup-git`) or use SSH keys, and integrate PR/issue reviews in the terminal UI. | Run `gh auth setup-git` for HTTPS remotes; configure `lazygit` `git.diffRenderers` with `bat`; configure `gh` `pager: bat --color=always --style=plain`. |
+| **`gh` + `topgrade`** | Coordinated maintenance and supply-chain auditing of third-party GitHub CLI extensions during system upgrades. | Rely on Topgrade 17+'s native `github_cli_extensions` step (ensure `"github_cli_extensions"` is not in `disable`). |
 
 ### Detailed Implementation Specifications
 
 #### 1. lazygit + neovim + bat
-- **Nested Editor Elimination**: Spawning a standard `nvim` inside `lazygit` within an interactive terminal creates nested process trees, cursor fighting, terminal redraw latency, and terminal freeze hazards. Utilizing Neovim's UNIX socket or named pipe server (`--server "$NVIM" --remote-tab`) dispatches file edits directly into the parent or sibling Neovim instance as a new tab, instantly returning focus when the buffer is closed.
-- **Dependency-Free Syntax Paging**: Instead of requiring heavy external diff pagers like `delta` when not already present, routing lazygit diffs through `bat --color=always --style=changes` delivers immediate 24-bit syntax highlighting, git modification markers, and line numbering with sub-millisecond startup times.
+- **Nested Editor Elimination**: Spawning a standard `nvim` inside `lazygit` within an interactive terminal creates nested process trees, cursor fighting, terminal redraw latency, and terminal freeze hazards. Setting `os.editPreset: "nvim-remote"` (or `os.edit` using `{{filename}}`) dispatches file edits directly into the parent/sibling Neovim RPC server (`$NVIM`) as a new tab.
+- **Dependency-Free Syntax Paging**: Routing `lazygit` diffs through `git.diffRenderers` (`command: bat --color=always --style=changes,numbers`, `colorArg: always`) delivers immediate 24-bit syntax highlighting, git modification markers, and line numbering.
 
-#### 2. ripgrep + fzf + bat
-- **Multithreaded Search Backend**: Standard fuzzy walkers rely on slow single-threaded directory scans. Wiring `ripgrep` (`rg --files --hidden --glob "!.git/*"`) as `FZF_DEFAULT_COMMAND` leverages ripgrep's SIMD-accelerated directory walking, multithreaded directory traversal (`--threads=$(nproc)`), and automatic `.gitignore` parsing.
+#### 2. ripgrep / fd + fzf + bat
+- **Multithreaded & `.gitignore`-Aware Search**: `fzf`'s built-in `--walker` is already multithreaded when `FZF_DEFAULT_COMMAND` is unset. Wiring `fd --type f --strip-cwd-prefix --hidden --exclude .git` or `rg --files --hidden --glob "!.git/*"` adds automatic `.gitignore` filtering while letting `rg`/`fd` auto-manage their own worker threads and heuristics (without `--threads` or `--mmap`).
 - **Syntax Preview Clamping**: `bat` previews are clamped via `--line-range :500` to prevent memory exhaustion when browsing large minified or generated files, while providing rich, theme-coordinated syntax highlighting for source files.
 
 #### 3. mpv + yt-dlp + GPU HWDEC
 - **Chromium/Browser Overhead Bypass**: Playing 1080p60 or 4K web video inside a modern browser (Chrome, Edge, Brave) consumes 1.5–3.5 GiB of RAM, incurs heavy JavaScript runtime overhead, and triggers CPU-intensive software VP9/AV1 decoding on constrained systems.
-- **Hardware-Accelerated Stream Passthrough**: Piping web video URLs directly into `mpv` (`mpv "https://..."`) delegates extraction to `yt-dlp` and video decoding to the host GPU ASIC (`nvdec-copy` on NVIDIA RTX, `vaapi` on Intel/AMD, `d3d11va` on Windows) via `vo=gpu-next`. This drops CPU utilization from 40–80% to <5% and reduces memory footprint to under 150 MiB.
-- **Color Pipeline**: Native DWM/Wayland HDR passthrough (`target-colorspace-hint=yes`) and BT.2446a tone-mapping deliver reference-grade presentation without browser ICC color distortion.
+- **Hardware-Accelerated Stream Passthrough**: Piping web video URLs directly into `mpv` (`mpv "https://..."`) delegates extraction to `yt-dlp` (`yt-dlp-ejs` + JS runtime) and video decoding to the host GPU ASIC via `vo=gpu-next`, `profile=high-quality`, and zero-copy `hwdec=auto-safe`. This drops CPU utilization from 40–80% to <5% and reduces memory footprint to under 150 MiB.
+- **Color Pipeline**: Default `tone-mapping=auto` (`hdr-compute-peak=auto`) and `target-colorspace-hint=auto` (or `yes` when HDR display mode is active) deliver reference-grade presentation without washing out SDR panels.
 
 #### 4. winget + wsl + windows-terminal
 - **Windows Subsystem Alignment**: WSL2 virtual machines default to consuming up to 50% of total host RAM with memory caches lingering inside the Linux kernel. Configuring `autoMemoryReclaim=dropcache` automatically returns Linux file cache pages back to Windows host memory.
 - **Network Parity**: `networkingMode=mirrored` enables sub-millisecond localhost networking parity between Windows and WSL2, while `firewall=true` propagates Windows Defender Firewall rules inside Linux containers and services.
-- **Terminal Rendering**: Windows Terminal's DirectX Atlas text rendering engine (`useAtlasEngine=true`) accelerates font glyph rasterization on the GPU, eliminating terminal scrolling latency even under heavy multi-megabyte log outputs.
+- **Terminal Rendering**: Windows Terminal 1.18+ enables the DirectX Atlas text rendering engine by default; setting `"disableAnimations": true` removes tab/pane transition lag.
 - **WinGet Concurrency**: Setting WinGet downloaders to `default` (WinINet) bypasses Delivery Optimization freezes and coordinates seamless updates across host tools.
 
 #### 5. gh + git + lazygit + topgrade
 - **Zero-Friction Git Credential Delegation**: Running `gh auth setup-git` links the GitHub CLI authentication state with Git's internal credential architecture (`!gh auth git-credential`). This eliminates personal access token copy-pasting and credential helper misconfigurations across both CLI `git` and terminal TUIs like `lazygit`.
 - **Fast Syntax-Highlighted PR Reviews**: Setting `gh config set pager "bat --color=always --style=plain"` invokes `bat` directly during `gh pr diff` and `gh pr view`, providing instant 24-bit colorway syntax highlighting without requiring third-party pager setup.
-- **Automated Extension Maintenance**: Third-party GitHub CLI extensions (`gh-copilot`, `gh-dash`, `gh-poi`) are maintained via Topgrade's maintenance flow using `gh extension upgrade --all`, ensuring security patches and bug fixes are applied consistently.
+- **Automated Extension Maintenance**: Third-party GitHub CLI extensions (`gh-dash`, `gh-poi`) are updated automatically by Topgrade 17+'s native `github_cli_extensions` step, ensuring patches are applied consistently without manual `[commands]` hooks.
 
 ## 6. Mandatory Pre-Modification Backup & Rollback Protocol
 
@@ -1129,17 +1224,17 @@ Every file edited or overwritten by `system-optimizer` MUST be backed up using `
 | `defender` | Security | PUA Active | OPTIMIZED (Block Inbound / PUA Guard) | 2026-09-07 |
 | `winget` | Package Manager | 1.30.x | OPTIMIZED (120m Sync / WinINet / No Telemetry)| 2026-09-07 |
 | `windows-terminal` | Terminal | 1.24.x | OPTIMIZED (Atlas Engine / No Anim / pwsh) | 2026-09-07 |
-| `wsl` | Subsystem | 2.7.x | OPTIMIZED (8GB RAM / Mirrored Net / SparseVHD)| 2026-09-07 |
+| `wsl` | Subsystem | 2.6.x | OPTIMIZED (8GB RAM / Mirrored Net / dropcache)| 2026-09-07 |
 | `pwsh` | Shell | 7.6.5 | OPTIMIZED (PSReadLine Predict / RemoteSigned)| 2026-09-07 |
-| `topgrade` | Maintenance | 17.12.x | OPTIMIZED (Cross-Package Orchestration) | 2026-09-07 |
+| `topgrade` | Maintenance | 17.16.x | OPTIMIZED (Cross-Package Orchestration) | 2026-09-07 |
 | `mise` | Runtime Manager | 2026.x | OPTIMIZED (env_cache / jobs / supply-chain / topgrade) | 2026-09-07 |
 | `mpv` | Media | 0.41.0 | OPTIMIZED (gpu-next / D3D11 / NVDEC / HDR) | 2026-09-07 |
-| `git` | Developer Tool | 2.55.0 | OPTIMIZED (fscache / preloadIndex / diff) | 2026-09-07 |
+| `git` | Developer Tool | 2.56.x | OPTIMIZED (manyFiles / zdiff3 / fscache[Win]) | 2026-09-07 |
 
 ## 4. Cross-System & Cross-Tool Synergies
-- **Unified Workstation Orchestration (`topgrade` + `mise`)**: Coordinates host OS packages (`pacman`, `yay`, `winget`) with user polyglot runtimes (`node`, `python`, `rust`, `uv`); binds parallel jobs to hardware CPU threads (`nproc`); prevents dual-update conflicts by disabling redundant standalone steps (`disable = ["uv"]`) in topgrade; executes post-update `mise reshim` to keep binary shims synchronized; auto-prunes obsolete tool versions and caches via `cleanup = true` and `mise prune`.
+- **Unified Workstation Orchestration (`topgrade` + `mise`)**: Coordinates host OS packages (`pacman`, `yay`, `winget`) with user polyglot runtimes (`node`, `python`, `rust`, `uv`); binds parallel jobs to hardware CPU threads (`nproc`); prevents dual-update conflicts by disabling redundant standalone updaters (`disable = ["uv", "cargo", "pi"]`) in topgrade; executes post-update `mise reshim` to keep binary shims synchronized; auto-prunes obsolete tool versions and caches via `cleanup = true` and `mise prune`.
 - **Terminal & Shell Workflow (`windows-terminal` + `pwsh` + `starship` + `fzf`/`zoxide`)**: GPU-accelerated Atlas rendering, PSReadLine history prediction, static prompt generation.
-- **Virtualization & Subsystem Integration (`wsl` + host firewall)**: Mirrored networking shares Windows localhost, Windows Defender Firewall secures WSL traffic, sparseVhd auto-compacts virtual disks.
+- **Virtualization & Subsystem Integration (`wsl` + host firewall)**: Mirrored networking shares Windows localhost and Windows Defender Firewall secures WSL traffic (compact `ext4.vhdx` offline when needed; avoid `sparseVhd=true`).
 - **Media & Hardware Acceleration (`mpv` + Discrete GPU)**: D3D11 NVDEC / hardware video decode, HDR passthrough, smooth motion interpolation.
 
 ## 5. Global Resource & Security Budget
@@ -1191,7 +1286,7 @@ system-optimizer mpv              # mpv GPU-next, D3D11/NVDEC, HDR passthrough
 system-optimizer pi               # Pi coding agent harness, sessions & settings optimization
 system-optimizer controld         # Control D encrypted DNS resolver daemon & cache
 system-optimizer rustdesk         # RustDesk remote desktop, hardware video codecs & access control
-system-optimizer git              # Git performance (fscache, preloadIndex, diff pager)
+system-optimizer git              # Git workflow & performance (manyFiles, zdiff3, rerere, Windows fscache)
 system-optimizer herdr            # Herdr AI agent terminal workspace manager, sessions & sockets
 system-optimizer gh                   # GitHub CLI credentials, pager, default protocol & extensions
 system-optimizer gh git lazygit       # GitHub CLI credential helper & PR/review workflow synergy
@@ -1219,46 +1314,52 @@ system-optimizer full
 
 3. **Tier 3: Subsystems & Package Orchestration**:
    - **`winget`**: Configure `%LOCALAPPDATA%\Packages\Microsoft.DesktopAppInstaller_*\LocalState\settings.json` with 2-hour source sync (`autoUpdateIntervalInMinutes: 120`), direct WinINet downloader, and telemetry disabled.
-   - **`wsl`**: Configure `~/.wslconfig` with memory bounding (50% host RAM / 8GB), `autoMemoryReclaim=dropcache`, `sparseVhd=true`, `dnsTunneling=true`, and `networkingMode=mirrored`.
-   - **`mise`**: Configure `~/.config/mise/config.toml` (or `%LOCALAPPDATA%\mise\config.toml`): thread concurrency (`jobs = $(nproc)`), environment caching (`env_cache = true`, `env_cache_ttl = "1h"`), version pinning (`pin = true`), pre-compiled Rust binaries (`cargo.binstall = true`), storage hygiene (`cache_prune_age = "7d"`, `always_keep_download = false`), native Windows PE shims (`windows_shim_mode = "exe"`), and supply-chain verification (`aqua.slsa = true`, `aqua.cosign = true`, `github_attestations = true`, `node.verify = true`).
-   - **`cargo`**: Configure `~/.cargo/config.toml` with `build.jobs = $(nproc)`, `net.git-fetch-with-cli = true`, sparse index registry protocol, and prefer pre-compiled binaries via `mise` (`cargo.binstall = true`) to prevent CPU-pegging from-source rebuilds.
-   - **`topgrade`**: Configure `%APPDATA%\topgrade.toml` / `~/.config/topgrade.toml` to coordinate updates across `pacman`/`yay`/`winget`, `wsl`, `git`, `cargo`, and `mise` in one command, with `cleanup = true` (which triggers `mise prune`), `[mise] bump = true`, `jobs` aligned to CPU threads, redundant tool self-updaters and from-source recompilations disabled (`disable = ["uv", "cargo"]` when Rust CLIs are managed via `mise` binstall), and post-command `mise reshim` to synchronize binary shims.
-4. **Tier 4: Terminal & Shell Environment**:
-   - **`windows-terminal`**: Enable GPU-accelerated Atlas text rendering engine, `disableAnimations: true`, `copyFormatting: "none"`, default profile set to PowerShell 7, Hack Nerd Font.
-   - **`pwsh` (PowerShell 7)**: Configure `$PROFILE` with PSReadLine predictive IntelliSense (`Set-PSReadLineOption -PredictionSource HistoryAndPlugin -PredictionViewStyle ListView`), deferred module loading, and history deduplication.
-   - **`bash`**: Sanitize `$PATH`, set safe umask, configure history deduplication, and pre-cache static prompt hooks.
+   - **`wsl`**: Configure `~/.wslconfig` with memory bounding (50% host RAM / 8GB), `[experimental] autoMemoryReclaim=dropcache`, `networkingMode=mirrored`, and `[wsl2] dnsTunneling=true` (default). Do NOT enable `sparseVhd=true` (ext4 corruption risk).
+   - **`mise`**: Configure `~/.config/mise/config.toml` (plus `conf.d/*.toml`, or `%APPDATA%\mise\config.toml` on Windows): thread concurrency (`jobs = $(nproc)`), environment caching (`env_cache = true`, `env_cache_ttl = "1h"`), version pinning (`pin = true`), pre-compiled Rust binaries (`cargo.binstall = true`), storage hygiene (`cache_prune_age = "7d"`, `download_cache = true`, `download_cache_max_size = "2GiB"`, `upgrade.auto_prune = true`), native Windows PE shims (`windows_shim_mode = "exe"`), and supply-chain verification (`minimum_release_age`, `aqua.slsa = true`, `aqua.cosign = true`, `aqua.minisign = true`, `github_attestations = true`, `npm.provenance = true`, `node.verify = true`).
+   - **`cargo`**: Configure `~/.cargo/config.toml` (flag deprecated extensionless `~/.cargo/config`) with `net.git-fetch-with-cli = true` and `[profile.release]` tuning (`opt-level = 3`, `lto = "thin"`, `codegen-units = 16`). Omit redundant `build.jobs`, `protocol = "sparse"`, global `target-cpu=native`, and `-fuse-ld=lld` on Linux `x86_64` (`rust-lld` is default); prune `~/.cargo/registry/cache` via `cargo-cache`/`cargo-sweep`; delegate Rust CLI tools to `mise` (`cargo.binstall = true`).
+   - **`uv` & `python`**: Configure `~/.config/uv/uv.toml` (`compile-bytecode = true`, `exclude-newer` cooldowns, `uv cache prune`, `uv audit`) and protect `mise`/`pyenv` Python with `PIP_REQUIRE_VIRTUALENV=true` (`pip.conf`), `PYTHONSAFEPATH=1`, and `PYTHON_HISTORY` (`0600`).
+   - **`pacman`, `makepkg`, `yay`, & `paccache`**: Audit `/etc/pacman.conf` for `DownloadUser = alpm`, sandbox checks (`DisableSandbox*`), and `SigLevel = Required DatabaseOptional`; place user `MAKEFLAGS="-j$(nproc)"` and `!debug` in `~/.config/pacman/makepkg.conf` or `/etc/makepkg.conf.d/`; configure `yay --save` (avoid `sudoloop: true`); enable `paccache.timer` (`PACCACHE_ARGS="-k2"`).
+   - **`podman` & `lazydocker`**: Configure `containers.conf` (`[network] default_rootless_network_cmd = "pasta"`, `[containers]` `pids_limit`/`log_size_max`, `[engine]` `runtime = "crun"`), Quadlet units in `~/.config/containers/systemd/`, and `podman.socket` + `commandTemplates.dockerCompose: "podman compose"` in `lazydocker/config.yml`.
+   - **`topgrade`**: Configure `%APPDATA%\topgrade.toml` / `~/.config/topgrade.toml` (+ `topgrade.d/*.toml`) to coordinate OS packages, `wsl`, `git`, `github_cli_extensions`, and `mise`, with `[misc] allow_root = false`, `cleanup = true`, `notify_end = "on_failure"`, `[windows]` `accept_all_updates`/`winget_use_sudo`, `[git] fallback_to_fetch_default = true`, `[mise] bump = true`, `disable = ["uv", "cargo", "pi"]`, and `[post_commands]` `"Mise Reshim" = "mise reshim"`.
+4. **Terminal, Browser & Shell Environment**:
+   - **`windows-terminal`**: AtlasEngine is enabled by default in 1.18+; set `disableAnimations: true`, `copyFormatting: "none"`, default profile set to PowerShell 7, Nerd Font.
+   - **`pwsh` (PowerShell 7)**: Configure `$PROFILE` with PSReadLine predictive IntelliSense (`Set-PSReadLineOption -PredictionSource HistoryAndPlugin -PredictionViewStyle ListView`), deferred module loading, `--print-full-init` cached prompt hooks, and history deduplication.
+   - **`bash`**: Sanitize `$PATH`, set safe umask, configure history deduplication, and pre-cache `--print-full-init` prompt hooks.
+   - **`firefox` / `librewolf`**: Enable `media.hardware-video-decoding.force-enabled` (137+, replacing removed `media.ffmpeg.vaapi.enabled`), `gfx.webrender.all`, and RAM-tier tab discarding.
 
-5. **Tier 5: Developer & Media Toolchain**:
-   - **`neovim` (`nvim`)**: Verify byte-compiled Lua loader (`vim.loader.enable()` in `init.lua`), prepend mise shims and append Mason bin on `vim.env.PATH`, migrate LSPs/formatters/linters/DAPs from Mason to `mise` (`aqua:`/`go:`/`npm:`/`github:` backends), lock `mason.nvim` (`PATH = "append"`, `opts_extend = {}`, `automatic_installation = false`, `mason = false` on Mise LSPs, prune duplicate Mason packages on disk), add async `DirChanged`/`VimEnter` `mise env --json` sync, enforce LazyVim v15+ compatibility (`nvim-treesitter` `main` branch without `nvim-treesitter.configs`, `lazydev.nvim` in `.neoconf.json`, `ai.sidekick`, `crates.nvim` `cmp.enabled = false` with `blink.cmp`, retain `matchit`/`matchparen`), rotate oversized `lsp.log`, and disable insecure modelines (`vim.opt.modeline = false`, `vim.opt.exrc = false`).
-   - **`lazygit`**: Configure `%APPDATA%\lazygit\config.yml` with `git.autoFetch: false` (eliminates background git processes triggering Defender scans), Neovim RPC remote-tab editing (`nvim --server "$NVIM" --remote-tab "$FILE"`), and terminal-synchronized theme palette.
-   - **`ripgrep` (`rg`)**: Configure `RIPGREP_CONFIG_PATH` with threads dynamically aligned to detected CPU logical cores (`--threads=$(nproc)`), `--smart-case`, `--max-columns=300` preview, `--mmap` for NVMe SSDs, and global ignore globs (`!.git`, `!node_modules`, `!target`).
-   - **`zoxide`**: Configure fast directory jumping (`z`, `zi`), set `_ZO_EXCLUDE_DIRS` for system/temp roots, initialize shell hooks in `$PROFILE` and `.bashrc`, and prune stale directories.
-   - **`eza`**: Define standard ergonomic aliases in `pwsh` and `bash` (`ls`, `ll`, `la`, `lt`) with icons and header, binding git status strictly to detailed listings to avoid recursive tree slowdowns.
-   - **`bat` & `fzf`**: Set `FZF_DEFAULT_COMMAND` to multithreaded `fd --type f --hidden --exclude .git` (or `rg --files --hidden --glob '!.git/*'`), configure `bat` syntax pager with inferred terminal theme or user-selected palette.
-   - **`starship`**: Configure `command_timeout = 500` (integer milliseconds), enable native `[mise]` module for zero-latency polyglot runtime indication, disable slow per-language subshell version modules (`nodejs`, `python`, `rust`, `golang`), and pre-cache prompt evaluation in `bash` and `pwsh`.
-   - **`git`**: Configure `core.fscache = true`, `core.preloadIndex = true`, `core.untrackedCache = true`, `diff.algorithm = histogram`, `push.autoSetupRemote = true`, and Git Credential Manager (`credential.helper = manager`).
-   - **`mpv` & `yt-dlp`**: Configure `vo=gpu-next`, `gpu-api=d3d11` (or `vulkan`), hardware decoding tailored to detected GPU (`hwdec=nvdec-copy` on NVIDIA RTX, `d3d11va`/`vaapi` on AMD/Intel), native HDR passthrough (`target-colorspace-hint=yes`), BT.2446a tone-mapping, and multithreaded fragment downloads in yt-dlp.
-   - **`pi`**: Enforce `auth.json` 0600 permissions, configure session file archiving (>30d), compaction token reserve tuning (`16384`), tool access boundaries, and ensure `mise` shims (`~/.local/share/mise/shims` or `%LOCALAPPDATA%\mise\shims`) are active in agent execution environments to prevent non-interactive "command not found" errors.
-   - **`rustdesk` & `controld`**: Configure hardware video encoding tailored to GPU (NVENC/D3D/AMF/VA-API), custom relay server, and encrypted DNS transport (DoQ/DoH) with in-memory caching.
-   - **`herdr`**: Audit and rotate `herdr-server.log` (prune log bloat from long agent runs); verify `default_shell = "pwsh"` or `/bin/bash`; synchronize theme with inferred terminal palette; configure system toast notifications (`delivery = "system"`); ensure multiplexed agent workspaces inherit active `mise` shims and pinned project toolchains; protect socket (`0600`) and workspace directory permissions (`0700`).
-   - **`gh` (GitHub CLI)**: Configure `git_protocol: ssh` (or `https`), `pager: "bat --color=always --style=plain"` for fast syntax reviews, configure `gh auth setup-git` for zero-credential prompting, enable `prompt: enabled`, configure standard aliases (`co: "pr checkout"`, `pv: "pr view"`), audit installed extensions (`gh extension list`), restrict `hosts.yml` permissions to `0600`, and integrate with Topgrade and AI agent workflows.
+5. **Developer, Media, Sync & Monitor Toolchain**:
+   - **`neovim` (`nvim`)**: Verify `vim.loader.enable()`, prepend mise shims and append Mason bin on `vim.env.PATH`, migrate LSPs/formatters/linters/DAPs to `mise`, lock `mason.nvim` (`PATH = "append"`, `opts_extend = {}`, `automatic_enable = false` on `mason-lspconfig.nvim`, `opts.servers.<srv>.mason = false`), use native `vim.lsp.config()`/`vim.lsp.enable()`, add async `DirChanged`/`VimEnter` `mise env --json` sync, enforce LazyVim v15/v16+ compatibility (`nvim-treesitter` `main` branch, `v:lua.LazyVim.treesitter.foldexpr()`, `lazydev.nvim`, `ai.copilot-native`/`ai.sidekick`, `crates.nvim` `cmp.enabled = false` with `blink.cmp`, retain `matchit`/`matchparen`), disable `modeline` (`exrc` defaults `false` with `:trust`), and validate with `nvim --headless +q`.
+   - **`lazygit`**: Configure `git.autoFetch: false`, `gui.nerdFontsVersion: "3"`, `gui.animateExplosion: false`, `os.editPreset: "nvim-remote"` (or `{{filename}}`), `git.diffRenderers` with `bat --color=always --style=changes,numbers`, and terminal-synchronized theme palette.
+   - **`ripgrep` (`rg`) & `fd`**: Configure `RIPGREP_CONFIG_PATH` with `--smart-case`, `--max-columns=300`, `--max-columns-preview`, and ignore globs (`!.git/*`, `!node_modules/*`, `!target/*`) — omit `--mmap` and `--threads`; place `fd` ignore patterns in `~/.config/fd/ignore` and omit `-j`.
+   - **`zoxide`**: Configure fast directory jumping (`z`, `zi`), `:`/`;`-delimited `_ZO_EXCLUDE_DIRS`, initialize shell hooks, and prune stale directories.
+   - **`eza`**: Define ergonomic aliases (`ls`, `ll`, `la`, `lt`) with `--icons=auto`, binding `--git` strictly to detailed listings; do not pass nonexistent `--no-dereference`.
+   - **`bat` & `fzf`**: Set `FZF_DEFAULT_COMMAND` to `fd --type f --strip-cwd-prefix --hidden --exclude .git` (or `rg --files`), enable `fzf --bash`/`--zsh`/`--fish`, use `--info=inline-right`, and configure `bat --theme=auto` (`--theme-dark`/`--theme-light`, validate with `bat --diagnostic`).
+   - **`starship`**: Configure `command_timeout = 500`, choose `[mise]` (`disabled = false`, `$symbol`/`$health`) or per-language modules with `mise` `env_cache = true`, and pass `--print-full-init` if caching init output.
+   - **`git`**: Configure `feature.manyFiles = true`, `diff.algorithm = histogram`, `merge.conflictStyle = zdiff3`, `branch.sort = -committerdate`, `rerere.enabled = true`, `fetch.prune = true`, `push.autoSetupRemote = true`, `rebase.updateRefs = true`, per-large-repo `core.fsmonitor = true`, and Windows-only `core.fscache = true` / `credential.helper = manager`.
+   - **`mpv` & `yt-dlp`**: Configure `vo=gpu-next`, `profile=high-quality`, zero-copy `hwdec=auto-safe`, `tone-mapping=auto`, `target-colorspace-hint=auto` (`yes` when HDR active); in `yt-dlp`, use `yt-dlp-ejs` + `--js-runtimes` + native `-N 4` and warn against global `--downloader aria2c` and global `--impersonate`.
+   - **`pi`**: Honor `$PI_CODING_AGENT_DIR`, enforce `0600` on `auth.json` and `mcp-auth.json`, configure `defaultProjectTrust` (`trust.json`), `defaultTools`/`--exclude-tools`, `cacheWarming: "idle"`, `PI_CACHE_RETENTION=long`, `codemode`, session pruning (>30d), and `mise` shims on `PATH`.
+   - **`rustdesk` & `controld`**: Inspect `RustDesk2.toml` (`direct-server`, `approve-mode`, `verification-method`) and GPU encode; configure `/etc/controld/ctrld.toml` (`0600`) with `type = "doh3"` primary + `"doh"` failover and `[service]` `cache_enable = true`.
+   - **`herdr`**: Inspect `~/.config/herdr/` (`config.toml`, `session.json`, `herdr.sock`, `herdr-server.log`) and `~/.local/state/herdr/`; validate with `herdr config check` before `herdr server reload-config`; use `herdr update --handoff`; run `herdr integration status` with `resume_agents_on_restore = true`; keep `default_shell = ""` (`$SHELL`) on Linux/macOS (`"pwsh"` on Windows), `[terminal] shell_mode`, `[advanced] scrollback_limit_bytes`, `0600` on sockets/config.
+   - **`syncthing`**: Use Syncthing v2 `syncthing paths` / `syncthing serve` (`index-v2/` SQLite), GUI `tls="true"` on `127.0.0.1`, and `systemctl --user enable --now syncthing.service`.
+   - **`btop`, `htop`, & `sqlite3`**: Align `btop` `update_ms = 2000` (with `gpu0` and inferred theme) and `htop` `delay=20` (close `htop` before editing); write a safe `~/.sqliterc` wrapped in `.output /dev/null` ... `.output stdout` without `PRAGMA journal_mode=WAL`.
+   - **`gh` (GitHub CLI)**: Use YAML syntax (`git_protocol: ssh`, `pager: "bat --color=always --style=plain"`, `prompt: enabled`, `telemetry: disabled`, `expiring_credentials: enabled`), HTTPS `gh auth setup-git`, OS keyring or `0600` `hosts.yml`, active extensions (`gh-dash`, `gh-poi`), and native Topgrade `github_cli_extensions`.
    - **`powertoys`**: Disable unused background utility modules to reclaim RAM and thread handles.
 
 6. **Cross-Tool Synergies**:
    - Establish seamless pipelines between tools:
-     - `herdr` + `pi` + `mise` + `pwsh`/`bash`: Autonomous AI coding agent toolchain inheritance — ensures non-interactive agent task subshells (`bash -c`, `pwsh -Command`) inherit active mise shims and project-pinned runtimes (`node`, `python`, `rust`, `go`, `uv`) without PATH drift or manual exports; worktree branch isolation; multiplexed agent panes; and automated socket permission hardening (`0600`/`0700`).
-     - `lazygit` + `neovim` + `bat`: Remote tab editing & dependency-free syntax diff paging — configure lazygit to use `nvim --server` / remote tab editing to prevent nested editor spawns, and configure pager: `"bat --color=always --style=changes"` for fast syntax-highlighted diffs without extra pager dependencies.
-     - `ripgrep` + `fzf` + `bat`: High-performance search & preview pipeline — wire `rg` as the backend search generator for fzf (`FZF_DEFAULT_COMMAND`), with `bat` rendering line-numbered, syntax-highlighted previews for files and code hits.
-     - `mpv` + `yt-dlp` + GPU HWDEC: Web stream hardware passthrough — stream web video directly to mpv via yt-dlp, using native hardware decoding (`nvdec-copy` on NVIDIA RTX, `vaapi` on Intel/AMD, `d3d11va` on Windows) and D3D11/Vulkan color management (`vo=gpu-next`), bypassing heavy browser CPU/RAM consumption.
-     - `winget` + `wsl` + `windows-terminal`: Windows 11 unified subsystem & terminal acceleration — align WinGet download concurrency, WSL2 mirrored networking / memory bounding (`autoMemoryReclaim=dropcache`, `sparseVhd=true`), and Windows Terminal Atlas GPU text rendering engine (`useAtlasEngine=true`).
-     - `gh` + `git` + `lazygit` + `topgrade`: Seamless credential helper & PR review synergy — `gh auth setup-git` registers GitHub CLI as Git's credential helper across CLI and LazyGit; LazyGit custom commands trigger `gh pr checkout` and `gh pr view`; `gh` pager delegates to `bat` for zero-latency syntax-highlighted code reviews; and Topgrade automates `gh extension upgrade --all` during workstation maintenance.
-     - `neovim` + `mise`: Single-source polyglot LSP, formatter, linter & DAP runtime — Neovim consumes language servers (`lua_ls`, `vtsls`, `jsonls`, `eslint`, `pyright`, `ruff`, `rust_analyzer`, `gopls`, `marksman`, `taplo`), formatters (`stylua`, `shfmt`, `gofumpt`, `goimports`, `markdownlint-cli2`, `markdown-toc`), linters (`shellcheck`, `golangci-lint`), and debuggers (`netcoredbg`, `dlv`) directly from mise shims without Mason duplication; `mason.nvim` is locked (`PATH = "append"`, `opts_extend = {}`, `mason = false`) to editor-only adapters (`codelldb`, `js-debug-adapter`, `roslyn`); an async `DirChanged` hook runs `mise env --json` to sync per-project `[env]` variables; and Topgrade automatically updates runtimes and syncs shims via `[post_commands]` `mise reshim`.
-     - `windows-terminal` + `pwsh` + `starship` + `zoxide` + `fzf`: Instant prompt rendering, fuzzy path completion, and interactive history navigation.
-     - `topgrade` + `mise`: Unified workstation maintenance orchestration — strict separation of OS package managers (`pacman`/`yay`/`winget`) from user polyglot toolchains (`node`, `python`, `rust`, `uv`); hardware CPU thread budget alignment; collision prevention by disabling redundant standalone updaters in Topgrade (`disable = ["uv"]`); automated cache and old version reclamation via Topgrade `cleanup = true` and `mise prune`; and instantaneous binary shim and language server synchronization via Topgrade `[post_commands]` executing `mise reshim`.
-     - `mise` + `starship` + `bash`/`pwsh`: Zero-latency prompt integration — native `[mise]` module in `starship.toml` displays active toolchain without spawning slow per-language subshell queries; mise `env_cache = true` (`1h` TTL) guarantees sub-millisecond shell prompt redraws on directory transitions.
-     - `topgrade` + `cargo` + `mise`: Rust tooling compilation de-duplication — Rust CLI tools (`ripgrep`, `eza`, `bat`, `starship`, `zoxide`) managed via `mise` with `cargo.binstall = true` fetch pre-compiled binaries in seconds; Topgrade's from-source `cargo-update` step is disabled (`disable = ["cargo"]`), eliminating CPU-pegging compilations and hours of rebuild time during workstation updates.
-     - `podman` + `lazydocker`: Rootless OCI container orchestration via crun runtime, user namespace isolation, UNIX socket forwarding, and interactive TUI monitoring without privileged root daemon exposure.
-     - `htop` + `btop`: Unified hardware thread and memory inspection, low-overhead sensor polling, update delay tuning, and process hierarchy inspection aligned with CPU/RAM tiers.
+     - `herdr` + `pi` + `mise` + `pwsh`/`bash`: Autonomous AI coding agent toolchain inheritance, `herdr integration status` + `resume_agents_on_restore = true`, worktree branch isolation, and `0600` socket/auth hardening.
+     - `lazygit` + `neovim` + `bat`: Remote tab editing (`os.editPreset: "nvim-remote"`) and syntax diff paging via `git.diffRenderers` (`bat --color=always --style=changes,numbers`).
+     - `ripgrep` / `fd` + `fzf` + `bat`: `.gitignore`-aware search (`fd --strip-cwd-prefix` / `rg --files`) with `--info=inline-right` and `bat --theme=auto` previews.
+     - `mpv` + `yt-dlp` + GPU HWDEC: Zero-copy `hwdec=auto-safe` + `vo=gpu-next` + `yt-dlp-ejs` web streaming bypassing browser CPU/RAM overhead.
+     - `winget` + `wsl` + `windows-terminal`: WinGet concurrency, WSL2 mirrored networking / `[experimental] autoMemoryReclaim=dropcache` (no `sparseVhd`), and Windows Terminal AtlasEngine.
+     - `gh` + `git` + `lazygit` + `topgrade`: HTTPS `gh auth setup-git` / SSH workflow, `bat` pager, LazyGit PR views, and Topgrade's native `github_cli_extensions` step.
+     - `neovim` + `mise`: Single-source polyglot LSPs/formatters/linters/DAPs via mise shims, locked `mason.nvim` (`opts_extend = {}`, `opts.servers.<srv>.mason = false`), native `vim.lsp.config`/`enable`, async `DirChanged` `mise env --json` sync, and `topgrade` + `mise reshim`.
+     - `windows-terminal` + `pwsh` + `starship` + `zoxide` + `fzf`: Instant `--print-full-init` cached prompt, fuzzy path completion, and interactive history navigation.
+     - `topgrade` + `mise`: Unified workstation maintenance (`disable = ["uv", "cargo", "pi"]`, `cleanup = true` + `mise prune`, `[post_commands]` `mise reshim`).
+     - `mise` + `starship` + `bash`/`pwsh`: Optional `[mise]` (`disabled = false`, `$symbol`/`$health`) or per-language modules + `mise` `env_cache = true`.
+     - `topgrade` + `cargo` + `mise`: Prebuilt Rust binaries via `mise` `cargo.binstall = true`, disabling duplicate from-source `cargo` rebuilds in Topgrade.
+     - `podman` + `lazydocker`: Rootless containers (`crun`, `pasta`, Quadlet units, `podman.socket`) with interactive TUI monitoring.
+     - `htop` + `btop`: Aligned thread/memory/GPU monitoring (`delay=20` / `update_ms = 2000`).
 
 ## 11. More Examples (moved from SKILL.md)
 
@@ -1266,57 +1367,52 @@ system-optimizer full
 ```bash
 system-optimizer windows-terminal pwsh wsl
 ```
-Optimizes Windows Terminal GPU Atlas rendering and styling, configures PowerShell 7 PSReadLine predictive IntelliSense, and tunes WSL2 VM memory bounding, disk compaction (`sparseVhd`), and mirrored networking.
+Optimizes Windows Terminal settings, configures PowerShell 7 PSReadLine predictive IntelliSense and `--print-full-init` cached prompts, and tunes WSL2 VM memory bounding and mirrored networking (without `sparseVhd=true`).
 
 ### Example 4: Package Management & Media Playback
 ```bash
 system-optimizer winget topgrade mpv
 ```
-Tunes WinGet source sync interval and downloader engine, configures Topgrade cross-ecosystem updates, and optimizes mpv Direct3D11/Vulkan hardware video decoding (NVDEC/D3D11VA/VA-API) and HDR presentation dynamically tailored to host GPU architecture.
-
+Tunes WinGet source sync interval and downloader engine, configures Topgrade cross-ecosystem updates, and optimizes `mpv` (`vo=gpu-next`, `profile=high-quality`, zero-copy `hwdec=auto-safe`, `tone-mapping=auto`, `target-colorspace-hint=auto`).
 
 ### Example 5: Polyglot Toolchains & Maintenance Orchestration (mise + topgrade)
 ```bash
 system-optimizer mise topgrade
 ```
-Evaluates host CPU thread concurrency and bounds both tools to `$(nproc)`, configures mise environment caching (`env_cache = true`) and supply-chain verification (SLSA/cosign), configures Topgrade with `[mise] bump = true`, enables `cleanup = true` (to auto-prune obsolete runtimes), adds `mise reshim` to `post_commands`, and disables conflicting standalone updaters (`disable = ["uv"]`).
-
+Evaluates host CPU thread concurrency and bounds `mise`/`topgrade` `[mise] jobs` to `$(nproc)`, configures `mise` caching (`env_cache = true`, `download_cache = true`, `download_cache_max_size = "2GiB"`) and supply-chain verification (`minimum_release_age`, SLSA/cosign/npm provenance), configures Topgrade with `[mise] bump = true`, `cleanup = true`, `"Mise Reshim" = "mise reshim"`, and `disable = ["uv", "cargo", "pi"]`.
 
 ### Example 6: Polyglot LSP Runtime & Editor Synergy (mise + neovim)
 ```bash
 system-optimizer mise neovim
 ```
-Configures Neovim with `vim.loader.enable()` for sub-65ms startup, prepends `mise` shims and appends Mason bin on `vim.env.PATH`, migrates polyglot LSPs/formatters/linters from Mason to `mise` (`aqua:`/`go:`/`npm:`/`github:`), locks `mason.nvim` (`PATH = "append"`, `opts_extend = {}`, `mason = false`) to editor-only adapters while pruning duplicate Mason packages on disk, adds an async `DirChanged` `mise env --json` hook for project environment variables, validates LazyVim v15+ compatibility (`nvim-treesitter` `main` branch, `ai.sidekick`, `lazydev`), and coordinates automated upgrades via `topgrade`.
-
+Configures Neovim with `vim.loader.enable()`, prepends `mise` shims and appends Mason bin on `vim.env.PATH`, migrates polyglot LSPs/formatters/linters from `mason.nvim` to `mise`, locks `mason.nvim` (`PATH = "append"`, `opts_extend = {}`, `opts.servers.<srv>.mason = false`), adds an async `DirChanged` `mise env --json` hook, validates LazyVim v15/v16+ compatibility (`nvim-treesitter` `main` branch, `v:lua.LazyVim.treesitter.foldexpr()`, `lazydev`, `ai.copilot-native`/`ai.sidekick`), and verifies with `nvim --headless +q`.
 
 ### Example 7: Zero-Latency Prompt & Shell Integration (mise + starship)
 ```bash
 system-optimizer mise starship bash
 ```
-Configures `starship.toml` with the native `[mise]` module, disables slow per-language subshell version queries (`[nodejs]`, `[python]`, `[rust]`), bounds prompt timeout to `500ms`, and activates `mise` in `.bashrc` or `$PROFILE` with `env_cache = true` for sub-millisecond directory transitions.
-
+Configures `starship.toml` with `command_timeout = 500`, `[mise]` (`$symbol`/`$health`) or per-language modules paired with `mise` `env_cache = true`, and caches `starship init <shell> --print-full-init`.
 
 ### Example 8: Rust Pre-compiled Binstall & Compilation De-duplication (mise + cargo + topgrade)
 ```bash
 system-optimizer mise cargo topgrade
 ```
-Enables `cargo.binstall = true` in mise for fast pre-compiled Rust binary management, bounds `~/.cargo/config.toml` concurrency to `$(nproc)`, configures Topgrade with `disable = ["cargo"]` to prevent redundant from-source `cargo-update` builds, and routes binary upgrades through `[mise] bump = true`.
-
+Verifies `cargo.binstall = true` in `mise`, cleans `~/.cargo/config.toml` (`[profile.release]`, `git-fetch-with-cli = true`, flagging deprecated `~/.cargo/config`), configures Topgrade with `disable = ["cargo"]` to prevent redundant from-source `cargo-update` builds, and routes binary upgrades through `[mise] bump = true`.
 
 ### Example 9: Autonomous Coding Agent Toolchain & Workspace Synergy (mise + pi + herdr)
 ```bash
 system-optimizer mise pi herdr
 ```
-Ensures autonomous AI coding agent tasks (`pi`) and multiplexed workspaces (`herdr`) inherit active `mise` shims in non-interactive subshell runs (`bash -c`, `pwsh -Command`), eliminating toolchain drift and "command not found" errors on project runtimes (Node, Python, Rust, Go, UV); prunes agent log bloat; tunes compaction token reserves (`16384`); and enforces strict socket and authentication token security (`0600`/`0700`).
+Ensures `pi` and `herdr` inherit active `mise` shims, configures `herdr integration status` + `[session] resume_agents_on_restore = true`, tunes `pi` (`cacheWarming: "idle"`, `PI_CACHE_RETENTION=long`, `defaultProjectTrust`), validates with `herdr config check`, and enforces `0600` permissions on `herdr.sock`, `config.toml`, `auth.json`, and `mcp-auth.json`.
 
 ### Example 10: Broader Cross-Tool Workstation Synergies
 ```bash
 system-optimizer lazygit neovim bat ripgrep fzf mpv yt-dlp winget wsl windows-terminal
 ```
-Configures lazygit to use `nvim --server` / remote tab editing to prevent nested editor spawns, and routes diffs through `bat --color=always --style=changes` for lightweight syntax highlighting; wires ripgrep as the `FZF_DEFAULT_COMMAND` search generator with bat rendering line-numbered previews; configures mpv with yt-dlp and GPU hardware video decoding (`nvdec-copy`/`vaapi`/`d3d11va`) to stream web video directly and bypass browser CPU/RAM usage; and coordinates WinGet download concurrency, WSL2 mirrored networking / memory bounding (`autoMemoryReclaim=dropcache`), and Windows Terminal Atlas GPU text rendering.
+Configures `lazygit` `os.editPreset: "nvim-remote"` and `git.diffRenderers` (`bat`), wires `fd --strip-cwd-prefix` / `rg --files` for `fzf` (`--info=inline-right`) with `bat --theme=auto` previews, configures `mpv` (`vo=gpu-next`, `hwdec=auto-safe`) with `yt-dlp` (`yt-dlp-ejs`, `-N 4`), and aligns WinGet, WSL2 (`autoMemoryReclaim=dropcache`), and Windows Terminal.
 
 ### Example 11: GitHub CLI & Workstation Developer Workflow Synergy (gh + git + lazygit + bat + topgrade)
 ```bash
 system-optimizer gh git lazygit bat topgrade
 ```
-Configures `gh auth setup-git` to register GitHub CLI as Git's credential helper (`!gh auth git-credential`), enabling transparent authentication across CLI and LazyGit without password prompts; routes `gh` diff reviews through `bat --color=always --style=plain` for fast 24-bit syntax highlighting; sets `git_protocol = "ssh"`; configures PR workflow aliases; enforces `0600` permissions on `~/.config/gh/hosts.yml`; and orchestrates automated extension updates via Topgrade.
+Configures `gh auth setup-git` for HTTPS remotes (or `git_protocol: ssh`), sets YAML `pager: bat --color=always --style=plain`, enables `telemetry: disabled` and `expiring_credentials: enabled`, enforces `0600` on `hosts.yml`, tunes `git` (`feature.manyFiles`, `zdiff3`, `rerere`, `rebase.updateRefs`), and uses Topgrade's native `github_cli_extensions` step.
