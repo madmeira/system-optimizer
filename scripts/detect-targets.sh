@@ -72,12 +72,12 @@ else
 
   # Linux Package Managers & Runtimes
   package_runtime_candidates=(
-    "pacman" "yay" "paru" "makepkg" "flatpak" "cargo" "podman" "docker" "mise"
+    "pacman" "yay" "paru" "makepkg" "flatpak" "cargo" "podman" "docker" "mise" "python3" "python"
   )
 
   # Linux Developer Tools & CLI Utilities
   dev_cli_candidates=(
-    "pi" "bash" "topgrade" "git" "neovim" "nvim" "starship" "bat" "fzf" "ripgrep" "rg" "fd"
+    "pi" "bash" "topgrade" "git" "neovim" "nvim" "starship" "bat" "batcat" "fzf" "ripgrep" "rg" "fd" "fdfind"
     "eza" "lsd" "zoxide" "yazi" "ranger" "broot" "delta" "lazygit" "lazydocker"
     "ffmpeg" "mpv" "yt-dlp" "btop" "htop" "syncthing" "sqlite3" "zstd" "pigz"
     "rustdesk" "controld" "ctrld" "herdr" "gh"
@@ -98,6 +98,9 @@ canonical_name() {
     mise-en-place|rtx) echo "mise" ;;
     github-cli|gh) echo "gh" ;;
     btop4win) echo "btop" ;;
+    python3) echo "python" ;;
+    batcat) echo "bat" ;;
+    fdfind) echo "fd" ;;
     *) echo "$t" ;;
   esac
 }
@@ -199,12 +202,13 @@ if is_windows; then
   [[ " ${detected_pms_runtimes[*]:-} " =~ " mise " ]] && balanced_top+=("mise")
   [[ " ${detected_dev_cli[*]:-} " =~ " mpv " ]] && balanced_top+=("mpv")
 else
-  balanced_top=("kernel" "security" "topgrade")
-  [[ " ${detected_pms_runtimes[*]:-} " =~ " mise " ]] && balanced_top+=("mise")
-  [[ " ${detected_pms_runtimes[*]:-} " =~ " pacman " ]] && balanced_top+=("pacman")
-  [[ " ${detected_dev_cli[*]:-} " =~ " git " ]] && balanced_top+=("git")
-  [[ " ${detected_dev_cli[*]:-} " =~ " ripgrep " ]] && balanced_top+=("ripgrep")
-  [[ " ${detected_dev_cli[*]:-} " =~ " starship " ]] && balanced_top+=("starship")
+  balanced_top=("kernel" "storage" "security")
+  [[ " ${detected_dev_cli[*]:-} " == *" topgrade "* ]] && balanced_top+=("topgrade")
+  [[ " ${detected_pms_runtimes[*]:-} " == *" mise "* ]] && balanced_top+=("mise")
+  [[ " ${detected_pms_runtimes[*]:-} " == *" pacman "* ]] && balanced_top+=("pacman")
+  [[ " ${detected_dev_cli[*]:-} " == *" git "* ]] && balanced_top+=("git")
+  [[ " ${detected_dev_cli[*]:-} " == *" ripgrep "* ]] && balanced_top+=("ripgrep")
+  [[ " ${detected_dev_cli[*]:-} " == *" starship "* ]] && balanced_top+=("starship")
   if [[ " ${detected_browsers_desktop[*]:-} " =~ " brave " ]]; then
     balanced_top+=("brave")
   elif [[ " ${detected_browsers_desktop[*]:-} " =~ " librewolf " ]]; then

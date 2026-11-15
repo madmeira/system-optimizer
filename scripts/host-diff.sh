@@ -18,7 +18,7 @@ cfg_files=(.gitconfig .config/git/config .config/starship.toml \
 # Best-effort redaction, so review the output before sharing it: values after KEY/TOKEN/SECRET/PASSWORD names,
 # user:password@ inside URLs, and common token shapes (sk-, ghp_, AIza, xox*).
 redact() {
-  sed -E -e 's/((KEY|TOKEN|SECRET|PASS(WORD)?)[A-Za-z_]*[=:] *).*/\1<redacted>/I' \
+  sed -E -e 's/((KEY|TOKEN|SECRET|PASS(WORD)?)[A-Za-z0-9_-]*["'\'']?[[:space:]]*[=:][[:space:]]*).*/\1<redacted>/I' \
          -e 's#://[^/@[:space:]]+@#://<redacted>@#g' \
          -e 's/(^|[^A-Za-z0-9])(sk-|gh[pousr]_|AIza|xox[abp]-)[A-Za-z0-9_-]{8,}/\1<redacted>/g'
 }

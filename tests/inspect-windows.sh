@@ -13,11 +13,11 @@ esac
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-targets="system security full storage memory cpu boot network firewall defender ssh execution-policy uac wsl powershell pwsh
+targets="system security full kernel sysctl-security sandboxing package-audit storage memory cpu boot network firewall defender ssh execution-policy uac wsl powershell pwsh
 bash git winget windows-terminal powertoys chrome edge brave firefox python pi mise cargo topgrade neovim starship herdr gh mpv
-yt-dlp ripgrep fd eza zoxide bat fzf lazygit btop lazydocker syncthing sqlite3 rustdesk controld"
+yt-dlp ripgrep fd eza zoxide bat fzf lazygit btop lazydocker docker podman syncthing sqlite3 rustdesk controld"
 
-domain_and_browser_targets=" system security full storage memory cpu boot network firewall defender ssh execution-policy uac wsl powershell chrome edge brave firefox "
+domain_and_browser_targets=" system security full kernel sysctl-security sandboxing package-audit storage memory cpu boot network firewall defender ssh execution-policy uac wsl powershell chrome edge brave firefox "
 
 failed=0; count=0
 for t in $targets; do

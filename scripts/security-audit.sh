@@ -212,7 +212,7 @@ ssh_pass_auth="unknown"
 
 if command -v sshd >/dev/null 2>&1; then
   sshd_installed=true
-  if [[ $(first_line_or inactive systemctl is-active sshd) == "active" ]]; then
+  if [[ $(first_line_or inactive systemctl is-active sshd) == "active" || $(first_line_or inactive systemctl is-active ssh) == "active" ]]; then
     sshd_active=true
   fi
 
@@ -294,9 +294,9 @@ keyring_timer_active=$(first_line_or inactive systemctl is-active archlinux-keyr
 
 pending_sec_updates="unknown"
 if command -v arch-audit >/dev/null 2>&1; then
-  pending_sec_updates=$(arch-audit -u 2>/dev/null | wc -l || true)
+  pending_sec_updates=$(arch-audit -u 2>/dev/null | wc -l | tr -d ' ' || true)
 elif command -v checkupdates >/dev/null 2>&1; then
-  pending_updates=$(checkupdates 2>/dev/null | wc -l || true)
+  pending_updates=$(checkupdates 2>/dev/null | wc -l | tr -d ' ' || true)
   pending_sec_updates="$pending_updates total updates pending"
 fi
 
@@ -304,7 +304,7 @@ systemd_sec_ok=0
 systemd_sec_medium=0
 systemd_sec_unsafe=0
 if command -v systemd-analyze >/dev/null 2>&1; then
-  sec_summary=$(systemd-analyze security 2>/dev/null | awk '$2 ~ /^[0-9]/ { if ($2 >= 8.0) unsafe++; else if ($2 >= 5.0) medium++; else ok++ } END { printf "%d %d %d", ok, medium, unsafe }' || echo "0 0 0")
+  sec_summary=$(LC_ALL=C systemd-analyze security 2>/dev/null | LC_ALL=C awk '$2 ~ /^[0-9]/ { if ($2 >= 8.0) unsafe++; else if ($2 >= 5.0) medium++; else ok++ } END { printf "%d %d %d", ok, medium, unsafe }' || echo "0 0 0")
   systemd_sec_ok=$(echo "$sec_summary" | awk '{print $1}')
   systemd_sec_medium=$(echo "$sec_summary" | awk '{print $2}')
   systemd_sec_unsafe=$(echo "$sec_summary" | awk '{print $3}')

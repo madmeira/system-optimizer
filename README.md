@@ -89,7 +89,7 @@ Every invocation — including `full` — strictly enforces a six-rule safety co
 1. **Audit first, read-only**: Hardware probes, security audits, and target inspections never modify system state.
 2. **Propose, then wait**: Findings are presented as numbered proposals; only user-approved items are applied.
 3. **Automatic backups with SHA-256 metadata**: Before editing any existing configuration file, `scripts/backup-config.sh` creates a mode-`0600` timestamped snapshot under `~/.config/system-optimizer/backups/<target>/<filename>.<timestamp>.bak` alongside a `.bak.meta` SHA-256 companion record (inspectable via `--list` and restorable via `--restore`).
-4. **No unattended privilege escalation**: The agent never runs `sudo`, edits root-owned files directly, or prompts for passwords; instead, it outputs the exact privileged command for you to review and run.
+4. **No unattended privilege escalation**: The agent never runs `sudo`, launches elevated PowerShell, edits root-owned files directly, or prompts for passwords; instead, it outputs the exact privileged commands for review and suggests generating a user-owned elevated apply script at the end of the run.
 5. **Explicit confirmation for outward-facing actions**: Network installs, git pushes, PR creation, or external messages always require prior confirmation.
 6. **Per-host coverage honesty**: Never claim "no problem found" for a host, file, or setting that was not read; explicitly state what was inspected vs. not covered per host.
 
@@ -108,19 +108,19 @@ The skill is **100% generic** and contains **no hardcoded hardware values**. Eve
 3. **Research Upstream Standards** (verify current syntax, deprecations, and CVEs)
 4. **Propose & Apply Triad Optimizations** (backed up via `backup-config.sh`)
 5. **Verification & Health Checks** (config syntax validation, dry-runs, service health)
-6. **Memory Persistence & Final Report** (update `MEMORY.md` and `MASTER_MEMORY.md`)
+6. **Memory Persistence, Final Report & Elevated Script Offer** (update `MEMORY.md` and `MASTER_MEMORY.md`, and offer a consolidated elevated apply script when privileged suggestions remain)
 
 ## Supported Targets
 
-`scripts/target-inspect.sh` and the optimization guide cover **47 targets** across system domains, OS platforms, browsers, and developer tools:
+`scripts/target-inspect.sh` and the optimization guide cover **60 targets** across system domains, OS platforms, browsers, and developer tools:
 
 | Category | Targets |
 |---|---|
-| **System Domains** | `system`, `security`, `storage`, `network`, `full` |
-| **Windows 11 / 10** | `winget`, `windows-terminal`, `wsl`, `pwsh`, `powertoys`, `defender` |
-| **Linux** | `pacman`, `yay`, `makepkg`, `kde-plasma` (plus `systemd`, `sysctl`, `flatpak`, `ufw`/`nftables` via domain probes) |
+| **System Domains** | `system`, `security`, `storage`, `network`, `kernel`, `memory`, `cpu`, `boot`, `firewall`, `ssh`, `sandboxing`, `package-audit`, `full` |
+| **Windows 11 / 10** | `winget`, `windows-terminal`, `wsl`, `pwsh`, `powertoys`, `defender`, `execution-policy`, `uac` |
+| **Linux** | `pacman`, `yay`, `makepkg`, `flatpak`, `kde-plasma` (plus `systemd`, `sysctl`, `ufw`/`nftables` aliases) |
 | **Web Browsers** | `brave`, `chrome`, `edge`, `firefox`, `librewolf` |
-| **Runtimes & Containers** | `mise`, `topgrade`, `cargo`, `python`, `podman`, `lazydocker` |
+| **Runtimes & Containers** | `mise`, `topgrade`, `cargo`, `python`, `podman`, `docker`, `lazydocker` |
 | **Editor, Shell & CLI** | `neovim`, `bash`, `starship`, `bat`, `fzf`, `ripgrep`, `fd`, `zoxide`, `eza`, `sqlite3` |
 | **Git & GitHub** | `git`, `gh`, `lazygit` |
 | **AI Coding Agents** | `pi`, `herdr` |
@@ -189,6 +189,7 @@ After applying approved optimizations, the skill maintains state under `~/.confi
 - **`~/.config/system-optimizer/<target>/MEMORY.md`**: Per-target record storing hardware snapshot, upstream standards, applied Triad settings, backup SHA-256 ledger, verification output, and run changelog.
 - **`~/.config/system-optimizer/MASTER_MEMORY.md`**: Cross-system ledger tracking the host hardware/security baseline, registered targets matrix, active cross-tool synergies, global resource budget, and cumulative history.
 - **`~/.config/system-optimizer/backups/<target>/`**: Mode-`0700` per-target backup directories containing mode-`0600` `<filename>.<timestamp>.bak` snapshots and `.bak.meta` SHA-256 companion records (`backup-config.sh --list`).
+- **`~/.config/system-optimizer/elevated/`**: Optional user-owned elevated apply scripts (`apply-elevated-<timestamp>.sh` mode `0700` on Linux, or `.ps1` on Windows) offered at the end of runs with privileged suggestions — featuring `--dry-run`/`-DryRun` previews, out-of-tree system backups (`/var/backups/system-optimizer/` or `%ProgramData%\system-optimizer\backups\`), pre-reload syntax checks, and rollback manifests.
 
 ## Repository Structure
 
@@ -210,11 +211,11 @@ system-optimizer/
 │   ├── backup-config.sh              # Pre-modification backup, SHA-256 ledger & restore manager
 │   ├── remote-run.sh                 # Run one of these scripts on another host over SSH
 │   ├── host-diff.sh                  # Compare shell startup files & tool configs between two hosts (secrets redacted)
-│   └── target-inspect.sh             # Per-target configuration & cross-tool synergy inspector (44 targets)
+│   └── target-inspect.sh             # Per-target configuration & cross-tool synergy inspector (60 targets)
 └── tests/
     ├── backup-smoke.sh               # Backup, list, restore, and path-traversal safety tests
     ├── probe-fallback.sh             # Verifies probes report "unknown" when PowerShell is unavailable
-    ├── inspect-smoke.sh              # Runs all 44 targets in a clean environment + synergy assertions
+    ├── inspect-smoke.sh              # Runs all 60 targets in a clean environment + synergy assertions
     ├── inspect-windows.sh            # Smoke test for Windows-specific targets on Windows runners
     ├── json-escape.sh                # Validates JSON escaping for quotes, backslashes & control chars
     └── windows-baseline.sh           # Manual helper to run all probes on a Windows host (Git Bash)

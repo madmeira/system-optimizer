@@ -1,6 +1,6 @@
 ---
 name: system-optimizer
-description: Audits, tunes, hardens, and speeds up Windows and Linux systems, shells, terminals, browsers, package managers, runtimes, and CLI tools across Performance, Configuration, and Security. Use when the user wants to inspect or optimize OS settings (storage/TRIM, memory/zram, CPU/power, network, boot), security posture (Defender/PUA, firewall, sysctl, SSH, ExecutionPolicy), Windows/Linux environments (winget, windows-terminal, wsl, pwsh, powertoys, pacman, yay, makepkg, flatpak, podman, lazydocker, systemd, kde-plasma), browsers (brave, chrome, edge, firefox, librewolf), or developer tools (git, gh, lazygit, topgrade, mise, cargo, python, neovim, ripgrep, fd, zoxide, eza, starship, bat, fzf, mpv, yt-dlp, btop, htop, syncthing, sqlite3, rustdesk, controld, pi, bash, herdr). Run without arguments to probe hardware and present numbered tuning options.
+description: Audits, tunes, hardens, and speeds up Windows and Linux systems, shells, terminals, browsers, package managers, runtimes, and CLI tools across Performance, Configuration, and Security. Use when the user wants to inspect or optimize OS settings (storage/TRIM, memory/zram, CPU/power, network, boot), security posture (Defender/PUA, firewall, sysctl, SSH, ExecutionPolicy), Windows/Linux environments (winget, windows-terminal, wsl, pwsh, powertoys, pacman, yay, makepkg, flatpak, podman, docker, lazydocker, systemd, kde-plasma), browsers (brave, chrome, edge, firefox, librewolf), or developer tools (git, gh, lazygit, topgrade, mise, cargo, python, neovim, ripgrep, fd, zoxide, eza, starship, bat, fzf, mpv, yt-dlp, btop, htop, syncthing, sqlite3, rustdesk, controld, pi, bash, herdr). Run without arguments to probe hardware and present numbered tuning options.
 license: MIT
 compatibility: Requires bash >= 4.0; PowerShell 5.1+ or pwsh on Windows
 ---
@@ -20,7 +20,7 @@ A comprehensive optimization skill for Windows and Linux systems, package manage
 1. **Audit first, read-only.** Probes and inspections change nothing.
 2. **Propose, then wait.** Present findings as numbered proposals; change only the items the user approves.
 3. **Back up before editing.** Run `scripts/backup-config.sh <file> <target> "<why>"` before touching any existing file.
-4. **Never run privileged commands yourself.** For `sudo`, root-owned files or passwords, give the user the exact command to run.
+4. **Never run privileged commands yourself.** For `sudo`, Administrator PowerShell, root-owned files, or passwords, never execute them directly — present the exact commands in proposals and, at the end of the run, suggest creating a reviewable elevated apply script containing all pending privileged changes.
 5. **Ask before anything outward-facing** (pushes, PRs, messages, installs from the network).
 6. **Say what was checked, per host.** Never write "no problem found" for a host, file or setting you did not read. Name each host and what was inspected on it; list what was not covered.
 
@@ -42,11 +42,11 @@ Script paths below (`scripts/...`, `references/...`) are relative to the skill f
 
 | Kind | Targets |
 |---|---|
-| Domains | `system`, `security`, `storage`, `network`, `full` |
-| Windows | `winget`, `windows-terminal`, `wsl`, `pwsh`, `powertoys`, `defender` |
-| Linux | `pacman`, `yay`, `makepkg`, `kde-plasma` |
+| Domains | `system`, `security`, `storage`, `network`, `kernel`, `memory`, `cpu`, `boot`, `firewall`, `ssh`, `sandboxing`, `package-audit`, `full` |
+| Windows | `winget`, `windows-terminal`, `wsl`, `pwsh`, `powertoys`, `defender`, `execution-policy`, `uac` |
+| Linux | `pacman`, `yay`, `makepkg`, `flatpak`, `kde-plasma` |
 | Browsers | `brave`, `chrome`, `edge`, `firefox`, `librewolf` |
-| Runtimes & orchestration | `mise`, `topgrade`, `cargo`, `python`, `podman`, `lazydocker` |
+| Runtimes & orchestration | `mise`, `topgrade`, `cargo`, `python`, `podman`, `docker`, `lazydocker` |
 | Editor, shell & git | `neovim`, `starship`, `bat`, `fzf`, `ripgrep`, `fd`, `zoxide`, `eza`, `sqlite3`, `bash`, `git`, `gh`, `lazygit` |
 | Media, sync & remote | `mpv`, `yt-dlp`, `syncthing`, `rustdesk`, `controld` |
 | Agents | `pi`, `herdr` |
@@ -92,7 +92,7 @@ When **Full Optimization** is selected, the skill systematically orchestrates th
 |---|---|---|
 | 1. System core & OS baseline | TRIM, memory compression / zram, power plan / CPU governor, network, sysctl, startup audit | `storage`, `network`, `system` |
 | 2. Security hardening | Firewall (`ufw`/`nftables`/Defender), Defender/PUA, sysctl hardening, execution policy, package integrity | `security`, `defender` |
-| 3. Subsystems & package orchestration | Package managers, WSL, containers, runtimes, update coordination | `winget`, `pacman`, `yay`, `makepkg`, `wsl`, `podman`, `lazydocker`, `mise`, `cargo`, `python`, `topgrade` |
+| 3. Subsystems & package orchestration | Package managers, WSL, containers, runtimes, update coordination | `winget`, `pacman`, `yay`, `makepkg`, `flatpak`, `wsl`, `podman`, `docker`, `lazydocker`, `mise`, `cargo`, `python`, `topgrade` |
 | 4. Terminal, desktop, browsers & shell | Terminal engine, desktop compositor, browsers, shell profiles, history | `windows-terminal`, `kde-plasma`, `pwsh`, `bash`, `brave`, `chrome`, `edge`, `firefox`, `librewolf` |
 | 5. Developer, media & monitor toolchain | Editor, search, git, media, agents, monitors, sync & remote tools | `neovim`, `lazygit`, `ripgrep`, `fd`, `zoxide`, `eza`, `bat`, `fzf`, `starship`, `git`, `gh`, `mpv`, `yt-dlp`, `pi`, `herdr`, `btop`, `htop`, `syncthing`, `sqlite3`, `rustdesk`, `controld`, `powertoys` |
 
@@ -145,7 +145,7 @@ When **Full Optimization** is selected, the skill systematically orchestrates th
                                     │
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ 6. Update ~/.config/system-optimizer/ Memory & Present Summary Report  │
+│ 6. Update Memory, Present Summary Report & Offer Elevated Apply Script │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -222,7 +222,7 @@ Propose improvements across all three pillars, and apply only the items the user
   - Ensure non-interactive AI agent subshells (`pi`, `herdr`) inherit `mise` shims on `PATH` and prune stale session logs (>30d).
 
 #### 3. Security
-- **Privileged Changes (Safety Contract #4)**: Elevated Windows commands (`Enable-MMAgent -mc`, `Set-MpPreference -PUAProtection 1`, `Optimize-Volume -ReTrim`, `fsutil 8dot3name set`) and root-owned Linux configs (`/etc/sysctl.d/*`, `/etc/pacman.conf`, `/etc/ssh/sshd_config`) MUST NEVER be executed directly by the agent — present the exact command for the user to run.
+- **Privileged Changes (Safety Contract #4)**: Elevated Windows commands (`Enable-MMAgent -mc`, `Set-MpPreference -PUAProtection 1`, `Optimize-Volume -ReTrim`, `fsutil 8dot3name set`) and root-owned Linux configs (`/etc/sysctl.d/*`, `/etc/pacman.conf`, `/etc/makepkg.conf`, `/etc/ssh/sshd_config.d/*`, systemd services/timers) MUST NEVER be executed directly by the agent — present the exact commands for review and collect all pending privileged suggestions so Phase 6 can offer a consolidated elevated apply script at the end.
 - **System & Shell Hardening**: Verify all Firewall profiles active with BlockInbound default, Defender Real-Time & PUA protection, Linux sysctl kernel hardening (`kptr_restrict`, `dmesg_restrict`, `unprivileged_bpf_disabled`, `protected_fifos`/`regular`), PowerShell `RemoteSigned`, sanitized `PATH` (no `.` or empty entries), and scrubbed shell history.
 - **Supply Chain & Least Privilege** *(details in `references/optimization-guide.md` §2 & §5)*: Enforce cryptographic verification (`mise` SLSA/cosign/attestations + `allow_root = false`, `winget` hash/cert checks enabled, `pacman` `SigLevel = Required DatabaseOptional`, `cargo` lockfile checksums) and `0600` permissions on credentials/sockets (`~/.ssh`, `gh/hosts.yml`, `pi/agent/auth.json`, `herdr.sock`).
 ---
@@ -268,6 +268,17 @@ Conclude every run with:
 - **Coverage**: Per host, which targets and files were actually read, and which were not (see Safety Contract 6).
 - **Persistent Memory Confirmation**: Notification of updated records in `~/.config/system-optimizer/`.
 - **Actionable Recommendations**: Next steps (e.g. terminal reload, PowerShell session restart, optional companion packages, security updates).
+- **Elevated Suggestions & Script Offer**: List all unapplied privileged optimizations under **Pending Elevated Suggestions**, and **always suggest creating a consolidated elevated apply script** at the end whenever one or more privileged items exist.
+
+#### 4. Suggest Creation of an Elevated Apply Script (When Privileged Items Exist)
+Whenever a run produces one or more optimizations requiring elevation (`sudo`, root-owned `/etc/*` files, or systemd units on Linux; Run-as-Administrator PowerShell, `HKLM:` registry keys, Defender, `fsutil`, or `Optimize-Volume` on Windows):
+- **Propose at the end of the report**: Explicitly offer to bundle all pending elevated suggestions from the run into a single reviewable script under `~/.config/system-optimizer/elevated/apply-elevated-<YYYYMMDD-HHMMSS>.sh` (`umask 077`, `chmod 0700` on Linux) or `apply-elevated-<YYYYMMDD-HHMMSS>.ps1` (on Windows) so the user does not have to copy-paste privileged commands one by one. Omit this offer only when zero elevated suggestions exist. On multi-host runs, generate separate per-host scripts.
+- **Create only on user approval, never execute**: Write the script to the user-owned `~/.config/system-optimizer/elevated/` directory once approved (or immediately if the user asked for the script), then print the exact review, dry-run, and execution commands (`less <script> && bash <script> --dry-run && sudo bash <script>` on Linux; `Get-Content <script>`, `& <script> -DryRun`, then `& <script>` in an Administrator PowerShell prompt on Windows). **Never invoke `sudo`, `su`, `pkexec`, `runas`, or `Start-Process -Verb RunAs` yourself** (Safety Contract #4).
+- **Mandatory script safeguards** *(follow the templates in `references/optimization-guide.md` §2)*:
+  1. **Strict mode, privilege guard & dry-run**: `set -euo pipefail`, `--dry-run` flag, and `[[ $EUID -eq 0 ]]` check on Linux; `[CmdletBinding(SupportsShouldProcess)] param([switch]$DryRun)`, `$ErrorActionPreference = 'Stop'`, `Set-StrictMode -Version Latest`, and Administrator role check on Windows.
+  2. **System backups outside `$HOME` and outside scanned `.d` directories**: Snapshot touched system configs or `HKLM:` keys into `/var/backups/system-optimizer/<timestamp>/` (`chmod 0700`, with `MANIFEST.sha256`) on Linux or `$env:ProgramData\system-optimizer\backups\<timestamp>\` on Windows. Never write root-owned files into `$HOME/.config/system-optimizer/` and never leave `.bak` files inside scanned drop-in directories (`/etc/sysctl.d/`, `/etc/ssh/sshd_config.d/`, `/etc/sudoers.d/`, `/etc/systemd/`).
+  3. **Idempotency, validation & rollback summary**: Check current state before mutating, validate syntax before reloading services (`sshd -t` before `systemctl reload sshd`/`ssh`, `sysctl --system` check), log `[step/total]` progress, and print the exact backup path and rollback instructions on exit.
+  4. **Memory persistence**: Record pending elevated items and any generated script path in `MASTER_MEMORY.md` (and per-target `MEMORY.md`) as `Pending user execution` until verified on a later run.
 
 ---
 
