@@ -122,7 +122,17 @@ elif [[ "${1:-}" == "start" ]]; then
 fi
 EOF
 
-chmod +x "$WORK/mockbin/rg" "$WORK/mockbin/fd" "$WORK/mockbin/bat" "$WORK/mockbin/mise" "$WORK/mockbin/nvim" "$WORK/mockbin/ctrld"
+#   - agy 1.5.9 with --sandbox, plugin, mcp in --help -> VERIFIED via alias
+cat > "$WORK/mockbin/agy" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--version" ]]; then
+  echo "1.5.9"
+elif [[ "${1:-}" == "--help" ]]; then
+  echo "Usage: agy --sandbox plugin mcp"
+fi
+EOF
+
+chmod +x "$WORK/mockbin/rg" "$WORK/mockbin/fd" "$WORK/mockbin/bat" "$WORK/mockbin/mise" "$WORK/mockbin/nvim" "$WORK/mockbin/ctrld" "$WORK/mockbin/agy"
 mkdir -p "$WORK/home/.config/mise" "$WORK/home/.config/nvim/lua/plugins"
 cat > "$WORK/home/.config/mise/config.toml" <<'EOF'
 [settings]
@@ -161,17 +171,29 @@ for expected in "[VERIFIED]" "[VERSION AHEAD]" "[SCHEMA DRIFT]" "[DEPRECATED CON
 done
 echo "ok   - VERIFIED, VERSION AHEAD, SCHEMA DRIFT, and DEPRECATED CONFIG verified"
 
-# 4. Alias resolution (rg -> ripgrep, nvim -> neovim, ctrld -> controld), mason scoping, and domain-target skip
-alias_json="$(run_isolated "$WORK/mockbin:$WORK/emptybin" "$DRIFT" --json rg nvim ctrld storage firefox)"
+# 4. Alias resolution (rg -> ripgrep, nvim -> neovim, ctrld -> controld, agy -> antigravity), mason scoping, and domain-target skip
+alias_json="$(run_isolated "$WORK/mockbin:$WORK/emptybin" "$DRIFT" --json rg nvim ctrld agy storage firefox)"
 "$PY" - "$alias_json" <<'PYEOF'
 import json, sys
 data = json.loads(sys.argv[1])
 by_name = {t["target"]: t for t in data["targets"]}
-assert set(by_name.keys()) == {"ripgrep", "neovim", "controld"}, f"unexpected targets: {by_name.keys()}"
+assert set(by_name.keys()) == {"ripgrep", "neovim", "controld", "antigravity"}, f"unexpected targets: {by_name.keys()}"
 assert by_name["neovim"]["status"] == "verified", f"mason-tool-installer caused false positive: {by_name['neovim']}"
 assert by_name["controld"]["status"] == "verified", f"expected controld verified, got {by_name['controld']}"
+assert by_name["antigravity"]["status"] == "verified", f"expected antigravity verified, got {by_name['antigravity']}"
 PYEOF
-echo "ok   - aliases (rg, nvim, ctrld), mason-lspconfig scoping, and OS/GUI domain skip verified"
+mkdir -p "$WORK/home/.gemini/config"
+printf '{"mcpServers":{"legacy":{"serverUrl":"https://example.com/sse","type":"sse"}}}\n' > "$WORK/home/.gemini/config/mcp_config.json"
+agy_dep_json="$(run_isolated "$WORK/mockbin:$WORK/emptybin" "$DRIFT" --json agy)"
+"$PY" - "$agy_dep_json" <<'PYEOF'
+import json, sys
+data = json.loads(sys.argv[1])
+by_name = {t["target"]: t for t in data["targets"]}
+assert by_name["antigravity"]["status"] == "deprecated_config", f"expected deprecated_config, got {by_name['antigravity']}"
+findings = " ".join(by_name["antigravity"]["findings"])
+assert "serverUrl" in findings and "sse" in findings, f"missing expected MCP findings: {findings}"
+PYEOF
+echo "ok   - aliases (rg, nvim, ctrld, agy), antigravity MCP drift, mason-lspconfig scoping, and OS/GUI domain skip verified"
 
 # 5. Live host run (both --json and human output) must succeed and emit valid JSON
 live_json="$(bash "$DRIFT" --json)"

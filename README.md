@@ -3,11 +3,12 @@
 [![CI](https://github.com/madmeira/system-optimizer/actions/workflows/ci.yml/badge.svg)](https://github.com/madmeira/system-optimizer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A hardware-aware, cross-platform system, runtime, and developer toolchain optimizer across **Performance**, **Configuration**, and **Security** — packaged as an agent skill for [Pi](https://github.com/badlogic/pi-mono), Claude Code, Codex, and other `.agents/skills`-compatible coding agents, with standalone Bash probe scripts.
+A hardware-aware, cross-platform system, runtime, and developer toolchain optimizer across **Performance**, **Configuration**, and **Security** — packaged as an agent skill for [Pi](https://github.com/badlogic/pi-mono), Antigravity (`agy`), Claude Code, Codex, and other `.agents/skills`-compatible coding agents, with standalone Bash probe scripts.
 
 | Agent | Invocation | Status |
 |---|---|---|
 | Pi | `/skill:system-optimizer [targets]` | Original target |
+| Antigravity (`agy` / IDE / 2.0) | `/system-optimizer [targets]`, or ask for it by name (`~/.gemini/config/skills/system-optimizer/`, `~/.gemini/config/skills.json`, or workspace `.agents/skills/system-optimizer/`) | Verified: `agy` CLI & Linux host |
 | Claude Code | `/system-optimizer [targets]` (skill folder `~/.claude/skills/system-optimizer/`) | Verified: `full` audit run on a Windows 11 VM (read-only) |
 | Codex | Mention `system-optimizer` by name, or copy `SKILL.md` into `AGENTS.md` | Untested |
 
@@ -50,6 +51,22 @@ npx skills remove    # uninstall
 
 To install by hand instead, clone or copy the whole skill folder (see [Repository Structure](#repository-structure)); every script in `scripts/` sources `scripts/lib.sh` next to it.
 
+#### Antigravity (`agy` / Antigravity IDE / Antigravity 2.0)
+
+Antigravity discovers workspace skills under `<repo>/.agents/skills/` and global skills under `~/.gemini/config/skills/`. To share a single copy installed by `npx skills` or Pi globally across all workspaces without duplicating files, register the parent directory in `~/.gemini/config/skills.json`:
+
+```json
+{
+  "entries": [
+    { "path": "~/.agents/skills" }
+  ]
+}
+```
+
+*(Replace `~/.agents/skills` with `~/.pi/agent/skills` if Pi owns the skill folder, or symlink `system-optimizer` directly into `~/.gemini/config/skills/system-optimizer`.)*
+
+When auditing host-wide targets outside the active workspace under Antigravity, enable `allowNonWorkspaceAccess` for trusted sessions and run probe/backup scripts with `BypassSandbox: true` (or inspect/edit files with `read_file`/`write_file`) so scripts observe the real host rather than sandbox overlays.
+
 ## Quick Start & Usage
 
 Invoke the skill with no arguments for an interactive hardware/OS probe and a 9-option discovery menu, or pass one or more specific targets:
@@ -76,7 +93,7 @@ When called **without arguments**, the skill probes your host and presents nine 
 2. **System Security Hardening & Posture** (Firewall, Defender/PUA, sysctl, ExecutionPolicy, SSH, systemd sandboxing)
 3. **Package Managers & Runtimes** (`winget`, `pacman`, `yay`, `makepkg`, `paccache`, `flatpak`, `wsl`, `podman`, `cargo`, `python`, `uv`, `mise`)
 4. **Web Browsers & Terminal / Desktop** (`windows-terminal`, `kde-plasma`, `brave`, `chrome`, `edge`, `librewolf`, `firefox`)
-5. **Developer & CLI Tools** (`neovim`, `starship`, `bat`, `fzf`, `ripgrep`, `fd`, `zoxide`, `eza`, `lazygit`, `git`, `gh`, `mpv`, `yt-dlp`, `pi`, `herdr`, etc.)
+5. **Developer & CLI Tools** (`neovim`, `starship`, `bat`, `fzf`, `ripgrep`, `fd`, `zoxide`, `eza`, `lazygit`, `git`, `gh`, `mpv`, `yt-dlp`, `pi`, `antigravity`, `herdr`, etc.)
 6. **Curated Top Balanced Recommendations** (high-impact cross-cutting picks for your host)
 7. **Full System Optimization (`full`)** (orchestrated across 5 sequential tiers)
 8. **Custom Selection**
@@ -99,7 +116,7 @@ Every invocation — including `full` — strictly enforces a six-rule safety co
 
 1. **Performance**: Thread concurrency (`nproc` / logical processors), RAM-tier caching bounds, GPU hardware acceleration (DirectX / D3D11 / NVDEC / Vulkan / VA-API), SSD TRIM & mount optimization, CPU power plans / scaling governors, memory compression (Windows MMAgent / Linux zram), and WSL2 / container resource limits.
 2. **Configuration**: Modern upstream defaults verified against live installed binary schemas (`tool-drift-check.sh`), shell & editor ergonomics, cross-tool companion integrations, pruning of deprecated or conflicting flags, static shell startup caching, and automated update orchestration (`topgrade`, `winget`, `pacman`, `paccache`).
-3. **Security**: Attack surface reduction (Microsoft Defender PUA & Exploit Guard / Linux `/etc/sysctl.d/` hardening), firewall verification (`ufw` / `nftables` / Defender Firewall), script execution policies (`pwsh` `RemoteSigned`), cryptographic supply-chain verification (`mise` SLSA/cosign/npm provenance/`minimum_release_age`, `pacman` `DownloadUser = alpm` & `SigLevel`, `winget` hash checks, `uv` `exclude-newer` & `uv audit`), and least-privilege permissions (`0600` credentials & agent sockets including `pi` `auth.json`/`mcp-auth.json` and `herdr.sock`).
+3. **Security**: Attack surface reduction (Microsoft Defender PUA & Exploit Guard / Linux `/etc/sysctl.d/` hardening), firewall verification (`ufw` / `nftables` / Defender Firewall), script execution policies (`pwsh` `RemoteSigned`), cryptographic supply-chain verification (`mise` SLSA/cosign/npm provenance/`minimum_release_age`, `pacman` `DownloadUser = alpm` & `SigLevel`, `winget` hash checks, `uv` `exclude-newer` & `uv audit`), and least-privilege permissions (`0600` credentials & agent sockets including `pi` `auth.json`/`mcp-auth.json`, `antigravity` `oauth_creds.json`/`mcp_config.json`, and `herdr.sock`).
 
 The skill is **100% generic** and contains **no hardcoded hardware values**. Every run executes a **6-Phase Execution Pipeline** with a dynamic schema gate:
 
@@ -113,7 +130,7 @@ The skill is **100% generic** and contains **no hardcoded hardware values**. Eve
 
 ## Supported Targets
 
-`scripts/target-inspect.sh` and the optimization guide cover **63 targets** across system domains, OS platforms, browsers, and developer tools:
+`scripts/target-inspect.sh` and the optimization guide cover **64 targets** across system domains, OS platforms, browsers, and developer tools:
 
 | Category | Targets |
 |---|---|
@@ -124,7 +141,7 @@ The skill is **100% generic** and contains **no hardcoded hardware values**. Eve
 | **Runtimes & Containers** | `mise`, `topgrade`, `cargo`, `python`, `uv`, `podman`, `docker`, `lazydocker` |
 | **Editor, Shell & CLI** | `neovim`, `bash`, `starship`, `bat`, `fzf`, `ripgrep`, `fd`, `zoxide`, `eza`, `sqlite3` |
 | **Git & GitHub** | `git`, `gh`, `lazygit` |
-| **AI Coding Agents** | `pi`, `herdr` |
+| **AI Coding Agents** | `pi`, `antigravity` (`agy`), `herdr` |
 | **Media, Sync & Remote** | `mpv`, `yt-dlp`, `syncthing`, `rustdesk`, `controld` |
 | **System Monitors** | `btop`, `htop` |
 
@@ -153,7 +170,7 @@ The skill is **100% generic** and contains **no hardcoded hardware values**. Eve
 - **`lazygit` + `neovim` + `bat`**: Remote tab editing via `os.editPreset: "nvim-remote"`, paired with `git.diffRenderers` running `bat --color=always --style=changes,numbers`.
 - **`ripgrep` / `fd` + `fzf` + `bat`**: `.gitignore`-aware `fd --strip-cwd-prefix` / `rg --files` search with `fzf` (`--info=inline-right`) and `bat --theme=auto` previews.
 - **`gh` + `git` + `lazygit` + `topgrade`**: HTTPS `gh auth setup-git` / SSH workflow, `bat` pager, and Topgrade's native `github_cli_extensions` step.
-- **`herdr` + `pi` + `mise`**: Non-interactive agent subshell `mise` shim inheritance, `herdr integration status` + `resume_agents_on_restore`, `herdr update --handoff`, and `0600` socket/auth hardening (`herdr.sock`, `auth.json`, `mcp-auth.json`).
+- **`herdr` + `pi` + `antigravity` + `mise`**: Non-interactive agent subshell `mise` shim inheritance, `herdr integration status` + `resume_agents_on_restore`, `herdr update --handoff`, and `0600` socket/auth hardening (`herdr.sock`, `auth.json`, `mcp-auth.json`, `oauth_creds.json`).
 - **`mpv` + `yt-dlp` + GPU**: Hardware-decoded streaming video (`vo=gpu-next`, `profile=high-quality`, zero-copy `hwdec=auto-safe`, `yt-dlp-ejs` + `-N 4`) with strict TLS certificate verification.
 
 ## Standalone CLI Scripts
@@ -216,7 +233,7 @@ system-optimizer/
 │   ├── backup-config.sh              # Pre-modification backup, SHA-256 ledger & restore manager
 │   ├── remote-run.sh                 # Run one of these scripts on another host over SSH
 │   ├── host-diff.sh                  # Compare shell startup files & tool configs between two hosts (secrets redacted)
-│   ├── target-inspect.sh             # Per-target configuration & cross-tool synergy inspector (63 targets)
+│   ├── target-inspect.sh             # Per-target configuration & cross-tool synergy inspector (64 targets)
 │   └── tool-drift-check.sh           # Offline live CLI/schema introspection & config deprecation gate
 └── tests/
     ├── backup-smoke.sh               # Backup, list, restore, and path-traversal safety tests

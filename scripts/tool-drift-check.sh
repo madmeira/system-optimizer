@@ -88,6 +88,7 @@ resolve_alias() {
     powershell) echo "pwsh" ;;
     pacman-contrib) echo "paccache" ;;
     btop4win) echo "btop" ;;
+    agy|antigravity-cli|antigravity-ide) echo "antigravity" ;;
     *) echo "$1" ;;
   esac
 }
@@ -107,6 +108,7 @@ get_verified_baseline() {
   case "$1" in
     mise) echo "2026.11" ;;
     pi) echo "1.5" ;;
+    antigravity) echo "1.5" ;;
     topgrade) echo "17.16" ;;
     neovim) echo "0.12" ;;
     herdr) echo "0.9" ;;
@@ -275,6 +277,7 @@ probe_target() {
   case "$target" in
     mise) bin="$(command -v mise 2>/dev/null || true)" ;;
     pi) bin="$(command -v pi 2>/dev/null || true)" ;;
+    antigravity) bin="$(command -v agy 2>/dev/null || command -v antigravity 2>/dev/null || true)" ;;
     topgrade) bin="$(command -v topgrade 2>/dev/null || true)" ;;
     neovim) bin="$(command -v nvim 2>/dev/null || true)" ;;
     herdr) bin="$(command -v herdr 2>/dev/null || true)" ;;
@@ -470,6 +473,15 @@ probe_target() {
         fi
       fi
       ;;
+    antigravity)
+      out_cap=$(run_bounded "$bin" --help 2>&1 || true)
+      out_cap=$(printf '%s' "$out_cap" | clean_output || true)
+      if [[ "$out_cap" != *"--sandbox"* || "$out_cap" != *"plugin"* || "$out_cap" != *"mcp"* ]]; then
+        schema_drift=true
+        schema_ok="false"
+        findings+=("agy --help missing expected --sandbox, plugin, or mcp options")
+      fi
+      ;;
     herdr)
       out_cap=$(run_bounded "$bin" --default-config 2>&1 || true)
       out_cap=$(printf '%s' "$out_cap" | clean_output || true)
@@ -629,6 +641,19 @@ probe_target() {
           fi
         fi
       done
+      ;;
+    antigravity)
+      local agy_mcp="$HOME/.gemini/config/mcp_config.json"
+      if [[ -r "$agy_mcp" ]]; then
+        if uncommented_match "$agy_mcp" '"serverUrl"[[:space:]]*:'; then
+          deprecated_cfg=true
+          findings+=("$agy_mcp uses legacy 'serverUrl' key (use 'url' for Streamable HTTP MCP servers)")
+        fi
+        if uncommented_match "$agy_mcp" '"type"[[:space:]]*:[[:space:]]*"sse"'; then
+          deprecated_cfg=true
+          findings+=("$agy_mcp uses unsupported legacy SSE transport 'type: sse' (use Streamable HTTP or mcp-remote stdio bridge)")
+        fi
+      fi
       ;;
     lazygit)
       local lg_cfg=""
@@ -824,7 +849,7 @@ probe_target() {
 }
 
 ALL_TARGETS=(
-  mise pi topgrade neovim herdr lazygit fzf cargo python uv git gh
+  mise pi antigravity topgrade neovim herdr lazygit fzf cargo python uv git gh
   starship zoxide ripgrep fd eza bat mpv yt-dlp syncthing podman docker
   lazydocker flatpak pacman yay paccache btop htop sqlite3 rustdesk controld pwsh
 )

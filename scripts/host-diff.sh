@@ -16,7 +16,8 @@ cfg_files=(.gitconfig .config/git/config .config/starship.toml \
            .config/uv/uv.toml .config/bat/config .config/lazygit/config.yml .config/lazydocker/config.yml \
            .config/gh/config.yml .config/mpv/mpv.conf .config/yt-dlp/config \
            .config/containers/containers.conf .config/pacman/makepkg.conf .config/yay/config.json \
-           .sqliterc .pi/agent/settings.json)
+           .sqliterc .pi/agent/settings.json \
+           .gemini/antigravity-cli/settings.json .gemini/config/skills.json)
 
 # Best-effort redaction, so review the output before sharing it: values after KEY/TOKEN/SECRET/PASSWORD names,
 # user:password@ inside URLs, and common token shapes (sk-, ghp_, AIza, xox*).
