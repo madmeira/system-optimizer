@@ -8,7 +8,7 @@ A hardware-aware, cross-platform system, runtime, and developer toolchain optimi
 | Agent | Invocation | Status |
 |---|---|---|
 | Pi | `/skill:system-optimizer [targets]` | Original target |
-| Antigravity (`agy` / IDE / 2.0) | `/system-optimizer [targets]`, or ask for it by name (`~/.gemini/config/skills/system-optimizer/`, `~/.gemini/config/skills.json`, or workspace `.agents/skills/system-optimizer/`) | Verified: `agy` CLI & Linux host |
+| Antigravity (`agy` / IDE / 2.0) | `/system-optimizer [targets]`, or ask for it by name (global `~/.gemini/config/skills/system-optimizer/` or workspace `.agents/skills/system-optimizer/`) | Verified: `agy` CLI, Linux & Windows 11 hosts |
 | Claude Code | `/system-optimizer [targets]` (skill folder `~/.claude/skills/system-optimizer/`) | Verified: `full` audit run on a Windows 11 VM (read-only) |
 | Codex | Mention `system-optimizer` by name, or copy `SKILL.md` into `AGENTS.md` | Untested |
 
@@ -53,19 +53,16 @@ To install by hand instead, clone or copy the whole skill folder (see [Repositor
 
 #### Antigravity (`agy` / Antigravity IDE / Antigravity 2.0)
 
-Antigravity discovers workspace skills under `<repo>/.agents/skills/` and global skills under `~/.gemini/config/skills/`. To share a single copy installed by `npx skills` or Pi globally across all workspaces without duplicating files, register the parent directory in `~/.gemini/config/skills.json`:
+Antigravity discovers workspace skills under `<repo>/.agents/skills/system-optimizer/` and global skills via a one-level directory scan under `~/.gemini/config/skills/system-optimizer/` (a standalone `~/.gemini/config/skills.json` manifest is not expanded in place of the global directory scan):
 
-```json
-{
-  "entries": [
-    { "path": "~/.agents/skills" }
-  ]
-}
-```
+- **Linux / macOS**: Symlink or copy the skill directory into `~/.gemini/config/skills/system-optimizer`:
+  ```bash
+  mkdir -p ~/.gemini/config/skills
+  ln -s ~/.agents/skills/system-optimizer ~/.gemini/config/skills/system-optimizer
+  ```
+- **Windows**: Copy the skill directory (`SKILL.md`, `README.md`, `LICENSE`, `references/`, `scripts/`) into `%USERPROFILE%\.gemini\config\skills\system-optimizer\` as a real directory (avoid NTFS junctions/symlinks on Windows, which Go's `os.ReadDir` `DirEntry.IsDir()` check can skip).
 
-*(Replace `~/.agents/skills` with `~/.pi/agent/skills` if Pi owns the skill folder, or symlink `system-optimizer` directly into `~/.gemini/config/skills/system-optimizer`.)*
-
-When auditing host-wide targets outside the active workspace under Antigravity, enable `allowNonWorkspaceAccess` for trusted sessions and run probe/backup scripts with `BypassSandbox: true` (or inspect/edit files with `read_file`/`write_file`) so scripts observe the real host rather than sandbox overlays.
+When auditing host-wide targets outside the active workspace under Antigravity, enable `allowNonWorkspaceAccess` for trusted sessions and run probe/backup scripts with `BypassSandbox: true` (on Windows, invoke Git Bash via `"C:\Program Files\Git\bin\bash.exe"` with `BypassSandbox: true`, as the sandbox blocks MSYS2 `\BaseNamedObjects` initialization and `WindowsApps\bash.exe` resolves to WSL) so scripts observe the real host rather than sandbox overlays.
 
 ## Quick Start & Usage
 
