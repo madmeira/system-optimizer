@@ -35,7 +35,7 @@ Shells, Terminals & Multiplexers:
   bash, pwsh, powershell, windows-terminal, wt, herdr, wsl
 
 Developer Tools & Runtimes:
-  mise, topgrade, pi, neovim, nvim, lazygit, git, gh, cargo, rust, rustc,
+  mise, topgrade, pi, antigravity, agy, neovim, nvim, lazygit, git, gh, cargo, rust, rustc,
   python, python3, uv, starship, zoxide, ripgrep, rg, fd, fdfind, eza,
   bat, batcat, fzf, sqlite3
 
@@ -345,6 +345,15 @@ infer_theme() {
       fi
     fi
   done
+  local agy_settings="$HOME/.gemini/antigravity-cli/settings.json"
+  if [[ -f "$agy_settings" ]]; then
+    local agy_theme
+    agy_theme=$(grep -E '"colorScheme"[[:space:]]*:' "$agy_settings" 2>/dev/null | head -n 1 | cut -d: -f2- | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*,?[[:space:]]*$//' || echo "")
+    if [[ -n "$agy_theme" && "${agy_theme,,}" != "default" ]]; then
+      echo "$agy_theme"
+      return 0
+    fi
+  fi
   local nv_json
   for nv_json in "$local_app_data/nvim/lazyvim.json" "$HOME/.config/nvim/lazyvim.json"; do
     if [[ -f "$nv_json" ]]; then
@@ -1059,6 +1068,195 @@ PY
     echo "  * Performance: Archive stale sessions (>30d); keep cacheWarming = 'idle' with PI_CACHE_RETENTION=long; tune compaction.keepRecentTokens/modelOverrides (reserveTokens defaults to 16384); prefer codemode/deferred MCP exposure"
     echo "  * Configuration: Inherit mise shims on PATH (or shellPath in settings.json) for subshell runtimes; manage keybindings.json, mcp.json, and models.json"
     echo "  * Security: Enforce 0600 on auth.json and mcp-auth.json; use defaultProjectTrust: 'ask' (trust.json) and defaultTools / --exclude-tools (OS/container sandboxing or tool_call extension for path gating); audit npm packages (--ignore-scripts)"
+    echo "====================================="
+    exit 0
+    ;;
+  antigravity|agy|antigravity-cli|antigravity-ide)
+    echo "Category: Agent Harness / Google Antigravity (agy)"
+    agy_bin=$(command -v agy 2>/dev/null || command -v antigravity 2>/dev/null || echo "")
+    if [[ -z "$agy_bin" && -x "$HOME/.local/bin/agy" ]]; then
+      agy_bin="$HOME/.local/bin/agy"
+    fi
+    echo "Binary: ${agy_bin:-Not found on PATH}"
+    agy_ver="unknown"
+    if [[ -n "$agy_bin" ]]; then
+      agy_ver=$(first_clean_line_or "unknown" "$agy_bin" --version)
+    fi
+    echo "Version: $agy_ver"
+
+    gemini_dir="$HOME/.gemini"
+    agy_cli_dir="$gemini_dir/antigravity-cli"
+    agy_cfg_dir="$gemini_dir/config"
+    echo "Configuration & State Files ($gemini_dir):"
+    for f in \
+      "$agy_cli_dir/settings.json" \
+      "$agy_cfg_dir/config.json" \
+      "$agy_cfg_dir/mcp_config.json" \
+      "$agy_cfg_dir/hooks.json" \
+      "$agy_cfg_dir/skills.json" \
+      "$agy_cfg_dir/plugins.json" \
+      "$gemini_dir/oauth_creds.json" \
+      "$gemini_dir/trustedFolders.json"; do
+      if [[ -f "$f" ]]; then
+        echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
+      fi
+    done
+
+    if ! is_windows; then
+      for cred_f in "$gemini_dir/oauth_creds.json" "$agy_cfg_dir/mcp_config.json"; do
+        if [[ -f "$cred_f" ]]; then
+          cred_mode=$(stat -c "%a" "$cred_f" 2>/dev/null || echo "")
+          if [[ -n "$cred_mode" && "$cred_mode" != "600" && "$cred_mode" != "400" ]]; then
+            echo "  * [SECURITY WARNING] $cred_f has mode $cred_mode (must be 0600 — stores sensitive credentials/OAuth tokens)"
+          fi
+        fi
+      done
+    fi
+
+    agy_settings="$agy_cli_dir/settings.json"
+    if [[ -f "$agy_settings" ]]; then
+      echo "Active Antigravity CLI Settings ($agy_settings):"
+      agy_model=""
+      agy_scheme=""
+      agy_nonws=""
+      agy_trusted=""
+      agy_broad_trust=""
+      if command -v python3 >/dev/null 2>&1; then
+        agy_parsed=$(python3 - "$agy_settings" <<'PY' 2>/dev/null || true
+import json, os, sys
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as fh:
+        d = json.load(fh)
+    model = d.get("model", "default")
+    scheme = d.get("colorScheme", "default")
+    nonws = d.get("allowNonWorkspaceAccess", False)
+    if isinstance(nonws, bool):
+        nonws_s = "true" if nonws else "false"
+    else:
+        nonws_s = str(nonws)
+    tw = d.get("trustedWorkspaces", [])
+    if isinstance(tw, list):
+        tw_s = ", ".join(str(x) for x in tw) if tw else "(none)"
+        home = os.path.expanduser("~")
+        broad = any(str(x).rstrip("/") in ("", home.rstrip("/")) or str(x) in ("$HOME", "~") for x in tw)
+    else:
+        tw_s = str(tw)
+        broad = False
+    print(f"model={model}")
+    print(f"scheme={scheme}")
+    print(f"nonws={nonws_s}")
+    print(f"tw={tw_s}")
+    print(f"broad={'true' if broad else 'false'}")
+except Exception:
+    pass
+PY
+        )
+        if [[ -n "$agy_parsed" ]]; then
+          agy_model=$(printf '%s\n' "$agy_parsed" | sed -n 's/^model=//p' | head -n 1)
+          agy_scheme=$(printf '%s\n' "$agy_parsed" | sed -n 's/^scheme=//p' | head -n 1)
+          agy_nonws=$(printf '%s\n' "$agy_parsed" | sed -n 's/^nonws=//p' | head -n 1)
+          agy_trusted=$(printf '%s\n' "$agy_parsed" | sed -n 's/^tw=//p' | head -n 1)
+          agy_broad_trust=$(printf '%s\n' "$agy_parsed" | sed -n 's/^broad=//p' | head -n 1)
+        fi
+      fi
+      if [[ -z "$agy_model" && -z "$agy_scheme" && -z "$agy_nonws" ]]; then
+        agy_model=$(grep -E '"model"[[:space:]]*:' "$agy_settings" 2>/dev/null | head -n 1 | cut -d: -f2- | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*,?[[:space:]]*$//' || true)
+        agy_scheme=$(grep -E '"colorScheme"[[:space:]]*:' "$agy_settings" 2>/dev/null | head -n 1 | cut -d: -f2- | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*,?[[:space:]]*$//' || true)
+        agy_nonws=$(grep -E '"allowNonWorkspaceAccess"[[:space:]]*:' "$agy_settings" 2>/dev/null | head -n 1 | cut -d: -f2- | tr -d ' ,"' || true)
+        tw_block=$(awk '/"trustedWorkspaces"[[:space:]]*:/{in_tw=1} in_tw{print; if (/\]/) exit}' "$agy_settings" 2>/dev/null || true)
+        agy_trusted_arr=()
+        while IFS= read -r tw_item; do
+          [[ -z "$tw_item" || "$tw_item" == "trustedWorkspaces" ]] && continue
+          agy_trusted_arr+=("$tw_item")
+          [[ "$tw_item" == "/" || "$tw_item" == "${HOME%/}" || "$tw_item" == '$HOME' || "$tw_item" == "~" ]] && agy_broad_trust="true"
+        done < <(printf '%s\n' "$tw_block" | grep -oE '"[^"]+"' | tr -d '"' || true)
+        if [[ ${#agy_trusted_arr[@]} -gt 0 ]]; then
+          agy_trusted=$(printf '%s, ' "${agy_trusted_arr[@]}")
+          agy_trusted="${agy_trusted%, }"
+        fi
+      fi
+      echo "  * model: ${agy_model:-default}"
+      echo "  * colorScheme: ${agy_scheme:-default}"
+      echo "  * allowNonWorkspaceAccess: ${agy_nonws:-false}"
+      echo "  * trustedWorkspaces: ${agy_trusted:-(none)}"
+      if [[ "${agy_nonws,,}" == "true" ]]; then
+        echo "  * [NOTE] allowNonWorkspaceAccess is enabled globally (useful for host-wide skills like system-optimizer; disable or use --sandbox on untrusted repos)"
+      fi
+      if [[ "$agy_broad_trust" == "true" ]]; then
+        echo "  * [SECURITY WARNING] trustedWorkspaces includes '/' or '\$HOME' (prefer scoping to dedicated workspace folders such as ~/repos)"
+      fi
+    fi
+
+    echo "Customizations & MCP Configuration ($agy_cfg_dir):"
+    agy_skill_reg=false
+    if [[ -f "$agy_cfg_dir/skills/system-optimizer/SKILL.md" ]]; then
+      agy_skill_reg=true
+    elif [[ -f "$agy_cfg_dir/skills.json" ]] && grep -qE 'system-optimizer|\.pi/agent/skills|\.agents/skills' "$agy_cfg_dir/skills.json" 2>/dev/null; then
+      agy_skill_reg=true
+    fi
+    if [[ "$agy_skill_reg" == "true" ]]; then
+      echo "  * Global Skill Discovery (system-optimizer): [REGISTERED]"
+    else
+      echo "  * Global Skill Discovery (system-optimizer): [NOT REGISTERED] (Add ~/.pi/agent/skills or ~/.agents/skills to ~/.gemini/config/skills.json, or link ~/.gemini/config/skills/system-optimizer)"
+    fi
+
+    agy_mcp="$agy_cfg_dir/mcp_config.json"
+    if [[ -f "$agy_mcp" ]]; then
+      if grep -qE '"serverUrl"[[:space:]]*:|"type"[[:space:]]*:[[:space:]]*"sse"' "$agy_mcp" 2>/dev/null; then
+        echo "  * [DEPRECATED] Legacy MCP 'serverUrl' or 'type: sse' found in $agy_mcp (use Streamable HTTP 'url' or stdio 'mcp-remote')"
+      else
+        echo "  * MCP Config ($agy_mcp): [OK] (no legacy serverUrl/sse entries)"
+      fi
+    fi
+
+    echo "Performance & Storage Metrics:"
+    agy_brain_dir="$agy_cli_dir/brain"
+    if [[ -d "$agy_brain_dir" ]]; then
+      brain_count=$(find "$agy_brain_dir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ' || true)
+      stale_brain_count=$(find "$agy_brain_dir" -mindepth 1 -maxdepth 1 -type d -mtime +30 2>/dev/null | wc -l | tr -d ' ' || true)
+      brain_size=$(du -sh "$agy_brain_dir" 2>/dev/null | awk '{print $1}' || echo "0")
+      echo "  * Saved Brain/Artifacts Sessions: ${brain_count:-0} session dirs ($brain_size disk usage, ${stale_brain_count:-0} stale >30d)"
+    fi
+
+    echo "Mise, Herdr & Topgrade Companion Synergies:"
+    mise_bin=$(command -v mise 2>/dev/null || echo "")
+    if [[ -n "$mise_bin" ]]; then
+      echo "  * Mise Binary Detected: $mise_bin"
+      mise_shims="${MISE_DATA_DIR:-$HOME/.local/share/mise}/shims"
+      if is_windows; then
+        mise_shims="$(win_path_unix "${MISE_DATA_DIR:-$local_app_data/mise}")/shims"
+      fi
+      if [[ -d "$mise_shims" ]]; then
+        echo "  * Mise Shims Directory: [EXISTS] ($mise_shims)"
+        if [[ ":$PATH:" == *":$mise_shims:"* ]]; then
+          echo "  * Shims on Agent PATH: [ACTIVE] (Subshell commands inherit project-pinned runtimes)"
+        else
+          echo "  * Shims on Agent PATH: [NOT ON PATH] (Export mise shims on PATH so Antigravity subshells use project-pinned runtimes)"
+        fi
+      fi
+    else
+      echo "  * Mise not detected on this system."
+    fi
+
+    herdr_bin=$(command -v herdr 2>/dev/null || echo "")
+    agy_herdr_hook="$agy_cfg_dir/hooks/herdr-agent-state.sh"
+    if [[ -n "$herdr_bin" || -f "$agy_herdr_hook" ]]; then
+      if [[ -f "$agy_herdr_hook" ]]; then
+        echo "  * Herdr Agent Hook ($agy_herdr_hook): [ACTIVE]"
+      else
+        echo "  * Herdr Agent Hook: [NOT INSTALLED] (Run 'herdr integration install antigravity-cli')"
+      fi
+    fi
+
+    tg_bin=$(command -v topgrade 2>/dev/null || echo "")
+    if [[ -n "$tg_bin" ]]; then
+      echo "  * Topgrade Maintenance: [AVAILABLE] (supports native 'antigravity_cli' / 'antigravity' steps)"
+    fi
+
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
+    echo "  * Performance: Prune stale brain/session artifacts (>30d); keep ~/.gemini/config/skills.json focused and rules under the 24 KB / 20k-token budget; keep mise shims on PATH"
+    echo "  * Configuration: Share ~/.agents/skills or ~/.pi/agent/skills via ~/.gemini/config/skills.json (or link ~/.gemini/config/skills/system-optimizer); migrate legacy MCP 'serverUrl'/'sse' to Streamable HTTP 'url' or 'mcp-remote'; run 'herdr integration install antigravity-cli' when using Herdr"
+    echo "  * Security: Enforce 0600 on oauth_creds.json and mcp_config.json; scope trustedWorkspaces to dedicated workspace dirs (not / or \$HOME); use --sandbox on untrusted repositories and keep allowNonWorkspaceAccess scoped to trusted workflows"
     echo "====================================="
     exit 0
     ;;
@@ -2250,11 +2448,13 @@ PY
         while IFS= read -r iline; do
           [[ -n "$iline" ]] && echo "  $iline"
         done <<< "$hdr_int"
-        for ag in pi claude codex; do
-          if command -v "$ag" >/dev/null 2>&1; then
+        for ag in pi claude codex antigravity-cli; do
+          ag_cmd="$ag"
+          [[ "$ag" == "antigravity-cli" ]] && ag_cmd="agy"
+          if command -v "$ag_cmd" >/dev/null 2>&1; then
             ag_line=$(printf '%s\n' "$hdr_int" | grep -iE "(^|[[:space:]])${ag}([[:space:]:]|$)" | head -n 1 || true)
             if [[ -n "$ag_line" ]] && echo "$ag_line" | grep -qiE 'not installed|missing|outdated|stale'; then
-              echo "  * [NOTE] $ag is installed on PATH but its Herdr hook reports: $ag_line"
+              echo "  * [NOTE] $ag_cmd is installed on PATH but its Herdr hook reports: $ag_line"
             fi
           fi
         done

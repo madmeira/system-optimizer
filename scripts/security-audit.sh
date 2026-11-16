@@ -285,6 +285,13 @@ if [[ "$pi_mcp_auth_perms" != "absent" && "$pi_mcp_auth_perms" != "unknown" && "
   insecure_pi_creds+=("mcp-auth.json ($pi_mcp_auth_perms)")
 fi
 
+agy_oauth_perms="absent"
+[[ -f "$HOME/.gemini/oauth_creds.json" ]] && agy_oauth_perms=$(stat -c "%a" "$HOME/.gemini/oauth_creds.json" 2>/dev/null || echo "unknown")
+agy_oauth_insecure=false
+if [[ "$agy_oauth_perms" != "absent" && "$agy_oauth_perms" != "unknown" && "$agy_oauth_perms" != "600" && "$agy_oauth_perms" != "400" ]]; then
+  agy_oauth_insecure=true
+fi
+
 pacman_siglevel="unknown"
 pacman_siglevel_all=()
 pacman_insecure_siglevels=()
@@ -401,7 +408,8 @@ if [[ "$output_json" == true ]]; then
     "insecure_ssh_keys": $(to_json_arr "${insecure_ssh_keys[@]}"),
     "pi_auth_json": "$(json_str "$pi_auth_perms")",
     "pi_mcp_auth_json": "$(json_str "$pi_mcp_auth_perms")",
-    "insecure_pi_creds": $(to_json_arr "${insecure_pi_creds[@]}")
+    "insecure_pi_creds": $(to_json_arr "${insecure_pi_creds[@]}"),
+    "agy_oauth_creds": "$(json_str "$agy_oauth_perms")"
   },
   "package_security": {
     "pacman_siglevel": "$(json_str "$pacman_siglevel")",
@@ -454,11 +462,17 @@ EOF
   if [[ "$pi_mcp_auth_perms" != "absent" ]]; then
     echo "  * Pi mcp-auth.json permissions: $pi_mcp_auth_perms (Recommended: 600)"
   fi
+  if [[ "$agy_oauth_perms" != "absent" ]]; then
+    echo "  * Antigravity oauth_creds.json permissions: $agy_oauth_perms (Recommended: 600)"
+  fi
   if [[ ${#insecure_ssh_keys[@]} -gt 0 ]]; then
     echo "  * [WARNING] Loose SSH Key Permissions Detected: ${insecure_ssh_keys[*]}"
   fi
   if [[ ${#insecure_pi_creds[@]} -gt 0 ]]; then
     echo "  * [WARNING] Loose Pi Credential Permissions Detected: ${insecure_pi_creds[*]} (Recommended: 600)"
+  fi
+  if [[ "$agy_oauth_insecure" == true ]]; then
+    echo "  * [WARNING] Loose Antigravity Credential Permissions Detected: oauth_creds.json ($agy_oauth_perms) (Recommended: 600)"
   fi
   cat <<EOF
 - Package & Supply Chain Integrity:

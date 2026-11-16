@@ -1,6 +1,6 @@
 ---
 name: system-optimizer
-description: Audits, tunes, hardens, and speeds up Windows and Linux systems, shells, terminals, browsers, package managers, runtimes, and CLI tools across Performance, Configuration, and Security. Use when the user wants to inspect or optimize OS settings (storage/TRIM, memory/zram, CPU/power, network, boot), security posture (Defender/PUA, firewall, sysctl, SSH, ExecutionPolicy), Windows/Linux environments (winget, windows-terminal, wsl, pwsh, powertoys, pacman, yay, makepkg, paccache, flatpak, podman, docker, lazydocker, systemd, kde-plasma), browsers (brave, chrome, edge, firefox, librewolf), or developer tools (git, gh, lazygit, topgrade, mise, cargo, python, uv, neovim, ripgrep, fd, zoxide, eza, starship, bat, fzf, mpv, yt-dlp, btop, htop, syncthing, sqlite3, rustdesk, controld, pi, bash, herdr). Run without arguments to probe hardware and present numbered tuning options.
+description: Audits, tunes, hardens, and speeds up Windows and Linux systems, shells, terminals, browsers, package managers, runtimes, and CLI tools across Performance, Configuration, and Security. Use when the user wants to inspect or optimize OS settings (storage/TRIM, memory/zram, CPU/power, network, boot), security posture (Defender/PUA, firewall, sysctl, SSH, ExecutionPolicy), Windows/Linux environments (winget, windows-terminal, wsl, pwsh, powertoys, pacman, yay, makepkg, paccache, flatpak, podman, docker, lazydocker, systemd, kde-plasma), browsers (brave, chrome, edge, firefox, librewolf), or developer tools (git, gh, lazygit, topgrade, mise, cargo, python, uv, neovim, ripgrep, fd, zoxide, eza, starship, bat, fzf, mpv, yt-dlp, btop, htop, syncthing, sqlite3, rustdesk, controld, pi, antigravity, bash, herdr). Run without arguments to probe hardware and present numbered tuning options.
 license: MIT
 compatibility: Requires bash >= 4.0; PowerShell 5.1+ or pwsh on Windows
 ---
@@ -31,10 +31,13 @@ A comprehensive optimization skill for Windows and Linux systems, package manage
 | Agent | How to invoke | Status |
 |---|---|---|
 | Pi | `/skill:system-optimizer [targets]` | Original target |
+| Antigravity (`agy` / IDE / 2.0) | `/system-optimizer [targets]`, or ask for it by name (global skill folder `~/.gemini/config/skills/system-optimizer/`, `~/.gemini/config/skills.json`, or workspace `.agents/skills/system-optimizer/`) | Verified: `agy` CLI & Linux host |
 | Claude Code | `/system-optimizer [targets]`, or ask for it by name; skill folder `~/.claude/skills/system-optimizer/` | Verified: `full` audit run on a Windows 11 VM (read-only) |
 | Codex | Mention `system-optimizer` by name, or copy this file into `AGENTS.md` | Untested |
 
 Script paths below (`scripts/...`, `references/...`) are relative to the skill folder. The examples use the bare form `system-optimizer [targets]`; add your agent's prefix from the table.
+
+**Antigravity terminal sandbox note**: Under Antigravity's default sandbox (`BypassSandbox: false`), `run_command` isolates host configuration paths outside the active workspace (such as `~/.gemini/config/` and `/etc`). Ensure `allowNonWorkspaceAccess` is enabled for host-wide audits outside the workspace, and run host probe/backup commands with `BypassSandbox: true` (or use `read_file`/`write_file` directly for user-approved edits) so probes read the real host environment rather than sandbox overlays.
 
 ## Invocation Modes
 
@@ -49,7 +52,7 @@ Script paths below (`scripts/...`, `references/...`) are relative to the skill f
 | Runtimes & orchestration | `mise`, `topgrade`, `cargo`, `python`, `uv`, `podman`, `docker`, `lazydocker` |
 | Editor, shell & git | `neovim`, `starship`, `bat`, `fzf`, `ripgrep`, `fd`, `zoxide`, `eza`, `sqlite3`, `bash`, `git`, `gh`, `lazygit` |
 | Media, sync & remote | `mpv`, `yt-dlp`, `syncthing`, `rustdesk`, `controld` |
-| Agents | `pi`, `herdr` |
+| Agents | `pi`, `antigravity`, `herdr` |
 | Monitors | `htop`, `btop` |
 
 *(`tool-optimizer` is maintained as a transparent alias to this skill).*
@@ -75,9 +78,9 @@ When invoked **without arguments**:
      - *Windows*: `windows-terminal` (GPU Atlas engine, default profile, disable animations), `brave`, `chrome`, `edge`, `firefox`.
      - *Linux*: `kde-plasma`, `brave`, `librewolf`, `firefox`.
    - **Option 5: Developer & CLI Tools**:
-     - Cross-platform: `pwsh`, `bash`, `topgrade`, `git`, `neovim`, `starship`, `bat`, `fzf`, `ripgrep`, `fd`, `lazygit`, `ffmpeg`, `mpv`, `yt-dlp`, `rustdesk`, `controld`, `pi`, `herdr`.
+     - Cross-platform: `pwsh`, `bash`, `topgrade`, `git`, `neovim`, `starship`, `bat`, `fzf`, `ripgrep`, `fd`, `lazygit`, `ffmpeg`, `mpv`, `yt-dlp`, `rustdesk`, `controld`, `pi`, `antigravity`, `herdr`.
    - **Option 6: Curated Top Balanced Recommendations** (High-impact cross-cutting set combining System, Security, and Tools).
-   - **Option 7: Full System Optimization (Comprehensive)** (Full evaluation and optimization across ALL detected system domains, security posture, and developer toolchain: `storage`, `system`, `security`, `defender`, `firewall`, `winget`, `pacman`, `yay`, `makepkg`, `paccache`, `wsl`, `podman`, `lazydocker`, `windows-terminal`, `kde-plasma`, `pwsh`, `bash`, `topgrade`, `mise`, `cargo`, `python`, `uv`, `ripgrep`, `fd`, `zoxide`, `eza`, `pi`, `lazygit`, `neovim`, `bat`, `fzf`, `starship`, `git`, `gh`, `mpv`, `yt-dlp`, `btop`, `htop`, `syncthing`, `sqlite3`, `rustdesk`, `controld`, `powertoys`, `herdr`).
+   - **Option 7: Full System Optimization (Comprehensive)** (Full evaluation and optimization across ALL detected system domains, security posture, and developer toolchain: `storage`, `system`, `security`, `defender`, `firewall`, `winget`, `pacman`, `yay`, `makepkg`, `paccache`, `wsl`, `podman`, `lazydocker`, `windows-terminal`, `kde-plasma`, `pwsh`, `bash`, `topgrade`, `mise`, `cargo`, `python`, `uv`, `ripgrep`, `fd`, `zoxide`, `eza`, `pi`, `antigravity`, `lazygit`, `neovim`, `bat`, `fzf`, `starship`, `git`, `gh`, `mpv`, `yt-dlp`, `btop`, `htop`, `syncthing`, `sqlite3`, `rustdesk`, `controld`, `powertoys`, `herdr`).
    - **Option 8: Custom Selection** (User enters specific domains or tool names).
    - **Option 9: None / Cancel**.
 3. **Audit Selected Set**: Run the 6-phase pipeline for each chosen target as an audit, then present numbered proposals and apply only what the user approves (see Safety Contract).
@@ -94,13 +97,13 @@ When **Full Optimization** is selected, the skill systematically orchestrates th
 | 2. Security hardening | Firewall (`ufw`/`nftables`/Defender), Defender/PUA, sysctl hardening, execution policy, package integrity | `security`, `defender` |
 | 3. Subsystems & package orchestration | Package managers, WSL, containers, runtimes, update coordination | `winget`, `pacman`, `yay`, `makepkg`, `paccache`, `flatpak`, `wsl`, `podman`, `docker`, `lazydocker`, `mise`, `cargo`, `python`, `uv`, `topgrade` |
 | 4. Terminal, desktop, browsers & shell | Terminal engine, desktop compositor, browsers, shell profiles, history | `windows-terminal`, `kde-plasma`, `pwsh`, `bash`, `brave`, `chrome`, `edge`, `firefox`, `librewolf` |
-| 5. Developer, media & monitor toolchain | Editor, search, git, media, agents, monitors, sync & remote tools | `neovim`, `lazygit`, `ripgrep`, `fd`, `zoxide`, `eza`, `bat`, `fzf`, `starship`, `git`, `gh`, `mpv`, `yt-dlp`, `pi`, `herdr`, `btop`, `htop`, `syncthing`, `sqlite3`, `rustdesk`, `controld`, `powertoys` |
+| 5. Developer, media & monitor toolchain | Editor, search, git, media, agents, monitors, sync & remote tools | `neovim`, `lazygit`, `ripgrep`, `fd`, `zoxide`, `eza`, `bat`, `fzf`, `starship`, `git`, `gh`, `mpv`, `yt-dlp`, `pi`, `antigravity`, `herdr`, `btop`, `htop`, `syncthing`, `sqlite3`, `rustdesk`, `controld`, `powertoys` |
 
 **Cross-tool synergies** (settings per pipeline in `references/optimization-guide.md` §10):
 
 | Tools | Effect |
 |---|---|
-| `herdr` + `pi` + `mise` + shell | Agent subshells inherit mise shims, `herdr integration status`, session resume (`resume_agents_on_restore`), `0600` sockets/auth |
+| `herdr` + `pi` + `antigravity` + `mise` + shell | Agent subshells inherit mise shims, `herdr integration status`, session resume (`resume_agents_on_restore`), `0600` sockets/auth |
 | `lazygit` + `neovim` + `bat` | Remote tab editing (`os.editPreset: "nvim-remote"`), `bat` diff paging via `git.diffRenderers` |
 | `ripgrep` + `fzf` + `bat` | `rg`/`fd --strip-cwd-prefix`-backed fuzzy search with syntax previews (`--info=inline-right`) |
 | `mpv` + `yt-dlp` + GPU | Hardware-decoded web video (`vo=gpu-next`, `hwdec=auto-safe`, `yt-dlp-ejs`) outside the browser |
@@ -194,7 +197,7 @@ For each target domain or tool:
 
 ### Phase 2.5: Dynamic Schema & Version Drift Gate
 
-Run `./scripts/tool-drift-check.sh <targets>` (or `./scripts/tool-drift-check.sh --json` during full discovery / zero-argument runs). It compares installed binary versions against the skill's verified baseline manifest, executes fast (<2s, offline) live CLI/schema introspection (`mise settings ls`, `herdr --default-config` & `herdr config check`, `starship print-config --default`, `pi` `settings.schema.json`, `mpv --vo=help`, and `--help` across `rg`/`fd`/`eza`/`fzf`/`bat`/`yt-dlp`/`syncthing`/`uv`/`gh`), and scans active user configs for deprecated or renamed keys, tagging results as `[VERIFIED]`, `[VERSION AHEAD]`, `[SCHEMA DRIFT]`, or `[DEPRECATED CONFIG]`:
+Run `./scripts/tool-drift-check.sh <targets>` (or `./scripts/tool-drift-check.sh --json` during full discovery / zero-argument runs). It compares installed binary versions against the skill's verified baseline manifest, executes fast (<2s, offline) live CLI/schema introspection (`mise settings ls`, `herdr --default-config` & `herdr config check`, `starship print-config --default`, `pi` `settings.schema.json`, `agy --help`, `mpv --vo=help`, and `--help` across `rg`/`fd`/`eza`/`fzf`/`bat`/`yt-dlp`/`syncthing`/`uv`/`gh`), and scans active user configs for deprecated or renamed keys, tagging results as `[VERIFIED]`, `[VERSION AHEAD]`, `[SCHEMA DRIFT]`, or `[DEPRECATED CONFIG]`:
 
 - **Live schema verification gate**: Whenever any target reports `[VERSION AHEAD]` or `[SCHEMA DRIFT]`, or before proposing unfamiliar flags or config keys, you **MUST** verify the exact flag/key against the installed binary's live CLI schema (`<tool> --help`, `mise settings ls`, `starship print-config --default`, `herdr --default-config`, `lazygit --config`, `mpv --list-options`, `settings.schema.json`) and/or release notes. **NEVER** emit unverified static flags from memory.
 - **Deprecated key surfacing**: Surface every `[DEPRECATED CONFIG]` finding directly in the Phase 4 Triad proposal table so the user can approve cleanup or migration.
@@ -232,18 +235,19 @@ Propose improvements across all three pillars, and apply only the items the user
 - **Modern Defaults & Synergies** *(read `references/optimization-guide.md` §3–§5 and §10 on demand for per-target config templates)*:
   - Align update orchestration (`topgrade` + `mise` + `winget`/`pacman`/`paccache`) so OS packages and user runtimes never duplicate rebuilds (`disable = ["uv", "cargo", "pi"]` when managed by `mise`, native `github_cli_extensions` instead of manual `gh extension upgrade --all`, `[windows]` for `accept_all_updates` / `winget_use_sudo`, post-command `mise reshim`).
   - Eliminate nested processes, deprecated keys, and subshell lag (`lazygit` `os.editPreset: "nvim-remote"` + `git.diffRenderers` + `gui.nerdFontsVersion: "3"`; `starship` `[mise]` `$symbol`/`$health` or per-language modules; `fzf` `--walker` / `fd --strip-cwd-prefix` + `--info=inline-right` + `bat --theme=auto` previews; `neovim` `vim.loader.enable()` + LazyVim v15/v16+ `opts.servers.<srv>.mason = false` / `automatic_enable` + native `vim.lsp.config`/`vim.lsp.enable`; `uv` `compile-bytecode` / `uv cache prune`).
-  - Keep AI agent environments synchronized and clean (`pi` `$PI_CODING_AGENT_DIR`, `cacheWarming: "idle"`, `PI_CACHE_RETENTION=long`, `defaultProjectTrust`; `herdr` `herdr integration status`, `[session] resume_agents_on_restore = true`, `herdr update --handoff`, `[terminal] shell_mode`, `default_shell = ""` honoring `$SHELL`, `[advanced] scrollback_limit_bytes`; `mise` shims on `PATH`).
+  - Keep AI agent environments synchronized and clean (`pi` `$PI_CODING_AGENT_DIR`, `cacheWarming: "idle"`, `PI_CACHE_RETENTION=long`, `defaultProjectTrust`; `antigravity` `~/.gemini/config/skills.json` cross-agent skill sharing, Streamable HTTP MCP `url`, `brain/` hygiene; `herdr` `herdr integration status`, `[session] resume_agents_on_restore = true`, `herdr update --handoff`, `[terminal] shell_mode`, `default_shell = ""` honoring `$SHELL`, `[advanced] scrollback_limit_bytes`; `mise` shims on `PATH`).
 
 #### 3. Security
 - **Privileged Changes (Safety Contract #4)**: Elevated Windows commands (`Enable-MMAgent -mc`, `Set-MpPreference -PUAProtection 1`, `Optimize-Volume -ReTrim`, `fsutil 8dot3name set`) and root-owned Linux configs (`/etc/sysctl.d/*`, `/etc/pacman.conf`, `/etc/makepkg.conf.d/*`, `/etc/ssh/sshd_config.d/*`, `/etc/controld/ctrld.toml`, systemd services/timers) MUST NEVER be executed directly by the agent — present the exact commands for review and collect all pending privileged suggestions so Phase 6 can offer a consolidated elevated apply script at the end.
 - **System & Shell Hardening**: Verify all Firewall profiles active with BlockInbound default, Defender Real-Time & PUA protection, Linux sysctl kernel hardening (`kptr_restrict`, `dmesg_restrict`, `unprivileged_bpf_disabled`, `protected_fifos`/`regular`), PowerShell `RemoteSigned`, sanitized `PATH` (no `.` or empty entries), and scrubbed shell history.
-- **Supply Chain & Least Privilege** *(details in `references/optimization-guide.md` §2 & §5)*: Enforce cryptographic verification (`mise` SLSA/cosign/attestations/`npm.provenance = true`/`minimum_release_age`, `topgrade` `[misc] allow_root = false` + `sudo_loop` unattended-terminal caveat, `winget` hash/cert checks enabled, `pacman` `DownloadUser = alpm` + sandbox checks + `SigLevel = Required DatabaseOptional`, `uv` `exclude-newer` & `uv audit`, `pip` `PIP_REQUIRE_VIRTUALENV=true`, `PYTHONSAFEPATH=1`, `cargo` lockfile checksums, `neovim` `modeline = false`), avoid destructive defaults (`sqlite3` `.sqliterc` without `PRAGMA journal_mode=WAL`, `yt-dlp` without global `--downloader aria2c` or global `--impersonate`), and enforce `0600` permissions on credentials/sockets (`~/.ssh`, `gh/hosts.yml` or keyring, `pi` `auth.json` & `mcp-auth.json`, `herdr.sock` & `config.toml`, `PYTHON_HISTORY`).
+- **Supply Chain & Least Privilege** *(details in `references/optimization-guide.md` §2 & §5)*: Enforce cryptographic verification (`mise` SLSA/cosign/attestations/`npm.provenance = true`/`minimum_release_age`, `topgrade` `[misc] allow_root = false` + `sudo_loop` unattended-terminal caveat, `winget` hash/cert checks enabled, `pacman` `DownloadUser = alpm` + sandbox checks + `SigLevel = Required DatabaseOptional`, `uv` `exclude-newer` & `uv audit`, `pip` `PIP_REQUIRE_VIRTUALENV=true`, `PYTHONSAFEPATH=1`, `cargo` lockfile checksums, `neovim` `modeline = false`), avoid destructive defaults (`sqlite3` `.sqliterc` without `PRAGMA journal_mode=WAL`, `yt-dlp` without global `--downloader aria2c` or global `--impersonate`), and enforce `0600` permissions on credentials/sockets (`~/.ssh`, `gh/hosts.yml` or keyring, `pi` `auth.json` & `mcp-auth.json`, `antigravity` `~/.gemini/oauth_creds.json` & `mcp_config.json`, `herdr.sock` & `config.toml`, `PYTHON_HISTORY`).
 ---
 
 ### Phase 5: Post-Apply Native Validation Gate & Health Checks
 
 1. Run each modified tool's native validator immediately after writing user-approved changes:
    - `herdr config check` (must pass before `herdr server reload-config`)
+   - `agy plugin validate` (for Antigravity plugins) and JSON syntax validation (`python3 -m json.tool` on `~/.gemini/config/*.json` & `~/.gemini/antigravity-cli/settings.json`)
    - `mise doctor` / `mise settings`
    - `nvim --headless +q`
    - `bat --diagnostic`

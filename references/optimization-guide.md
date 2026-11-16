@@ -987,6 +987,25 @@ The integration between Neovim and Mise establishes a unified, reproducible deve
     - Enforce `0600` on **both** `auth.json` and `mcp-auth.json`.
     - Use built-in `defaultProjectTrust` (`"ask"` or `"never"`, stored in `trust.json`, never `"always"` globally) and tool gating (`defaultTools` / `--tools` / `--exclude-tools`) — note `permissions.deny` is **not** a built-in Pi setting (path-level denies require OS/container sandboxing or a `tool_call` extension).
     - Review `enableInstallTelemetry` (`false` or `PI_TELEMETRY=0` if strict privacy is desired) and install npm extensions/updates with `--ignore-scripts`.
+### Google Antigravity CLI & Agent Platform (`antigravity` / `agy` `1.5+`)
+- **Configuration & State**:
+  - CLI settings: `~/.gemini/antigravity-cli/settings.json` (`model`, `colorScheme`, `allowNonWorkspaceAccess`, `trustedWorkspaces`)
+  - Global customizations: `~/.gemini/config/` (`config.json`, `skills/`, `skills.json`, `plugins/`, `plugins.json`, `hooks.json`, `mcp_config.json`)
+  - Workspace customizations: `<repo>/.agents/` (`skills/`, `plugins/`, `rules/*.md`, `skills.json`, `plugins.json`, `hooks.json`) plus `GEMINI.md` / `AGENTS.md`
+  - Credentials & session artifacts: `~/.gemini/oauth_creds.json` (`0600`), `~/.gemini/trustedFolders.json`, `~/.gemini/antigravity-cli/brain/`
+- **Triad Tuning**:
+  - *Performance*:
+    - Respect progressive disclosure budgets: keep always-on `GEMINI.md` / `AGENTS.md` rule files compact (per-file cap 24 KB, global aggregate rules budget 20k tokens) and offload multi-step workflows into `skills/<name>/SKILL.md` with `references/`.
+    - Prune stale session artifacts under `~/.gemini/antigravity-cli/brain/` (>30 days) when disk usage grows.
+    - Keep `mise` shims on `PATH` so Antigravity `run_command` subshells resolve project-pinned runtimes without re-initializing interactive shells.
+  - *Configuration*:
+    - Share skills across agents without duplication via `~/.gemini/config/skills.json` (`{"entries": [{"path": "~/.agents/skills"}]}` or `~/.pi/agent/skills`), or symlink into `~/.gemini/config/skills/`.
+    - Use **Streamable HTTP** (`"url": "https://.../mcp"`) or Stdio (`command`/`args`) in `mcp_config.json` — legacy `"type": "sse"` and `"serverUrl"` are deprecated/unsupported (bridge SSE-only servers with `mcp-remote`).
+    - Align theme (`colorScheme` in `~/.gemini/antigravity-cli/settings.json`) with terminal/editor theme; pair with `herdr integration install antigravity-cli` and Topgrade's native `antigravity_cli` (`agy update`) / `antigravity` steps; validate plugins with `agy plugin validate <dir> --strict`.
+  - *Security*:
+    - Enforce `0600` on `~/.gemini/oauth_creds.json` and `~/.gemini/config/mcp_config.json`.
+    - Scope `trustedWorkspaces` in `~/.gemini/antigravity-cli/settings.json` to dedicated project roots (e.g. `~/repos`), never `/` or `$HOME`.
+    - Keep Antigravity's terminal sandbox (`agy --sandbox`) enabled on untrusted repositories and gate `allowNonWorkspaceAccess` to trusted host-wide workflows (such as `system-optimizer`).
 ### Terminal Workspace & Agent Multiplexer (`herdr` `0.9.5+`)
 - **Configuration**: `${HERDR_CONFIG_PATH:-~/.config/herdr/config.toml}` (Linux/macOS) or `%APPDATA%\herdr\config.toml` (Windows).
 - **Runtime State & Sockets**:
@@ -1276,6 +1295,8 @@ system-optimizer mise neovim      # Polyglot LSP, formatter runtime & Mason de-d
 system-optimizer mise starship    # Zero-latency prompt integration, native [mise] module & shell hooks
 system-optimizer mise cargo topgrade # Rust pre-compiled binstall vs compilation de-duplication
 system-optimizer mise pi herdr    # AI coding agent workspace toolchain & non-interactive PATH isolation
+system-optimizer antigravity      # Google Antigravity (agy) settings, skills.json, MCP config & credentials
+system-optimizer mise antigravity herdr # Antigravity + Mise PATH shims + Herdr integration hook synergy
 system-optimizer lazygit neovim bat    # Remote tab editing (nvim --server) & bat diff pager
 system-optimizer ripgrep fzf bat       # rg search generator (FZF_DEFAULT_COMMAND) & bat syntax previews
 system-optimizer mpv yt-dlp            # Web video hardware streaming (GPU HWDEC) bypassing browser CPU/RAM
@@ -1338,6 +1359,7 @@ system-optimizer full
    - **`git`**: Configure `feature.manyFiles = true`, `diff.algorithm = histogram`, `merge.conflictStyle = zdiff3`, `branch.sort = -committerdate`, `rerere.enabled = true`, `fetch.prune = true`, `push.autoSetupRemote = true`, `rebase.updateRefs = true`, per-large-repo `core.fsmonitor = true`, and Windows-only `core.fscache = true` / `credential.helper = manager`.
    - **`mpv` & `yt-dlp`**: Configure `vo=gpu-next`, `profile=high-quality`, zero-copy `hwdec=auto-safe`, `tone-mapping=auto`, `target-colorspace-hint=auto` (`yes` when HDR active); in `yt-dlp`, use `yt-dlp-ejs` + `--js-runtimes` + native `-N 4` and warn against global `--downloader aria2c` and global `--impersonate`.
    - **`pi`**: Honor `$PI_CODING_AGENT_DIR`, enforce `0600` on `auth.json` and `mcp-auth.json`, configure `defaultProjectTrust` (`trust.json`), `defaultTools`/`--exclude-tools`, `cacheWarming: "idle"`, `PI_CACHE_RETENTION=long`, `codemode`, session pruning (>30d), and `mise` shims on `PATH`.
+   - **`antigravity` (`agy`)**: Inspect `~/.gemini/antigravity-cli/settings.json`, `~/.gemini/config/{skills.json,mcp_config.json,hooks.json,plugins.json}`, and `~/.gemini/oauth_creds.json` (`0600`); flag legacy MCP `serverUrl` / `type: sse`; verify `skills.json` cross-agent registration, `herdr integration install antigravity-cli`, `mise` shims on `PATH`, scoped `trustedWorkspaces`, and stale `brain/` pruning (>30d).
    - **`rustdesk` & `controld`**: Inspect `RustDesk2.toml` (`direct-server`, `approve-mode`, `verification-method`) and GPU encode; configure `/etc/controld/ctrld.toml` (`0600`) with `type = "doh3"` primary + `"doh"` failover and `[service]` `cache_enable = true`.
    - **`herdr`**: Inspect `~/.config/herdr/` (`config.toml`, `session.json`, `herdr.sock`, `herdr-server.log`) and `~/.local/state/herdr/`; validate with `herdr config check` before `herdr server reload-config`; use `herdr update --handoff`; run `herdr integration status` with `resume_agents_on_restore = true`; keep `default_shell = ""` (`$SHELL`) on Linux/macOS (`"pwsh"` on Windows), `[terminal] shell_mode`, `[advanced] scrollback_limit_bytes`, `0600` on sockets/config.
    - **`syncthing`**: Use Syncthing v2 `syncthing paths` / `syncthing serve` (`index-v2/` SQLite), GUI `tls="true"` on `127.0.0.1`, and `systemctl --user enable --now syncthing.service`.
@@ -1347,7 +1369,7 @@ system-optimizer full
 
 6. **Cross-Tool Synergies**:
    - Establish seamless pipelines between tools:
-     - `herdr` + `pi` + `mise` + `pwsh`/`bash`: Autonomous AI coding agent toolchain inheritance, `herdr integration status` + `resume_agents_on_restore = true`, worktree branch isolation, and `0600` socket/auth hardening.
+     - `herdr` + `pi` + `antigravity` + `mise` + `pwsh`/`bash`: Autonomous AI coding agent toolchain inheritance, `herdr integration status` + `resume_agents_on_restore = true`, worktree branch isolation, and `0600` socket/auth hardening.
      - `lazygit` + `neovim` + `bat`: Remote tab editing (`os.editPreset: "nvim-remote"`) and syntax diff paging via `git.diffRenderers` (`bat --color=always --style=changes,numbers`).
      - `ripgrep` / `fd` + `fzf` + `bat`: `.gitignore`-aware search (`fd --strip-cwd-prefix` / `rg --files`) with `--info=inline-right` and `bat --theme=auto` previews.
      - `mpv` + `yt-dlp` + GPU HWDEC: Zero-copy `hwdec=auto-safe` + `vo=gpu-next` + `yt-dlp-ejs` web streaming bypassing browser CPU/RAM overhead.

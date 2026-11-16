@@ -16,7 +16,7 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/home"
 
-targets="bash bat boot brave btop cargo chrome controld cpu defender docker edge execution-policy eza fd firefox firewall flatpak full fzf gh git herdr htop
+targets="antigravity bash bat boot brave btop cargo chrome controld cpu defender docker edge execution-policy eza fd firefox firewall flatpak full fzf gh git herdr htop
 kde-plasma kernel lazydocker lazygit librewolf makepkg memory mise mpv neovim network paccache package-audit pacman pi podman powertoys pwsh python ripgrep rustdesk
 sandboxing security sqlite3 ssh starship storage syncthing sysctl-security system topgrade uac uv windows-terminal winget wsl yay yt-dlp zoxide"
 domain_and_browser_targets=" system security full kernel storage memory cpu boot network firewall ssh sysctl-security sandboxing package-audit execution-policy uac defender chrome edge brave firefox librewolf "
@@ -348,4 +348,50 @@ for needle in "tool-drift-check.sh" "Phase 2.5" "SCHEMA DRIFT" "DEPRECATED CONFI
   grep -qF -- "$needle" "$ROOT/SKILL.md" || { echo "FAIL - SKILL.md missing dynamic drift gate requirement: $needle" >&2; exit 1; }
 done
 echo "ok   - 2026 targets (uv, mise, lazygit, wsl) and Phase 2.5 dynamic drift gate verified"
+
+# Antigravity (agy) target inspection: settings, oauth_creds mode, legacy MCP serverUrl/sse, and skills.json registration
+printf '#!/usr/bin/env bash\necho "1.5.9"\n' > "$WORK/bin/agy"
+chmod +x "$WORK/bin/agy"
+mkdir -p "$WORK/home/.gemini/antigravity-cli/brain/session-1" "$WORK/home/.gemini/config"
+cat > "$WORK/home/.gemini/antigravity-cli/settings.json" <<EOF
+{
+  "allowNonWorkspaceAccess": true,
+  "colorScheme": "tokyo night",
+  "model": "Orchestrator",
+  "trustedWorkspaces": ["$WORK/home", "$WORK/repos"]
+}
+EOF
+printf '{"token":"dummy"}\n' > "$WORK/home/.gemini/oauth_creds.json"
+chmod 644 "$WORK/home/.gemini/oauth_creds.json"
+printf '{"mcpServers":{"legacy":{"serverUrl":"https://example.com/sse","type":"sse"}}}\n' > "$WORK/home/.gemini/config/mcp_config.json"
+
+agy_out1="$(env -i PATH="$WORK/bin:$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/scripts/target-inspect.sh" antigravity)"
+for expected in \
+  "Version: 1.5.9" \
+  "model: Orchestrator" \
+  "colorScheme: tokyo night" \
+  "allowNonWorkspaceAccess: true" \
+  "[SECURITY WARNING] trustedWorkspaces includes '/' or '\$HOME'" \
+  "[SECURITY WARNING] $WORK/home/.gemini/oauth_creds.json has mode 644" \
+  "Global Skill Discovery (system-optimizer): [NOT REGISTERED]" \
+  "[DEPRECATED] Legacy MCP 'serverUrl' or 'type: sse'"; do
+  if [[ "$agy_out1" != *"$expected"* ]]; then
+    echo "FAIL - antigravity inspection missing: $expected" >&2
+    exit 1
+  fi
+done
+
+printf '{"entries":[{"path":"~/.pi/agent/skills"}]}\n' > "$WORK/home/.gemini/config/skills.json"
+agy_out2="$(env -i PATH="$WORK/bin:$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/scripts/target-inspect.sh" agy)"
+[[ "$agy_out2" == *"Global Skill Discovery (system-optimizer): [REGISTERED]"* ]] || {
+  echo "FAIL - antigravity inspection did not detect skills.json registration" >&2
+  exit 1
+}
+agy_det="$(env -i PATH="$WORK/bin:$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/scripts/detect-targets.sh" --json)"
+[[ "$agy_det" == *'"antigravity"'* ]] || {
+  echo "FAIL - detect-targets did not detect antigravity when agy is on PATH" >&2
+  exit 1
+}
+rm -rf "$WORK/home/.gemini"
+echo "ok   - antigravity (agy) detection, settings, credential mode, legacy MCP, and skills.json verified"
 echo "inspect-smoke: $count targets passed"

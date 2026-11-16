@@ -45,7 +45,7 @@ if is_windows; then
 
   # 6. Developer Tools & CLI Utilities on Windows
   dev_cli_candidates=(
-    "pwsh" "powershell" "powertoys" "pi" "bash" "topgrade" "git"
+    "pwsh" "powershell" "powertoys" "pi" "antigravity" "agy" "bash" "topgrade" "git"
     "neovim" "nvim" "starship" "bat" "fzf" "ripgrep" "rg" "fd" "eza" "lsd" "lazygit" "lazydocker"
     "ffmpeg" "mpv" "yt-dlp" "btop" "btop4win" "syncthing" "rustdesk" "controld" "ctrld" "zoxide" "sqlite3" "herdr" "gh"
   )
@@ -77,7 +77,7 @@ else
 
   # Linux Developer Tools & CLI Utilities
   dev_cli_candidates=(
-    "pi" "bash" "topgrade" "git" "neovim" "nvim" "starship" "bat" "batcat" "fzf" "ripgrep" "rg" "fd" "fdfind"
+    "pi" "antigravity" "agy" "bash" "topgrade" "git" "neovim" "nvim" "starship" "bat" "batcat" "fzf" "ripgrep" "rg" "fd" "fdfind"
     "eza" "lsd" "zoxide" "yazi" "ranger" "broot" "delta" "lazygit" "lazydocker"
     "ffmpeg" "mpv" "yt-dlp" "btop" "htop" "syncthing" "sqlite3" "zstd" "pigz"
     "rustdesk" "controld" "ctrld" "herdr" "gh"
@@ -101,6 +101,7 @@ canonical_name() {
     python3) echo "python" ;;
     batcat) echo "bat" ;;
     fdfind) echo "fd" ;;
+    agy|antigravity-cli|antigravity-ide) echo "antigravity" ;;
     *) echo "$t" ;;
   esac
 }
@@ -114,8 +115,17 @@ is_target_present() {
     esac
     return 0
   fi
+  case "$t" in
+    antigravity|agy)
+      command -v agy >/dev/null 2>&1 && return 0
+      [[ -x "$HOME/.local/bin/agy" || -d "$HOME/.gemini/antigravity-cli" ]] && return 0
+      ;;
+  esac
   if is_windows; then
     case "$t" in
+      antigravity|agy)
+        [[ -d "$local_app_data/Programs/Antigravity" ]] && return 0
+        ;;
       windows-terminal|wt)
         if command -v wt >/dev/null 2>&1; then
           return 0
