@@ -382,9 +382,16 @@ for expected in \
 done
 
 printf '{"entries":[{"path":"~/.pi/agent/skills"}]}\n' > "$WORK/home/.gemini/config/skills.json"
+agy_out_mis="$(env -i PATH="$WORK/bin:$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/scripts/target-inspect.sh" agy)"
+[[ "$agy_out_mis" == *"Global Skill Discovery (system-optimizer): [MISCONFIGURED]"* ]] || {
+  echo "FAIL - antigravity inspection did not flag standalone skills.json without skills/system-optimizer/SKILL.md" >&2
+  exit 1
+}
+mkdir -p "$WORK/home/.gemini/config/skills/system-optimizer"
+printf -- '---\nname: system-optimizer\ndescription: test\n---\n' > "$WORK/home/.gemini/config/skills/system-optimizer/SKILL.md"
 agy_out2="$(env -i PATH="$WORK/bin:$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/scripts/target-inspect.sh" agy)"
 [[ "$agy_out2" == *"Global Skill Discovery (system-optimizer): [REGISTERED]"* ]] || {
-  echo "FAIL - antigravity inspection did not detect skills.json registration" >&2
+  echo "FAIL - antigravity inspection did not detect skills/system-optimizer/SKILL.md registration" >&2
   exit 1
 }
 agy_det="$(env -i PATH="$WORK/bin:$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/scripts/detect-targets.sh" --json)"
@@ -393,5 +400,5 @@ agy_det="$(env -i PATH="$WORK/bin:$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/sc
   exit 1
 }
 rm -rf "$WORK/home/.gemini"
-echo "ok   - antigravity (agy) detection, settings, credential mode, legacy MCP, and skills.json verified"
+echo "ok   - antigravity (agy) detection, settings, credential mode, legacy MCP, and global skill discovery verified"
 echo "inspect-smoke: $count targets passed"

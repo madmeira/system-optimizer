@@ -1188,16 +1188,12 @@ PY
     fi
 
     echo "Customizations & MCP Configuration ($agy_cfg_dir):"
-    agy_skill_reg=false
     if [[ -f "$agy_cfg_dir/skills/system-optimizer/SKILL.md" ]]; then
-      agy_skill_reg=true
+      echo "  * Global Skill Discovery (system-optimizer): [REGISTERED] ($agy_cfg_dir/skills/system-optimizer/SKILL.md)"
     elif [[ -f "$agy_cfg_dir/skills.json" ]] && grep -qE 'system-optimizer|\.pi/agent/skills|\.agents/skills' "$agy_cfg_dir/skills.json" 2>/dev/null; then
-      agy_skill_reg=true
-    fi
-    if [[ "$agy_skill_reg" == "true" ]]; then
-      echo "  * Global Skill Discovery (system-optimizer): [REGISTERED]"
+      echo "  * Global Skill Discovery (system-optimizer): [MISCONFIGURED] ($agy_cfg_dir/skills.json exists without $agy_cfg_dir/skills/system-optimizer/SKILL.md — Antigravity's global ~/.gemini/config/skills/ directory scan does not expand skills.json; copy or symlink the skill folder into ~/.gemini/config/skills/system-optimizer/)"
     else
-      echo "  * Global Skill Discovery (system-optimizer): [NOT REGISTERED] (Add ~/.pi/agent/skills or ~/.agents/skills to ~/.gemini/config/skills.json, or link ~/.gemini/config/skills/system-optimizer)"
+      echo "  * Global Skill Discovery (system-optimizer): [NOT REGISTERED] (Copy into ~/.gemini/config/skills/system-optimizer/ on Windows, or symlink on Linux/macOS)"
     fi
 
     agy_mcp="$agy_cfg_dir/mcp_config.json"
@@ -1254,8 +1250,8 @@ PY
     fi
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Prune stale brain/session artifacts (>30d); keep ~/.gemini/config/skills.json focused and rules under the 24 KB / 20k-token budget; keep mise shims on PATH"
-    echo "  * Configuration: Share ~/.agents/skills or ~/.pi/agent/skills via ~/.gemini/config/skills.json (or link ~/.gemini/config/skills/system-optimizer); migrate legacy MCP 'serverUrl'/'sse' to Streamable HTTP 'url' or 'mcp-remote'; run 'herdr integration install antigravity-cli' when using Herdr"
+    echo "  * Performance: Prune stale brain/session artifacts (>30d); keep always-on rules under the 24 KB / 20k-token budget; keep mise shims on PATH"
+    echo "  * Configuration: Install global skills under ~/.gemini/config/skills/<skill>/ (copy on Windows, symlink on Linux/macOS); migrate legacy MCP 'serverUrl'/'sse' to Streamable HTTP 'url' or 'mcp-remote'; run 'herdr integration install antigravity-cli' when using Herdr"
     echo "  * Security: Enforce 0600 on oauth_creds.json and mcp_config.json; scope trustedWorkspaces to dedicated workspace dirs (not / or \$HOME); use --sandbox on untrusted repositories and keep allowNonWorkspaceAccess scoped to trusted workflows"
     echo "====================================="
     exit 0
