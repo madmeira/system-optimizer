@@ -8,9 +8,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+# shellcheck source=test-env.sh
+source "$ROOT/tests/test-env.sh"
+# resolve the interpreter through any shim while the real HOME is still in place
+PY="$(so_real_python)"
 export HOME="$WORK/home"; mkdir -p "$HOME"
-
-PY="$(command -v python3 || command -v python || true)"
 [[ -n "$PY" ]] || { echo "FAIL - python3/python not found" >&2; exit 1; }
 
 pass=0

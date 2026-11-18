@@ -127,19 +127,19 @@ The skill is **100% generic** and contains **no hardcoded hardware values**. Eve
 
 ## Supported Targets
 
-`scripts/target-inspect.sh` and the optimization guide cover **64 targets** across system domains, OS platforms, browsers, and developer tools:
+`scripts/target-inspect.sh` and the optimization guide cover **71 targets** across system domains, OS platforms, browsers, and developer tools:
 
 | Category | Targets |
 |---|---|
 | **System Domains** | `system`, `security`, `storage`, `network`, `kernel`, `memory`, `cpu`, `boot`, `firewall`, `ssh`, `sandboxing`, `package-audit`, `full` |
 | **Windows 11 / 10** | `winget`, `windows-terminal`, `wsl`, `pwsh`, `powertoys`, `defender`, `execution-policy`, `uac` |
-| **Linux** | `pacman`, `yay`, `makepkg`, `paccache`, `flatpak`, `kde-plasma` (plus `systemd`, `sysctl`, `ufw`/`nftables` aliases) |
-| **Web Browsers** | `brave`, `chrome`, `edge`, `firefox`, `librewolf` |
+| **Linux** | `pacman`, `yay`, `makepkg`, `paccache`, `flatpak`, `kde-plasma`, `dolphin`, `kate`, `konsole` (plus `systemd`, `sysctl`, `ufw`/`nftables` aliases) |
+| **Web Browsers** | `brave`, `chrome`, `chromium`, `edge`, `firefox`, `librewolf`, `falkon` |
 | **Runtimes & Containers** | `mise`, `topgrade`, `cargo`, `python`, `uv`, `podman`, `docker`, `lazydocker` |
-| **Editor, Shell & CLI** | `neovim`, `bash`, `starship`, `bat`, `fzf`, `ripgrep`, `fd`, `zoxide`, `eza`, `sqlite3` |
+| **Editor, Shell & CLI** | `neovim`, `bash`, `starship`, `bat`, `fzf`, `ripgrep`, `fd`, `zoxide`, `eza`, `zstd`, `sqlite3` |
 | **Git & GitHub** | `git`, `gh`, `lazygit` |
 | **AI Coding Agents** | `pi`, `antigravity` (`agy`), `herdr` |
-| **Media, Sync & Remote** | `mpv`, `yt-dlp`, `syncthing`, `rustdesk`, `controld` |
+| **Media, Sync & Remote** | `mpv`, `ffmpeg`, `yt-dlp`, `syncthing`, `rustdesk`, `controld` |
 | **System Monitors** | `btop`, `htop` |
 
 ## Cross-Platform & Hardware Scaling
@@ -230,12 +230,13 @@ system-optimizer/
 │   ├── backup-config.sh              # Pre-modification backup, SHA-256 ledger & restore manager
 │   ├── remote-run.sh                 # Run one of these scripts on another host over SSH
 │   ├── host-diff.sh                  # Compare shell startup files & tool configs between two hosts (secrets redacted)
-│   ├── target-inspect.sh             # Per-target configuration & cross-tool synergy inspector (64 targets)
+│   ├── target-inspect.sh             # Per-target configuration & cross-tool synergy inspector (71 targets)
 │   └── tool-drift-check.sh           # Offline live CLI/schema introspection & config deprecation gate
 └── tests/
+    ├── test-env.sh                   # Shared test-isolation environment helpers (mise trust/shim resolution)
     ├── backup-smoke.sh               # Backup, list, restore, and path-traversal safety tests
     ├── probe-fallback.sh             # Verifies probes report "unknown" when PowerShell is unavailable
-    ├── inspect-smoke.sh              # Runs all 63 targets in a clean environment + synergy assertions
+    ├── inspect-smoke.sh              # Runs all 71 targets in a clean environment + synergy assertions
     ├── drift-check-smoke.sh          # Verifies tool-drift-check.sh CLI, mock drift states & live JSON
     ├── inspect-windows.sh            # Smoke test for Windows-specific targets on Windows runners
     ├── json-escape.sh                # Validates JSON escaping for quotes, backslashes & control chars

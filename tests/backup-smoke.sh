@@ -178,4 +178,18 @@ ebatch_out="$(bash "$BACKUP" "$WORK/batch/f1.conf" "$WORK/batch/f2.conf" batchta
 [[ "$(find "$STORE/batchtarget3" -type f -name '*.bak' | wc -l)" -eq 2 ]] || fail "3-arg multi-file batch store does not have 2 .bak files"
 ok "multi-file batch backup (with and without description) creates distinct backups"
 
+# --- scanned directories get no in-place copy, and an in-place copy is private (0600)
+mkdir -p "$WORK/home2/.config/herdr" "$WORK/plain"
+printf 'x = 1\n' > "$WORK/home2/.config/herdr/config.toml"
+bash "$BACKUP" "$WORK/home2/.config/herdr/config.toml" herdrt > "$WORK/out"
+grep -q 'Skipped (scanned/drop-in config directory)' "$WORK/out" || fail "herdr config dir got an in-place copy"
+[[ -z "$(find "$WORK/home2/.config/herdr" -name 'config.toml.bak.*')" ]] || fail "stray in-place copy left in the herdr directory"
+printf 'y\n' > "$WORK/plain/app.conf"; chmod 644 "$WORK/plain/app.conf"
+bash "$BACKUP" "$WORK/plain/app.conf" plaint > /dev/null
+if ! is_windows_shell; then
+  ip="$(find "$WORK/plain" -name 'app.conf.bak.*' | head -n 1)"
+  [[ -n "$ip" && "$(stat -c '%a' "$ip")" == 600 ]] || fail "in-place copy is not mode 600"
+fi
+ok "scanned directories (herdr) skip the in-place copy; in-place copies are 0600"
+
 echo "backup-smoke: $pass passed, $skipped skipped"

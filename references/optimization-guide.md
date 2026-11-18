@@ -134,6 +134,7 @@ When a run produces privileged recommendations (Safety Contract #4), Phase 6 sug
 # Preview: bash "$0" --dry-run
 # Apply:   sudo bash "$0"
 set -euo pipefail
+umask 077
 
 DRY_RUN=0
 if [[ "${1:-}" == "--dry-run" ]]; then
@@ -602,7 +603,7 @@ The combination of `topgrade` and `mise` forms the foundational modern workstati
 - **Triad Tuning**:
   - *Performance*: Initialize `zoxide init <shell>` once in shell startup (`~/.bashrc`, `~/.zshrc`, `config.fish`, or `$PROFILE`). Periodically prune dead/stale directory paths with `zoxide remove`.
   - *Configuration*: Standard aliases: `z` (jump) and `zi` (interactive fuzzy search with `fzf`). `_ZO_EXCLUDE_DIRS` is a **`os.PathListSeparator`-delimited environment variable** (`:` on Unix, `;` on Windows; `$HOME` is excluded by default) — e.g. `export _ZO_EXCLUDE_DIRS="/tmp:/var/tmp"` on Linux/macOS or `$env:_ZO_EXCLUDE_DIRS = "$env:TEMP;C:\Windows"` on Windows.
-  - *Security*: Restrict `db.zo` file permissions (`0600`) to maintain directory privacy.
+  - *Security*: Restrict the data directory (`chmod 0700 ~/.local/share/zoxide`) to maintain directory privacy. zoxide rewrites `db.zo` atomically (temp file + rename, `0666 & ~umask`) on every jump, so a `chmod 0600` on the file alone is reset; the inspector reports `(mode: 644, dir: 700 [OK])` for this case.
 
 ### Modern File Lister (`eza`)
 - **Configuration**: `${EZA_CONFIG_DIR:-~/.config/eza}/theme.yml` or `%APPDATA%\eza\theme.yml`.
@@ -908,14 +909,14 @@ The integration between Neovim and Mise establishes a unified, reproducible deve
   - *Performance*: Set `command_timeout = 500` (integer ms); enable `env_cache = true` (`1h` TTL) in `mise`; use `--print-full-init` if caching init scripts.
   - *Configuration*: Minimalist clean layout; directory truncation length 3; consistent Nerd Font symbols.
   - *Security*: Avoid executing arbitrary remote network queries in custom prompt modules (`[custom.*]`); restrict `starship.toml` permissions to `0600`.
-### Media Player (`mpv` `0.41+`)
+### Media Player (`mpv` `0.42+`)
 - **Configuration**: `%APPDATA%\mpv\mpv.conf` (Windows) or `~/.config/mpv/mpv.conf` (Linux). Enforce `0600`.
 - **Triad Tuning**:
   - *Performance*:
     - Discrete GPU / modern iGPU: `vo=gpu-next` (default in `mpv 0.41+`), `gpu-api=d3d11` (Windows) or `gpu-api=vulkan` (Linux), `profile=high-quality` (replaces legacy alias `gpu-hq`), and zero-copy **`hwdec=auto-safe`** (or `nvdec,vulkan,auto` / `vaapi,vulkan,auto` / `d3d11va,vulkan,auto` — avoid `nvdec-copy` unless CPU-side video filters require GPU→RAM copyback).
     - Legacy Intel iGPU (Haswell / Ivy Bridge / HD Graphics 4xxx): conservative `vo=gpu`, `gpu-api=opengl`, `profile=fast`, and `hwdec=auto-safe`.
     - `interpolation=yes`, `video-sync=display-resample`: Smooth motion on high-refresh displays.
-  - *Configuration*: Keep `tone-mapping=auto` (`hdr-compute-peak=auto`, libplacebo spline/dynamic ST.2094 under `vo=gpu-next`) and `target-colorspace-hint=auto` (set `target-colorspace-hint=yes` only when HDR display mode is active so SDR panels do not get washed-out PQ signals); bound `ytdl-format` to `1080p/best`.
+  - *Configuration*: Keep `tone-mapping=auto` (`hdr-compute-peak=auto`, libplacebo spline/dynamic ST.2094 under `vo=gpu-next`) and `target-colorspace-hint=auto` (set `target-colorspace-hint=yes` only when HDR display mode is active so SDR panels do not get washed-out PQ signals); remove `tone-mapping-desaturate` / `tone-mapping-desaturate-exponent` if present (removed in `mpv 0.42`; libplacebo tone mapping handles desaturation); bound `ytdl-format` to `1080p/best`.
   - *Security*: Enforce TLS certificate verification (never pass `no-check-certificates` in `ytdl-raw-options`); restrict untrusted Lua scripts; enforce `0600` on `mpv.conf`.
 
 ### Media Downloader (`yt-dlp` `2026+`)

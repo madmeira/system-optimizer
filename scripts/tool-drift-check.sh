@@ -89,13 +89,17 @@ resolve_alias() {
     pacman-contrib) echo "paccache" ;;
     btop4win) echo "btop" ;;
     agy|antigravity-cli|antigravity-ide) echo "antigravity" ;;
+    chromium|google-chrome|google-chrome-stable) echo "chrome" ;;
+    msedge|microsoft-edge) echo "edge" ;;
+    brave-browser|brave-bin) echo "brave" ;;
+    ffprobe) echo "ffmpeg" ;;
     *) echo "$1" ;;
   esac
 }
 
 is_non_cli_target() {
   case "$1" in
-    system|security|full|kernel|sysctl|sysctl-security|storage|disk|filesystem|memory|swap|zram|cpu|governor|power|boot|systemd|startup|firewall|ufw|nftables|firewalld|defender|ssh|sshd|execution-policy|uac|network|net|sandboxing|systemd-security|package-audit|pkg-audit|supply-chain|bash|windows-terminal|wt|makepkg|kde|kde-plasma|baloo|winget|powertoys|chrome|edge|brave|firefox|librewolf)
+    system|security|full|kernel|sysctl|sysctl-security|storage|disk|filesystem|memory|swap|zram|cpu|governor|power|boot|systemd|startup|firewall|ufw|nftables|firewalld|defender|ssh|sshd|execution-policy|uac|network|net|sandboxing|systemd-security|package-audit|pkg-audit|supply-chain|bash|windows-terminal|wt|makepkg|kde|kde-plasma|baloo|winget|powertoys|chrome|edge|brave|firefox|librewolf|falkon|dolphin|kate|konsole)
       return 0
       ;;
     *)
@@ -125,7 +129,9 @@ get_verified_baseline() {
     fd) echo "10.5" ;;
     eza) echo "0.23" ;;
     bat) echo "0.26" ;;
-    mpv) echo "0.41" ;;
+    mpv) echo "0.42" ;;
+    ffmpeg) echo "9.0" ;;
+    zstd) echo "1.5" ;;
     yt-dlp) echo "2026.10" ;;
     syncthing) echo "2.1" ;;
     podman) echo "6.2" ;;
@@ -277,7 +283,10 @@ probe_target() {
   case "$target" in
     mise) bin="$(command -v mise 2>/dev/null || true)" ;;
     pi) bin="$(command -v pi 2>/dev/null || true)" ;;
-    antigravity) bin="$(command -v agy 2>/dev/null || command -v antigravity 2>/dev/null || true)" ;;
+    antigravity)
+      bin="$(command -v agy 2>/dev/null || command -v antigravity 2>/dev/null || true)"
+      [[ -z "$bin" && -x "$HOME/.local/bin/agy" ]] && bin="$HOME/.local/bin/agy"
+      ;;
     topgrade) bin="$(command -v topgrade 2>/dev/null || true)" ;;
     neovim) bin="$(command -v nvim 2>/dev/null || true)" ;;
     herdr) bin="$(command -v herdr 2>/dev/null || true)" ;;
@@ -307,6 +316,8 @@ probe_target() {
     eza) bin="$(command -v eza 2>/dev/null || true)" ;;
     bat) bin="$(command -v bat 2>/dev/null || command -v batcat 2>/dev/null || true)" ;;
     mpv) bin="$(command -v mpv 2>/dev/null || true)" ;;
+    ffmpeg) bin="$(command -v ffmpeg 2>/dev/null || true)" ;;
+    zstd) bin="$(command -v zstd 2>/dev/null || true)" ;;
     yt-dlp) bin="$(command -v yt-dlp 2>/dev/null || true)" ;;
     syncthing) bin="$(command -v syncthing 2>/dev/null || true)" ;;
     podman) bin="$(command -v podman 2>/dev/null || true)" ;;
@@ -361,6 +372,12 @@ probe_target() {
       mpv)
         raw_ver=$(run_bounded "$bin" --no-config --version 2>&1 || true)
         raw_ver=$(printf '%s' "$raw_ver" | clean_output || true)
+        version=$(extract_first_semver_str "$raw_ver")
+        ;;
+      ffmpeg)
+        # ffmpeg only accepts the single-dash -version; release builds print "n9.0.2" or "9.0.2"
+        raw_ver=$(run_bounded "$bin" -hide_banner -version 2>&1 || true)
+        raw_ver=$(printf '%s' "$raw_ver" | clean_output | head -n 1 || true)
         version=$(extract_first_semver_str "$raw_ver")
         ;;
       yt-dlp)
@@ -713,6 +730,11 @@ probe_target() {
           deprecated_cfg=true
           findings+=("$mpv_cfg uses legacy 'hwdec=nvdec-copy' (prefer auto-safe or nvdec)")
         fi
+        # removed in mpv 0.42 (libplacebo tone mapping handles desaturation)
+        if uncommented_match "$mpv_cfg" '^[[:space:]]*tone-mapping-desaturate(-exponent)?[[:space:]]*='; then
+          deprecated_cfg=true
+          findings+=("$mpv_cfg sets 'tone-mapping-desaturate', removed in mpv 0.42 (delete it; gpu-next tone mapping covers it)")
+        fi
       fi
       ;;
     yt-dlp)
@@ -850,7 +872,7 @@ probe_target() {
 
 ALL_TARGETS=(
   mise pi antigravity topgrade neovim herdr lazygit fzf cargo python uv git gh
-  starship zoxide ripgrep fd eza bat mpv yt-dlp syncthing podman docker
+  starship zoxide ripgrep fd eza bat mpv ffmpeg zstd yt-dlp syncthing podman docker
   lazydocker flatpak pacman yay paccache btop htop sqlite3 rustdesk controld pwsh
 )
 if is_windows || [[ -f "$HOME/.wslconfig" ]]; then

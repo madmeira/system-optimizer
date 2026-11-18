@@ -5,7 +5,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-PY="$(command -v python3 || command -v python || true)"
+# shellcheck source=test-env.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/test-env.sh"
+PY="$(so_real_python)"
 [[ -n "$PY" ]] || { echo "FAIL - python3/python not found" >&2; exit 1; }
 
 pass=0

@@ -17,12 +17,16 @@ cfg_files=(.gitconfig .config/git/config .config/starship.toml \
            .config/gh/config.yml .config/mpv/mpv.conf .config/yt-dlp/config \
            .config/containers/containers.conf .config/pacman/makepkg.conf .config/yay/config.json \
            .sqliterc .pi/agent/settings.json \
-           .gemini/antigravity-cli/settings.json .gemini/config/skills.json)
+           .gemini/antigravity-cli/settings.json .gemini/config/skills.json \
+           .config/herdr/config.toml .config/fzf/fzfrc .config/eza/theme.yml .cargo/config.toml \
+           .config/brave-flags.conf .librewolf/librewolf.overrides.cfg)
 
 # Best-effort redaction, so review the output before sharing it: values after KEY/TOKEN/SECRET/PASSWORD names,
-# user:password@ inside URLs, and common token shapes (sk-, ghp_, AIza, xox*).
+# user:password@ inside URLs, and common token shapes (sk-, ghp_, AIza, xox*). Names that only look like
+# secrets (token counts such as reserveTokens/maxTokens, hotkey, keybindings, keymap) keep their values.
+redact_allow='(hot_?key|key_?bind(ing)?s?|key_?map|keyboard|key_?seq|tokens|tokens?_?(limit|count|budget|window))["'\'']?[[:space:]]*[=:]'
 redact() {
-  sed -E -e 's/((KEY|TOKEN|SECRET|PASS(WORD)?)[A-Za-z0-9_-]*["'\'']?[[:space:]]*[=:][[:space:]]*).*/\1<redacted>/I' \
+  sed -E -e "/${redact_allow}/I!"'s/((KEY|TOKEN|SECRET|PASS(WORD)?)[A-Za-z0-9_-]*["'\'']?[[:space:]]*[=:][[:space:]]*).*/\1<redacted>/I' \
          -e 's#://[^/@[:space:]]+@#://<redacted>@#g' \
          -e 's/(^|[^A-Za-z0-9])(sk-|gh[pousr]_|AIza|xox[abp]-)[A-Za-z0-9_-]{8,}/\1<redacted>/g'
 }
@@ -30,7 +34,7 @@ redact() {
 # for names that hold paths and tool settings; every other value is hidden, whatever the variable is called.
 rc_filter() {
   grep -E '^[[:space:]]*(alias|export|setopt|unsetopt|eval|source|\.|path\+?=|PATH=)' | sed -E 's/^[[:space:]]+//' \
-    | sed -E '/^export[[:space:]]+(PATH|EDITOR|VISUAL|PAGER|DIFFPROG|SSH_AUTH_SOCK|XDG_[A-Z_]+|FZF_[A-Z_]+|BAT_[A-Z_]+|RIPGREP_[A-Z_]+|MISE_[A-Z_]+|STARSHIP_[A-Z_]+)=/!s/^(export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*)=.*/\1=<value hidden>/' || true
+    | sed -E '/^export[[:space:]]+(PATH|EDITOR|VISUAL|PAGER|DIFFPROG|SSH_AUTH_SOCK|XDG_[A-Z_]+|FZF_[A-Z_]+|BAT_[A-Z_]+|RIPGREP_[A-Z_]+|MISE_[A-Z_]+|STARSHIP_[A-Z_]+|PYTHON[A-Z_]*|PIP_[A-Z_]+|UV_[A-Z_]+|PI_[A-Z_]+|DOCKER_HOST|_ZO_[A-Z_]+|EZA_[A-Z_]+|ZSTD_[A-Z_]+|HIST[A-Z_]*|LESS|MANPAGER)=/!s/^(export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*)=.*/\1=<value hidden>/' || true
 }
 
 # Exit 3 means the file is missing. Any other failure (ssh 255, an unreadable file making cat exit 1) is an error.

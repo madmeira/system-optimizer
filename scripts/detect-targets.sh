@@ -93,7 +93,10 @@ canonical_name() {
     rg) echo "ripgrep" ;;
     ctrld) echo "controld" ;;
     brave-bin) echo "brave" ;;
-    google-chrome-stable) echo "chrome" ;;
+    google-chrome-stable|google-chrome|chromium) echo "chrome" ;;
+    paru) echo "yay" ;;
+    powershell) echo "pwsh" ;;
+    ffprobe) echo "ffmpeg" ;;
     plasmashell|kwin_wayland|kwin_x11) echo "kde-plasma" ;;
     mise-en-place|rtx) echo "mise" ;;
     github-cli|gh) echo "gh" ;;

@@ -82,12 +82,14 @@ first_line_or() {
   printf '%s' "${out:-$default}"
 }
 
-# True when "$1 --version" prints "Python <digit>...". The Microsoft Store shortcut in WindowsApps is a
-# stub that only prints a hint, so it is not a Python.
+# True when "$1 --version" prints a line starting "Python <digit>...". The Microsoft Store shortcut in
+# WindowsApps is a stub that only prints a hint, so it is not a Python. Any line may match: runtime
+# managers (mise, pyenv, asdf shims) can print a warning on stderr before the version line.
 python_ok() {
   local out
-  out="$("$1" --version 2>&1 || true)"
-  [[ "$out" =~ ^Python[[:space:]][0-9] ]]
+  [[ -n "${1:-}" ]] || return 1
+  out="$("$1" --version 2>&1 </dev/null || true)"
+  [[ "$out" =~ (^|$'\n')Python[[:space:]][0-9] ]]
 }
 
 # Normalize a Windows path to POSIX slashes when cygpath is available (Git Bash / MSYS2) so

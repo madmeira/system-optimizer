@@ -9,7 +9,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DRIFT="$ROOT/scripts/tool-drift-check.sh"
-PY="$(command -v python3 || command -v python)"
+# shellcheck source=test-env.sh
+source "$ROOT/tests/test-env.sh"
+PY="$(so_real_python)"
+[[ -n "$PY" ]] || { echo "FAIL - python3/python not found" >&2; exit 1; }
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -34,7 +37,7 @@ esac
 run_isolated() {
   local path_val="$1"
   shift
-  env -i PATH="$path_val" HOME="$WORK/home" USERPROFILE="$WORK/home" \
+  env -i "${SO_TEST_ENV[@]}" PATH="$path_val" HOME="$WORK/home" USERPROFILE="$WORK/home" \
     LOCALAPPDATA="$WORK/appdata/Local" APPDATA="$WORK/appdata/Roaming" LANG=C \
     SYSTEMROOT="${SYSTEMROOT:-}" WINDIR="${WINDIR:-}" MSYS2_ARG_CONV_EXCL="*" \
     "$WORK/emptybin/bash" "$@"
@@ -132,7 +135,31 @@ elif [[ "${1:-}" == "--help" ]]; then
 fi
 EOF
 
-chmod +x "$WORK/mockbin/rg" "$WORK/mockbin/fd" "$WORK/mockbin/bat" "$WORK/mockbin/mise" "$WORK/mockbin/nvim" "$WORK/mockbin/ctrld" "$WORK/mockbin/agy"
+#   - mpv 0.42.0 with gpu-next -> VERIFIED baseline, then DEPRECATED CONFIG on tone-mapping-desaturate
+cat > "$WORK/mockbin/mpv" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  *--version*) echo "mpv v0.42.0 Copyright (c) 2000-2026" ;;
+  *--vo=help*) echo "  gpu-next  libplacebo next-gen GPU renderer" ;;
+esac
+EOF
+
+#   - ffmpeg n9.0.2 (-hide_banner -version) and zstd 1.5.7 -> VERIFIED
+cat > "$WORK/mockbin/ffmpeg" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+  *-version*) echo "ffmpeg version n9.0.2 Copyright (c) 2000-2026 the FFmpeg developers" ;;
+esac
+EOF
+
+cat > "$WORK/mockbin/zstd" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--version" ]]; then
+  echo "*** Zstandard CLI (64-bit) v1.5.7, by Yann Collet ***"
+fi
+EOF
+
+chmod +x "$WORK/mockbin/rg" "$WORK/mockbin/fd" "$WORK/mockbin/bat" "$WORK/mockbin/mise" "$WORK/mockbin/nvim" "$WORK/mockbin/ctrld" "$WORK/mockbin/agy" "$WORK/mockbin/mpv" "$WORK/mockbin/ffmpeg" "$WORK/mockbin/zstd"
 mkdir -p "$WORK/home/.config/mise" "$WORK/home/.config/nvim/lua/plugins"
 cat > "$WORK/home/.config/mise/config.toml" <<'EOF'
 [settings]
@@ -194,6 +221,27 @@ findings = " ".join(by_name["antigravity"]["findings"])
 assert "serverUrl" in findings and "sse" in findings, f"missing expected MCP findings: {findings}"
 PYEOF
 echo "ok   - aliases (rg, nvim, ctrld, agy), antigravity MCP drift, mason-lspconfig scoping, and OS/GUI domain skip verified"
+
+mkdir -p "$WORK/home/.config/mpv"
+printf 'vo=gpu-next\ntone-mapping-desaturate = 0.5\n' > "$WORK/home/.config/mpv/mpv.conf"
+media_json="$(run_isolated "$WORK/mockbin:$WORK/emptybin" "$DRIFT" --json mpv ffmpeg zstd falkon dolphin kate konsole chromium)"
+"$PY" - "$media_json" <<'PYEOF'
+import json, sys
+data = json.loads(sys.argv[1])
+by_name = {t["target"]: t for t in data["targets"]}
+assert set(by_name.keys()) == {"mpv", "ffmpeg", "zstd"}, f"unexpected targets: {by_name.keys()}"
+assert by_name["mpv"]["status"] == "deprecated_config", f"expected mpv deprecated_config, got {by_name['mpv']}"
+assert by_name["mpv"]["installed_version"] == "0.42.0" and by_name["mpv"]["verified_baseline"] == "0.42"
+assert any("tone-mapping-desaturate" in f for f in by_name["mpv"]["findings"]), f"missing mpv finding: {by_name['mpv']}"
+assert by_name["ffmpeg"]["status"] == "verified" and by_name["ffmpeg"]["installed_version"] == "9.0.2", f"bad ffmpeg: {by_name['ffmpeg']}"
+assert by_name["zstd"]["status"] == "verified" and by_name["zstd"]["installed_version"] == "1.5.7", f"bad zstd: {by_name['zstd']}"
+PYEOF
+media_txt="$(run_isolated "$WORK/mockbin:$WORK/emptybin" "$DRIFT" ffmpeg zstd falkon dolphin kate konsole chromium)"
+[[ "$media_txt" == *"Skipped OS/GUI domain targets (no standalone CLI schema): falkon dolphin kate konsole chromium"* ]] || {
+  echo "FAIL - tool-drift-check did not skip GUI targets cleanly: $media_txt" >&2
+  exit 1
+}
+echo "ok   - mpv 0.42 deprecation, ffmpeg/zstd baselines, and GUI/KDE target skips verified"
 
 # 5. Live host run (both --json and human output) must succeed and emit valid JSON
 live_json="$(bash "$DRIFT" --json)"

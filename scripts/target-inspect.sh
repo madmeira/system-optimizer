@@ -40,12 +40,12 @@ Developer Tools & Runtimes:
   bat, batcat, fzf, sqlite3
 
 Media, Sync, Containers, Monitors & OS Utilities:
-  mpv, yt-dlp, syncthing, podman, docker, lazydocker, flatpak, pacman, yay,
+  mpv, ffmpeg, zstd, yt-dlp, syncthing, podman, docker, lazydocker, flatpak, pacman, yay,
   paru, makepkg, paccache, pacman-contrib, btop, htop, btop4win, rustdesk,
   controld, ctrld, kde, kde-plasma, baloo, winget, powertoys
 
-Browsers:
-  chrome, edge, brave, firefox, librewolf
+Browsers & KDE Applications:
+  chrome, chromium, edge, brave, firefox, librewolf, falkon, dolphin, kate, konsole
 EOF
     exit 0
     ;;
@@ -109,6 +109,53 @@ rc_lines() {
   return "$hit"
 }
 
+# Print the value a startup file assigns to variable $1 (export VAR=..., VAR=..., fish set -gx VAR ...,
+# PowerShell $env:VAR = ...); the last assignment wins. Returns 1 when none is found. Used because a
+# non-interactive shell (remote-run.sh over SSH, cron, a CI step) usually never reads ~/.bashrc.
+rc_env_val() {
+  local var="$1" line val tilde='~'
+  line=$(rc_lines "^[[:space:]]*(export[[:space:]]+)?${var}=|^[[:space:]]*set[[:space:]]+-gx[[:space:]]+${var}[[:space:]]|^[[:space:]]*\\\$env:${var}[[:space:]]*=" | awk 'END { if (NR) print }' || true)
+  [[ -n "$line" ]] || return 1
+  line=$(printf '%s' "$line" | sed -E 's/^[[:space:]]*[^:]+:[0-9]+://')
+  if [[ "$line" =~ set[[:space:]]+-gx[[:space:]]+${var}[[:space:]]+(.*)$ ]]; then
+    val="${BASH_REMATCH[1]}"
+  else
+    val="${line#*=}"
+  fi
+  val="${val#"${val%%[![:space:]]*}"}"
+  val="${val%"${val##*[![:space:]]}"}"
+  if [[ "$val" =~ ^\"(.*)\"$ || "$val" =~ ^\'(.*)\'$ ]]; then
+    val="${BASH_REMATCH[1]}"
+  fi
+  # expand the home references used in paths (nothing else is evaluated)
+  val="${val//\$\{HOME\}/$HOME}"
+  val="${val//\$HOME/$HOME}"
+  [[ "$val" == "$tilde/"* ]] && val="$HOME/${val#"$tilde/"}"
+  printf '%s' "$val"
+}
+
+# Value of variable $1: the current environment first, then the startup files (see rc_env_val).
+env_val() {
+  local var="$1"
+  if [[ -n "${!var:-}" ]]; then
+    printf '%s' "${!var}"
+  else
+    rc_env_val "$var" || true
+  fi
+}
+
+# Display form of variable $1: its value, the startup-file value marked as such, or $2 (default [UNSET]).
+env_show() {
+  local var="$1" unset_label="${2:-[UNSET]}" v
+  if [[ -n "${!var:-}" ]]; then
+    printf '%s' "${!var}"
+  elif v=$(rc_env_val "$var") && [[ -n "$v" ]]; then
+    printf '%s (from startup file; not in this shell'\''s environment)' "$v"
+  else
+    printf '%s' "$unset_label"
+  fi
+}
+
 # Print "  * <sysctl>: <value> [OK]" or "[WARNING] (Recommended: <hint>)". $2 is a regex of acceptable values.
 sysctl_check() {
   local v
@@ -140,18 +187,42 @@ git_check() {
   fi
 }
 
-# Format file permissions on Linux (POSIX modes are ignored on Windows/Git Bash)
+# Format file permissions on Linux (POSIX modes are ignored on Windows/Git Bash). Unix sockets are
+# checked too. Tools that rewrite a state file atomically (temp file + rename with 0666 & ~umask, e.g.
+# zoxide db.zo, herdr session.json) reset a chmod 0600 on every write; a 0700 parent directory already
+# blocks other users, so such a file is reported [OK] instead of a recommendation that cannot stick.
 cfg_perm_tag() {
-  local f="$1" p
-  if is_windows || [[ ! -f "$f" ]]; then
+  local f="$1" p d
+  if is_windows || [[ ! -f "$f" && ! -S "$f" ]]; then
     return 0
   fi
   p=$(stat -c "%a" "$f" 2>/dev/null || echo "")
   if [[ -n "$p" ]]; then
-    if [[ "$p" == "600" || "$p" == "400" || "$f" == /etc/* ]]; then
+    if [[ "$p" == "600" || "$p" == "400" || "$p" == "700" || "$f" == /etc/* ]]; then
       printf ' (mode: %s)' "$p"
     else
-      printf ' (mode: %s -> recommend 0600)' "$p"
+      # any private ancestor up to (not including) $HOME blocks other users, e.g. ~/.config/falkon (700)
+      # protects ~/.config/falkon/profiles/default/settings.ini
+      d=$(dirname "$f")
+      local priv_dir="" priv_mode="" depth=0
+      while [[ -n "$d" && "$d" != "/" && "$d" != "." && "$d" != "$HOME" && depth -lt 8 ]]; do
+        priv_mode=$(stat -c "%a" "$d" 2>/dev/null || echo "")
+        if [[ "$priv_mode" == "700" || "$priv_mode" == "500" ]]; then
+          priv_dir="$d"
+          break
+        fi
+        d=$(dirname "$d")
+        depth=$((depth + 1))
+      done
+      if [[ -n "$priv_dir" ]]; then
+        if [[ "$priv_dir" == "$(dirname "$f")" ]]; then
+          printf ' (mode: %s, dir: %s [OK])' "$p" "$priv_mode"
+        else
+          printf ' (mode: %s, %s: %s [OK])' "$p" "$priv_dir" "$priv_mode"
+        fi
+      else
+        printf ' (mode: %s -> recommend 0600, or 0700 on %s)' "$p" "$(dirname "$f")"
+      fi
     fi
   fi
 }
@@ -192,6 +263,27 @@ has_mason_lspconfig_deprecated() {
     fi
   done < <(grep -RIl --include='*.lua' --exclude-dir=.git 'automatic_installation' "$dir" 2>/dev/null || true)
   return 1
+}
+
+# Print the value of key $3 in [section] $2 of an INI/KConfig file $1 (KDE rc files, Falkon settings.ini).
+# Section and key match exactly, spaces included ("KFileDialog Settings", "Days Meta Infos"); the last
+# assignment wins, as in KConfig. Prints nothing when absent.
+ini_val() {
+  local file="$1" section="$2" key="$3"
+  [[ -r "$file" ]] || return 0
+  awk -v sec="[$section]" -v k="$key" '
+    { sub(/\r$/, "") }
+    /^[[:space:]]*\[/ { cur = $0; sub(/^[[:space:]]+/, "", cur); sub(/[[:space:]]+$/, "", cur); next }
+    cur == sec {
+      line = $0
+      p = index(line, "=")
+      if (p == 0) next
+      name = substr(line, 1, p - 1); sub(/^[[:space:]]+/, "", name); sub(/[[:space:]]+$/, "", name)
+      sub(/\[\$[a-z]+\]$/, "", name)
+      if (name == k) { val = substr(line, p + 1); sub(/^[[:space:]]+/, "", val); found = 1 }
+    }
+    END { if (found) printf "%s", val }
+  ' "$file" 2>/dev/null || true
 }
 
 # Extract a key's value within a specific TOML [section] (empty section = top-level before any [section])
@@ -369,6 +461,8 @@ infer_theme() {
     local btop_theme
     btop_theme=$(grep -E '^[[:space:]]*color_theme[[:space:]]*=' "$HOME/.config/btop/btop.conf" 2>/dev/null | head -n 1 | cut -d= -f2- | tr -d ' "' || echo "")
     if [[ -n "$btop_theme" && "$btop_theme" != "Default" ]]; then
+      # color_theme may be a full path (/usr/share/btop/themes/tokyo-night.theme): print the theme name
+      btop_theme=$(basename "$btop_theme" .theme)
       echo "$btop_theme"
       return 0
     fi
@@ -426,8 +520,8 @@ case "$target" in
       # number after "=" is read (LC_ALL=C: "." must match any byte) and the explanation is written here.
       trim_val=$(fsutil.exe behavior query DisableDeleteNotify 2>&1 | LC_ALL=C grep -a -i "NTFS" | LC_ALL=C sed -nE 's/.*=[[:space:]]*([0-9]+).*/\1/p' | head -n 1 || true)
       case "$trim_val" in
-        0) trim_status="NTFS DisableDeleteNotify = 0  (TRIM operations are sent to the storage device)" ;;
-        1) trim_status="NTFS DisableDeleteNotify = 1  (TRIM is disabled)" ;;
+        0) trim_status="NTFS DisableDeleteNotify = 0  (TRIM operations are sent to the storage device) [OK]" ;;
+        1) trim_status="NTFS DisableDeleteNotify = 1  (TRIM is disabled) [WARNING] (Recommended: fsutil behavior set DisableDeleteNotify 0)" ;;
         *) trim_status="unknown" ;;
       esac
       echo "SSD TRIM Status: $trim_status"
@@ -441,8 +535,28 @@ case "$target" in
     else
       root_dev=$(LC_ALL=C df --output=source / 2>/dev/null | tail -1 || echo "")
       echo "Root Device: $root_dev"
-      echo "Mount Options: $(findmnt -n -o OPTIONS / 2>/dev/null || echo defaults)"
-      echo "fstrim.timer Status: $(systemctl is-active fstrim.timer 2>/dev/null || echo inactive) ($(systemctl is-enabled fstrim.timer 2>/dev/null || echo disabled))"
+      root_opts=$(findmnt -n -o OPTIONS / 2>/dev/null || echo defaults)
+      echo "Mount Options: $root_opts"
+      fstrim_act=$(first_line_or inactive systemctl is-active fstrim.timer)
+      fstrim_en=$(first_line_or disabled systemctl is-enabled fstrim.timer)
+      if [[ "$fstrim_act" == active || "$root_opts" =~ (^|,)discard(=|,|$) ]]; then
+        echo "fstrim.timer Status: $fstrim_act ($fstrim_en) [OK]"
+      else
+        echo "fstrim.timer Status: $fstrim_act ($fstrim_en) [WARNING] (Recommended: systemctl enable --now fstrim.timer on SSD/NVMe, or mount with discard=async)"
+      fi
+      if [[ "$root_opts" =~ (^|,)(noatime|relatime|lazytime)(,|$) ]]; then
+        echo "Root atime Policy: ${BASH_REMATCH[2]} [OK]"
+      elif [[ "$root_opts" =~ (^|,)strictatime(,|$) ]]; then
+        echo "Root atime Policy: strictatime [WARNING] (Recommended: relatime or noatime)"
+      fi
+      root_use=$(LC_ALL=C df --output=pcent / 2>/dev/null | tail -1 | tr -dc '0-9' || true)
+      if [[ -n "$root_use" ]]; then
+        if (( root_use >= 90 )); then
+          echo "Root Filesystem Usage: ${root_use}% [WARNING] (above 90%; free space or clean caches)"
+        else
+          echo "Root Filesystem Usage: ${root_use}% [OK]"
+        fi
+      fi
       echo "Fstab Config: /etc/fstab"
     fi
     echo "====================================="
@@ -476,7 +590,11 @@ case "$target" in
       else
         echo "Paging File (Allocated): ${page_file} GiB"
       fi
-      echo "Windows Memory Compression: $mem_comp"
+      case "$mem_comp" in
+        true) echo "Windows Memory Compression: true [OK]" ;;
+        false) echo "Windows Memory Compression: false [WARNING] (Recommended: Enable-MMAgent -MemoryCompression)" ;;
+        *) echo "Windows Memory Compression: $mem_comp" ;;
+      esac
       echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
       echo "  * Performance: Enable-MMAgent -mc (compressed in-RAM paging, eliminates SSD paging stalls)"
       echo "  * Configuration: Fixed or system-managed pagefile on fastest NVMe drive"
@@ -484,6 +602,26 @@ case "$target" in
     else
       echo "Total Memory: $(LC_ALL=C free -h 2>/dev/null | awk '/^Mem:/ {print $2}' || echo unknown)"
       echo "Swap: $(LC_ALL=C free -h 2>/dev/null | awk '/^Swap:/ {print $2}' || echo unknown)"
+      zram_active=false
+      if [[ -r /proc/swaps ]] && grep -q '^/dev/zram' /proc/swaps 2>/dev/null; then
+        zram_active=true
+      fi
+      swap_total_kb=$(awk '/^SwapTotal:/ {print $2}' /proc/meminfo 2>/dev/null || true)
+      if [[ "$zram_active" == true ]]; then
+        echo "Compressed Swap (zram): active [OK]"
+      elif [[ "${swap_total_kb:-0}" == 0 ]]; then
+        echo "Compressed Swap (zram): none [WARNING] (no swap at all; Recommended: zram-generator with zram-size = ram / 2)"
+      else
+        echo "Compressed Swap (zram): none [NOTE] (disk swap only; zram-generator avoids SSD paging stalls)"
+      fi
+      swp=$(sysctl -n vm.swappiness 2>/dev/null || echo unknown)
+      if [[ "$swp" =~ ^[0-9]+$ ]]; then
+        if [[ "$zram_active" == true && "$swp" -lt 100 ]]; then
+          echo "  * vm.swappiness: $swp [NOTE] (with zram, 100-180 is the upstream-recommended range)"
+        else
+          echo "  * vm.swappiness: $swp [OK]"
+        fi
+      fi
       if command -v zramctl >/dev/null 2>&1; then
         echo "zram Devices:"
         zramctl 2>/dev/null || true
@@ -506,6 +644,11 @@ case "$target" in
       [[ -n "$power_scheme" ]] || power_scheme="unknown"
       echo "CPU: $cpu_name ($threads threads)"
       echo "Active Power Scheme: $power_scheme"
+      if [[ "$power_scheme" =~ (Power[[:space:]]saver|Energy) ]]; then
+        echo "  * Power Scheme: [WARNING] power-saving plan active on a workstation (Recommended: Balanced or High Performance on AC)"
+      elif [[ "$power_scheme" != unknown ]]; then
+        echo "  * Power Scheme: [OK]"
+      fi
       echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
       echo "  * Performance: High Performance or Ultimate Performance scheme (powercfg /s <guid>)"
       echo "  * Configuration: Set 100% min/max processor state on AC, disable core parking on desktop"
@@ -515,11 +658,21 @@ case "$target" in
       echo "Governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo unknown)"
       echo "Microcode: $(grep -m1 'microcode' /proc/cpuinfo 2>/dev/null | awk '{print $3}' || echo unknown)"
       echo "Power Daemons:"
-      for d in power-profiles-daemon tlp cpupower thermald auto-cpufreq; do
+      active_pd=()
+      for d in power-profiles-daemon tlp cpupower thermald auto-cpufreq tuned; do
         if systemctl is-active "$d" >/dev/null 2>&1; then
           echo "  - [ACTIVE] $d"
+          [[ "$d" != thermald ]] && active_pd+=("$d")
         fi
       done
+      if [[ ${#active_pd[@]} -gt 1 ]]; then
+        echo "  * Power Daemon Conflict: [WARNING] ${active_pd[*]} all manage CPU frequency; keep only one"
+      else
+        echo "  * Power Daemon Conflict: [OK] ${active_pd[*]:-none} managing CPU frequency"
+      fi
+      if grep -qm1 'microcode' /proc/cpuinfo 2>/dev/null; then
+        echo "  * Microcode: [OK] loaded"
+      fi
     fi
     echo "====================================="
     exit 0
@@ -566,14 +719,14 @@ case "$target" in
     echo "Category: Security / Firewall & Host Protection"
     if is_windows; then
       echo "Windows Defender Firewall Status:"
-      run_ps 'Get-NetFirewallProfile | ForEach-Object { "  * Profile $($_.Name): Enabled=$($_.Enabled), DefaultInboundAction=$($_.DefaultInboundAction), DefaultOutboundAction=$($_.DefaultOutboundAction)" }' 2>/dev/null || true
+      run_ps 'Get-NetFirewallProfile | ForEach-Object { $tag = if ($_.Enabled -and "$($_.DefaultInboundAction)" -ne "Allow") { "[OK]" } else { "[WARNING]" }; "  * Profile $($_.Name): Enabled=$($_.Enabled), DefaultInboundAction=$($_.DefaultInboundAction), DefaultOutboundAction=$($_.DefaultOutboundAction) $tag" }' 2>/dev/null || true
       echo "Windows Defender Antivirus Status:"
       run_ps '
         $mp = try { Get-MpComputerStatus } catch { $null }
         if ($mp) {
-          "  * Real-Time Protection: $($mp.RealTimeProtectionEnabled)"
-          "  * Antivirus Engine: $($mp.AntivirusEnabled)"
-          "  * Signature Age: $([math]::Round($mp.AntivirusSignatureAge, 1)) day(s)"
+          "  * Real-Time Protection: $($mp.RealTimeProtectionEnabled) $(if ($mp.RealTimeProtectionEnabled) { "[OK]" } else { "[WARNING]" })"
+          "  * Antivirus Engine: $($mp.AntivirusEnabled) $(if ($mp.AntivirusEnabled) { "[OK]" } else { "[WARNING]" })"
+          "  * Signature Age: $([math]::Round($mp.AntivirusSignatureAge, 1)) day(s) $(if ($mp.AntivirusSignatureAge -le 7) { "[OK]" } else { "[WARNING] (older than 7 days)" })"
         }
       ' 2>/dev/null || true
       echo "Listening TCP Ports:"
@@ -585,11 +738,20 @@ case "$target" in
       echo "  * Performance: Add developer folder exclusions for local git builds (target, node_modules) to avoid Defender CPU lockup"
       echo "  * Configuration: Tamper Protection active, Cloud-delivered protection level: High"
     else
+      fw_active=""
       for fw in ufw nftables firewalld; do
         if command -v "$fw" >/dev/null 2>&1; then
-          echo "  - $fw: active=$(systemctl is-active "$fw" 2>/dev/null || echo inactive), enabled=$(systemctl is-enabled "$fw" 2>/dev/null || echo disabled)"
+          fw_a=$(first_line_or inactive systemctl is-active "$fw")
+          fw_e=$(first_line_or disabled systemctl is-enabled "$fw")
+          echo "  - $fw: active=$fw_a, enabled=$fw_e"
+          [[ "$fw_a" == active ]] && fw_active+="$fw "
         fi
       done
+      if [[ -n "$fw_active" ]]; then
+        echo "  * Host Firewall: [OK] active (${fw_active% })"
+      else
+        echo "  * Host Firewall: [WARNING] no active ufw/nftables/firewalld service (Recommended: enable one with a default-deny inbound policy)"
+      fi
       echo "Listening TCP Ports:"
       ss -tlnH 2>/dev/null | awk '{print "    * " $4}' | sort -u || echo "    (none)"
     fi
@@ -621,12 +783,14 @@ case "$target" in
       if command -v sshd >/dev/null 2>&1; then
         sshd_t=$(sshd -T 2>/dev/null || true)
       fi
+      ssh_files=()
+      prl=""; pwa=""; ssh_src=""
       if [[ -n "$sshd_t" ]]; then
         echo "Effective SSH Settings:"
-        echo "  * PermitRootLogin: $(echo "$sshd_t" | grep -i '^permitrootlogin' | awk '{print $2}')"
-        echo "  * PasswordAuthentication: $(echo "$sshd_t" | grep -i '^passwordauthentication' | awk '{print $2}')"
+        prl=$(echo "$sshd_t" | grep -i '^permitrootlogin' | awk '{print tolower($2)}' || true)
+        pwa=$(echo "$sshd_t" | grep -i '^passwordauthentication' | awk '{print tolower($2)}' || true)
+        ssh_src="sshd -T"
       else
-        ssh_files=()
         for sf in /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config; do
           [[ -r "$sf" ]] && ssh_files+=("$sf")
         done
@@ -634,11 +798,29 @@ case "$target" in
           prl=$(grep -hEi '^[[:space:]]*PermitRootLogin[[:space:]]+' "${ssh_files[@]}" 2>/dev/null | head -n 1 | awk '{print tolower($2)}' || true)
           pwa=$(grep -hEi '^[[:space:]]*PasswordAuthentication[[:space:]]+' "${ssh_files[@]}" 2>/dev/null | head -n 1 | awk '{print tolower($2)}' || true)
           echo "Configured SSH Settings (config fallback):"
-          echo "  * PermitRootLogin: ${prl:-default (not explicitly set)}"
-          echo "  * PasswordAuthentication: ${pwa:-default (not explicitly set)}"
+          ssh_src="config"
         fi
       fi
-      echo "Permissions of ~/.ssh directory: $(stat -c '%a' "$HOME/.ssh" 2>/dev/null || echo absent)"
+      if [[ -n "$ssh_src" ]]; then
+        # OpenSSH defaults: PermitRootLogin prohibit-password, PasswordAuthentication yes
+        prl_show="${prl:-prohibit-password (default, not explicitly set)}"
+        pwa_show="${pwa:-yes (default, not explicitly set)}"
+        case "${prl:-prohibit-password}" in
+          no|prohibit-password|without-password|forced-commands-only) echo "  * PermitRootLogin: $prl_show [OK]" ;;
+          *) echo "  * PermitRootLogin: $prl_show [WARNING] (Recommended: no or prohibit-password)" ;;
+        esac
+        if [[ "${pwa:-yes}" == no ]]; then
+          echo "  * PasswordAuthentication: $pwa_show [OK]"
+        else
+          echo "  * PasswordAuthentication: $pwa_show [WARNING] (Recommended: no, key-based auth only, when sshd is exposed)"
+        fi
+      fi
+      ssh_dir_mode=$(stat -c '%a' "$HOME/.ssh" 2>/dev/null || echo absent)
+      case "$ssh_dir_mode" in
+        absent) echo "Permissions of ~/.ssh directory: absent" ;;
+        700|500) echo "Permissions of ~/.ssh directory: $ssh_dir_mode [OK]" ;;
+        *) echo "Permissions of ~/.ssh directory: $ssh_dir_mode [WARNING] (Recommended: chmod 700 ~/.ssh)" ;;
+      esac
     fi
     echo "====================================="
     exit 0
@@ -649,9 +831,12 @@ case "$target" in
       run_ps '
         $ep = Get-ExecutionPolicy
         $uac = (Get-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -ErrorAction SilentlyContinue)
-        "PowerShell ExecutionPolicy: $ep"
-        "User Account Control (EnableLUA): $($uac.EnableLUA)"
-        "ConsentPromptBehaviorAdmin: $($uac.ConsentPromptBehaviorAdmin) (5 = Prompt for non-Windows, 2 = Prompt for all on Secure Desktop)"
+        $epTag = if ("$ep" -in @("Unrestricted", "Bypass")) { "[WARNING] (Recommended: RemoteSigned)" } else { "[OK]" }
+        $luaTag = if ($uac.EnableLUA -eq 1) { "[OK]" } else { "[WARNING] (UAC disabled; set EnableLUA=1)" }
+        $cpTag = if ($uac.ConsentPromptBehaviorAdmin -eq 0) { "[WARNING] (elevates without prompting)" } else { "[OK]" }
+        "PowerShell ExecutionPolicy: $ep $epTag"
+        "User Account Control (EnableLUA): $($uac.EnableLUA) $luaTag"
+        "ConsentPromptBehaviorAdmin: $($uac.ConsentPromptBehaviorAdmin) (5 = Prompt for non-Windows, 2 = Prompt for all on Secure Desktop) $cpTag"
       ' 2>/dev/null || true
       echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
       echo "  * Security: Enforce RemoteSigned policy to prevent arbitrary script execution from web downloads"
@@ -1386,6 +1571,9 @@ PY
       if grep -qiE '^[[:space:]]*profile[[:space:]]*=[[:space:]]*gpu-hq([[:space:]]|$|#)' "$mpv_cfg" 2>/dev/null; then
         echo "  * [DEPRECATED] profile=gpu-hq is a legacy alias in $mpv_cfg (use profile=high-quality)"
       fi
+      if grep -qE '^[[:space:]]*tone-mapping-desaturate(-exponent)?[[:space:]]*=' "$mpv_cfg" 2>/dev/null; then
+        echo "  * [DEPRECATED] tone-mapping-desaturate in $mpv_cfg was removed in mpv 0.42 (delete it; gpu-next tone mapping covers it)"
+      fi
       if grep -qiE '^[[:space:]]*hwdec[[:space:]]*=[[:space:]]*[a-z0-9]+-copy([[:space:],]|$)' "$mpv_cfg" 2>/dev/null; then
         echo "  * [NOTE] Copyback hwdec (*-copy) forces GPU->RAM->GPU PCIe transfers; prefer zero-copy hwdec=auto-safe unless using CPU video filters"
       fi
@@ -1789,9 +1977,11 @@ PY
     fi
 
     echo "Environment & Configuration Files:"
-    echo "  * RIPGREP_CONFIG_PATH: ${RIPGREP_CONFIG_PATH:-[UNSET]}"
+    echo "  * RIPGREP_CONFIG_PATH: $(env_show RIPGREP_CONFIG_PATH)"
+    rg_cfg_env=$(env_val RIPGREP_CONFIG_PATH)
+    fzf_cmd_env=$(env_val FZF_DEFAULT_COMMAND)
     rg_cfgs=()
-    for f in "${RIPGREP_CONFIG_PATH:-}" "$HOME/.ripgreprc" "${XDG_CONFIG_HOME:-$HOME/.config}/ripgrep/config" "$roaming_app_data/ripgrep/config"; do
+    for f in "$rg_cfg_env" "$HOME/.ripgreprc" "${XDG_CONFIG_HOME:-$HOME/.config}/ripgrep/config" "$roaming_app_data/ripgrep/config"; do
       [[ -n "$f" && -f "$f" ]] || continue
       seen=0
       for existing in "${rg_cfgs[@]}"; do
@@ -1806,9 +1996,9 @@ PY
     done
 
     echo "Ripgrep + FZF + Bat Synergy Integration:"
-    if [[ "${FZF_DEFAULT_COMMAND:-}" =~ (^|[^A-Za-z0-9_])(rg|ripgrep)([^A-Za-z0-9_]|$) ]]; then
+    if [[ "$fzf_cmd_env" =~ (^|[^A-Za-z0-9_])(rg|ripgrep)([^A-Za-z0-9_]|$) ]]; then
       echo "  * FZF Backend: [WIRED] (rg is active search generator in FZF_DEFAULT_COMMAND)"
-    elif [[ "${FZF_DEFAULT_COMMAND:-}" =~ (^|[^A-Za-z0-9_])(fd|fdfind)([^A-Za-z0-9_]|$) ]]; then
+    elif [[ "$fzf_cmd_env" =~ (^|[^A-Za-z0-9_])(fd|fdfind)([^A-Za-z0-9_]|$) ]]; then
       echo "  * FZF Backend: [CONFIGURED] (fd is active in FZF_DEFAULT_COMMAND; rg serves content search)"
     else
       echo "  * FZF Backend: [RECOMMENDED] (Wire rg or fd as backend: export FZF_DEFAULT_COMMAND=\"rg --files --hidden --glob '!.git/*'\")"
@@ -1874,7 +2064,7 @@ PY
     else
       echo "  * Configuration: Define aliases 'z' (jump) and 'zi' (interactive fzf jump); set colon-delimited _ZO_EXCLUDE_DIRS on Unix (note \$HOME is excluded by default)"
     fi
-    echo "  * Security: Protect db.zo database file permissions (0600) to keep browsing history private"
+    echo "  * Security: Keep the zoxide data directory at 0700 (zoxide rewrites db.zo with 0666 & ~umask on every jump, so a chmod 0600 on the file alone does not stick)"
     echo "====================================="
     exit 0
     ;;
@@ -2236,7 +2426,11 @@ PY
     fi
 
     echo "Discovered Configuration Files:"
-    fzf_rc="${FZF_DEFAULT_OPTS_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/fzf/fzfrc}"
+    fzf_cmd_env=$(env_val FZF_DEFAULT_COMMAND)
+    fzf_opts_env=$(env_val FZF_DEFAULT_OPTS)
+    fzf_ctrl_t_env=$(env_val FZF_CTRL_T_OPTS)
+    fzf_opts_file_env=$(env_val FZF_DEFAULT_OPTS_FILE)
+    fzf_rc="${fzf_opts_file_env:-${XDG_CONFIG_HOME:-$HOME/.config}/fzf/fzfrc}"
     for f in "$fzf_rc" "$HOME/.fzfrc"; do
       if [[ -f "$f" ]]; then
         echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
@@ -2247,17 +2441,21 @@ PY
     done
 
     echo "Environment Variables & Synergy Checkpoints:"
-    echo "  * FZF_DEFAULT_COMMAND: ${FZF_DEFAULT_COMMAND:-[UNSET]}"
-    echo "  * FZF_DEFAULT_OPTS: ${FZF_DEFAULT_OPTS:-[UNSET]}"
-    echo "  * FZF_DEFAULT_OPTS_FILE: ${FZF_DEFAULT_OPTS_FILE:-[UNSET]}"
-    if [[ "${FZF_DEFAULT_OPTS:-}" == *"--inline-info"* ]]; then
+    echo "  * FZF_DEFAULT_COMMAND: $(env_show FZF_DEFAULT_COMMAND)"
+    echo "  * FZF_DEFAULT_OPTS: $(env_show FZF_DEFAULT_OPTS)"
+    echo "  * FZF_CTRL_T_OPTS: $(env_show FZF_CTRL_T_OPTS)"
+    echo "  * FZF_DEFAULT_OPTS_FILE: $(env_show FZF_DEFAULT_OPTS_FILE)"
+    if [[ "$fzf_opts_env" == *"--inline-info"* ]]; then
       echo "  * [DEPRECATED] --inline-info in FZF_DEFAULT_OPTS (replace with --info=inline-right)"
     fi
 
     echo "Shell Integration:"
-    if rc_lines 'fzf --(bash|zsh|fish)|key-bindings\.(bash|zsh)|completion\.(bash|zsh)' >/dev/null; then
-      rc_lines 'fzf --(bash|zsh|fish)|key-bindings\.(bash|zsh)|completion\.(bash|zsh)'
-      if rc_lines 'key-bindings\.(bash|zsh)|completion\.(bash|zsh)' >/dev/null; then
+    # Legacy scripts live in fzf's own tree (/usr/share/fzf/key-bindings.bash, ~/.fzf/shell/completion.zsh)
+    # or are named *.fzf.*: another tool's *completion.bash (e.g. socket-completion.bash) is not fzf.
+    fzf_legacy_re='fzf[^#[:space:]]*/(key-bindings|completion)\.(bash|zsh)|(key-bindings|completion)\.fzf\.(bash|zsh)|\.fzf\.(bash|zsh)'
+    if rc_lines "fzf --(bash|zsh|fish)|$fzf_legacy_re" >/dev/null; then
+      rc_lines "fzf --(bash|zsh|fish)|$fzf_legacy_re"
+      if rc_lines "$fzf_legacy_re" >/dev/null; then
         echo "  * [NOTE] Legacy key-bindings/completion sourcing detected; fzf 0.48+ supports unified 'eval \"\$(fzf --bash)\"' / 'source <(fzf --zsh)'"
       fi
     else
@@ -2265,16 +2463,24 @@ PY
     fi
 
     echo "Ripgrep + FZF + Bat Synergy Integration:"
-    if [[ "${FZF_DEFAULT_COMMAND:-}" =~ (rg|ripgrep) ]]; then
+    if [[ "$fzf_cmd_env" =~ (^|[^A-Za-z0-9_])(rg|ripgrep)([^A-Za-z0-9_]|$) ]]; then
       echo "  * Search Generator (ripgrep): [CONFIGURED] (rg wired as FZF_DEFAULT_COMMAND backend)"
-    elif [[ "${FZF_DEFAULT_COMMAND:-}" =~ fd ]]; then
+    elif [[ "$fzf_cmd_env" =~ (^|[^A-Za-z0-9_])(fd|fdfind)([^A-Za-z0-9_]|$) ]]; then
       echo "  * Search Generator (fd): [CONFIGURED] (fd directory walker)"
     else
       echo "  * Search Generator: [DEFAULT] (Built-in --walker is multithreaded in fzf 0.75+; wire 'fd --type f --strip-cwd-prefix --hidden --exclude .git' or 'rg --files' for .gitignore awareness)"
     fi
 
-    if [[ "${FZF_DEFAULT_OPTS:-}" =~ bat ]]; then
-      echo "  * Syntax Previewer (bat): [CONFIGURED] (bat rendering line-numbered previews)"
+    fzf_bat_src=""
+    if [[ "$fzf_opts_env" =~ (^|[^A-Za-z0-9_])(bat|batcat)[[:space:]] ]]; then
+      fzf_bat_src="FZF_DEFAULT_OPTS"
+    elif [[ "$fzf_ctrl_t_env" =~ (^|[^A-Za-z0-9_])(bat|batcat)[[:space:]] ]]; then
+      fzf_bat_src="FZF_CTRL_T_OPTS (scoped to file search; keeps CTRL-R and piped input preview-free)"
+    elif [[ -f "$fzf_rc" ]] && grep -qE -- '--preview.*(^|[^A-Za-z0-9_])(bat|batcat)[[:space:]]' "$fzf_rc" 2>/dev/null; then
+      fzf_bat_src="$fzf_rc"
+    fi
+    if [[ -n "$fzf_bat_src" ]]; then
+      echo "  * Syntax Previewer (bat): [CONFIGURED] (bat previews via $fzf_bat_src)"
     else
       echo "  * Syntax Previewer (bat): [RECOMMENDED] (Configure --preview 'bat --style=numbers --color=always --line-range :500 {}')"
     fi
@@ -2658,14 +2864,35 @@ PY
       run_ps 'Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | ForEach-Object { "  * $($_.Name): $($_.InterfaceDescription), $($_.LinkSpeed)" }' 2>/dev/null || echo "  (unknown)"
       echo "DNS Servers (IPv4):"
       run_ps 'Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object { $_.ServerAddresses } | ForEach-Object { "  * $($_.InterfaceAlias): $($_.ServerAddresses -join ",")" }' 2>/dev/null || echo "  (unknown)"
-      echo "TCP Receive Window Auto-Tuning: $(run_ps '"$((Get-NetTCPSetting -SettingName Internet).AutoTuningLevelLocal)".ToLower()' 2>/dev/null || echo unknown)"
+      at_lvl=$(run_ps '"$((Get-NetTCPSetting -SettingName Internet).AutoTuningLevelLocal)".ToLower()' 2>/dev/null || echo unknown)
+      case "$at_lvl" in
+        normal|experimental) echo "TCP Receive Window Auto-Tuning: $at_lvl [OK]" ;;
+        disabled|highlyrestricted|restricted) echo "TCP Receive Window Auto-Tuning: $at_lvl [WARNING] (Recommended: Set-NetTCPSetting -SettingName Internet -AutoTuningLevelLocal Normal)" ;;
+        *) echo "TCP Receive Window Auto-Tuning: ${at_lvl:-unknown}" ;;
+      esac
       echo "Listening TCP Sockets: $(netstat -ano -p tcp 2>/dev/null | grep -ci LISTENING || true)"
     else
       echo "Default Route: $(ip route show default 2>/dev/null | head -n 1 || true)"
       echo "DNS Resolvers: $(grep '^nameserver' /etc/resolv.conf 2>/dev/null | awk '{print $2}' | tr '\n' ' ' || true)"
-      echo "TCP Congestion Control: $(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo unknown)"
-      echo "Default Queue Discipline: $(sysctl -n net.core.default_qdisc 2>/dev/null || echo unknown)"
+      tcp_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || echo unknown)
+      case "$tcp_cc" in
+        bbr|bbr2|bbr3|cubic) echo "TCP Congestion Control: $tcp_cc [OK]" ;;
+        unknown) echo "TCP Congestion Control: unknown [NOT READABLE]" ;;
+        *) echo "TCP Congestion Control: $tcp_cc [WARNING] (Recommended: bbr or cubic)" ;;
+      esac
+      qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || echo unknown)
+      case "$qdisc" in
+        fq|fq_codel|cake|fq_pie) echo "Default Queue Discipline: $qdisc [OK]" ;;
+        unknown) echo "Default Queue Discipline: unknown [NOT READABLE]" ;;
+        *) echo "Default Queue Discipline: $qdisc [WARNING] (Recommended: fq_codel, or fq with bbr)" ;;
+      esac
       echo "Listening TCP Sockets: $(ss -tlnH 2>/dev/null | wc -l || true)"
+      wild_listen=$(ss -tlnH 2>/dev/null | awk '{print $4}' | grep -E '^(0\.0\.0\.0|\*|\[::\]):' | sort -u | tr '\n' ' ' || true)
+      if [[ -n "$wild_listen" ]]; then
+        echo "  * Listening on all interfaces: [NOTE] ${wild_listen% } (confirm each is intended and firewalled)"
+      else
+        echo "  * Listening on all interfaces: [OK] none (loopback/specific addresses only)"
+      fi
     fi
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: TCP auto-tuning left at normal; BBR or CUBIC congestion control; no leftover VPN adapters"
@@ -2674,7 +2901,277 @@ PY
     echo "====================================="
     exit 0
     ;;
-  chrome|google-chrome|google-chrome-stable)
+  falkon)
+    echo "Category: Web Browser / Falkon (QtWebEngine)"
+    fk_bin=$(command -v falkon 2>/dev/null || echo "")
+    echo "Binary: ${fk_bin:-Not installed}"
+    [[ -n "$fk_bin" ]] && echo "Version: $(first_clean_line_or unknown "$fk_bin" --version)"
+    fk_root=""
+    for d in "${XDG_CONFIG_HOME:-$HOME/.config}/falkon" "$local_app_data/falkon"; do
+      [[ -d "$d/profiles" ]] && { fk_root="$d"; break; }
+    done
+    if [[ -z "$fk_root" ]]; then
+      echo "Profiles: none yet (Falkon creates ~/.config/falkon/profiles on first start)"
+    else
+      fk_prof=$(ini_val "$fk_root/profiles/profiles.ini" Profiles startProfile | tr -d '"')
+      fk_prof="${fk_prof:-default}"
+      fk_set="$fk_root/profiles/$fk_prof/settings.ini"
+      echo "Profiles Directory: $fk_root/profiles (start profile: $fk_prof)$(is_windows || printf ' (dir mode: %s)' "$(stat -c '%a' "$fk_root" 2>/dev/null || echo unknown)")"
+      if [[ -f "$fk_set" ]]; then
+        echo "  - [EXISTS] $fk_set$(cfg_perm_tag "$fk_set")"
+        echo "Falkon Findings:"
+        fk_adb=$(ini_val "$fk_set" AdBlock enabled)
+        if [[ "${fk_adb:-true}" == true ]]; then
+          fk_adb_src="settings.ini"; [[ -z "$fk_adb" ]] && fk_adb_src="default"
+          echo "  * AdBlock: [OK] enabled ($fk_adb_src; fewer scripts and requests on low-RAM hosts)"
+        else
+          echo "  * AdBlock: [WARNING] disabled (enable [AdBlock] enabled=true: blocks trackers and heavy ad scripts)"
+        fi
+        fk_tpc=$(ini_val "$fk_set" Cookie-Settings filterThirdPartyCookies)
+        if [[ "$fk_tpc" == true ]]; then
+          echo "  * Third-party Cookies: [OK] filtered"
+        else
+          echo "  * Third-party Cookies: [NOTE] not filtered (Preferences > Privacy > Cookies: filter third-party cookies)"
+        fi
+        fk_dnt=$(ini_val "$fk_set" Web-Browser-Settings DoNotTrack)
+        echo "  * DoNotTrack: ${fk_dnt:-default (false)}"
+        fk_dns=$(ini_val "$fk_set" Web-Browser-Settings DNSPrefetch)
+        echo "  * DNS Prefetch: ${fk_dns:-default (true)}"
+        for f in "$fk_root/profiles/$fk_prof/session.dat" "$fk_root/profiles/$fk_prof/browsedata.db"; do
+          [[ -f "$f" ]] && echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
+        done
+      else
+        echo "  * settings.ini: [NOT CONFIGURED] ($fk_set does not exist yet)"
+      fi
+    fi
+    echo "  * QTWEBENGINE_CHROMIUM_FLAGS: $(env_show QTWEBENGINE_CHROMIUM_FLAGS)"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
+    echo "  * Performance: Keep AdBlock on; GPU rasterization via QTWEBENGINE_CHROMIUM_FLAGS='--enable-gpu-rasterization' (verify in falkon:config / chrome://gpu)"
+    echo "  * Configuration: One profile per context; trim speed-dial thumbnails and session restore on low RAM"
+    echo "  * Security: Filter third-party cookies, keep QtWebEngine updated with the distro (security fixes ship with Qt), 0700 profile directory"
+    echo "====================================="
+    exit 0
+    ;;
+  dolphin|kate|konsole)
+    kde_cfg="${XDG_CONFIG_HOME:-$HOME/.config}"
+    kde_data="${XDG_DATA_HOME:-$HOME/.local/share}"
+    kde_bin=$(command -v "$target" 2>/dev/null || echo "")
+    case "$target" in
+      dolphin) echo "Category: File Manager / KDE Dolphin" ;;
+      kate) echo "Category: Text Editor / KDE Kate" ;;
+      konsole) echo "Category: Terminal Emulator / KDE Konsole" ;;
+    esac
+    echo "Binary: ${kde_bin:-Not installed}"
+    [[ -n "$kde_bin" ]] && echo "Version: $(first_clean_line_or unknown "$kde_bin" --version)"
+    kde_rc="$kde_cfg/${target}rc"
+    echo "Configuration File:"
+    if [[ -f "$kde_rc" ]]; then
+      echo "  - [EXISTS] $kde_rc$(cfg_perm_tag "$kde_rc")"
+    else
+      echo "  - $kde_rc does not exist yet (written when a setting is changed from defaults)"
+    fi
+    echo "${target^} Findings:"
+    case "$target" in
+      dolphin)
+        bl_idx=$(ini_val "$kde_cfg/baloofilerc" "Basic Settings" Indexing-Enabled)
+        if [[ "$bl_idx" == false ]]; then
+          echo "  * Baloo Indexing: [OK] disabled (no background crawl; Dolphin search falls back to a live scan)"
+        else
+          echo "  * Baloo Indexing: [NOTE] ${bl_idx:-enabled (default)} (disk and RAM cost on low-end hosts: balooctl6 disable, or restrict folders)"
+        fi
+        rm_size=$(ini_val "$kde_cfg/kdeglobals" PreviewSettings MaximumRemoteSize)
+        if [[ -z "$rm_size" || "$rm_size" == 0 ]]; then
+          echo "  * Remote Previews: [OK] off (${rm_size:-default}; no thumbnail downloads over sftp/smb)"
+        else
+          echo "  * Remote Previews: [NOTE] up to $rm_size bytes per remote file (slow on network folders; set 0 in kdeglobals [PreviewSettings])"
+        fi
+        dl_tabs=$(ini_val "$kde_rc" General RememberOpenedTabs)
+        echo "  * Restore Tabs on Start: ${dl_tabs:-default (true)}"
+        sm_list=()
+        for sm_dir in "$kde_data/kio/servicemenus" "$kde_data/kservices5/ServiceMenus"; do
+          [[ -d "$sm_dir" ]] || continue
+          for sm in "$sm_dir"/*.desktop; do
+            [[ -f "$sm" ]] && sm_list+=("$sm")
+          done
+        done
+        if [[ ${#sm_list[@]} -gt 0 ]]; then
+          echo "  * User Service Menus: [NOTE] ${#sm_list[@]} installed (each runs its Exec= command from the context menu; audit third-party ones):"
+          for sm in "${sm_list[@]}"; do
+            echo "    - $sm$(cfg_perm_tag "$sm")"
+          done
+        else
+          echo "  * User Service Menus: [OK] none installed"
+        fi
+        ;;
+      kate)
+        km_save=$(ini_val "$kde_rc" General "Save Meta Infos")
+        km_days=$(ini_val "$kde_rc" General "Days Meta Infos")
+        if [[ "$km_save" == false ]]; then
+          echo "  * Document Meta History: [OK] not saved"
+        elif [[ "${km_days:-30}" =~ ^[0-9]+$ && "${km_days:-30}" -le 90 ]]; then
+          echo "  * Document Meta History: [OK] kept ${km_days:-30 (default)} day(s)"
+        else
+          echo "  * Document Meta History: [NOTE] kept $km_days day(s) (lists every opened file; 30 is the default)"
+        fi
+        km_swap=$(ini_val "$kde_rc" "KTextEditor Document" "Swap File Mode")
+        case "${km_swap:-1}" in
+          0) echo "  * Swap Files: [NOTE] disabled (no crash recovery for unsaved edits)" ;;
+          2) echo "  * Swap Files: [OK] custom directory ($(ini_val "$kde_rc" "KTextEditor Document" "Swap Directory"))" ;;
+          *) echo "  * Swap Files: [OK] enabled (mode ${km_swap:-1, default}; .swp next to each file; mode 2 keeps them out of project trees)" ;;
+        esac
+        km_lsp="$kde_cfg/kate/lspclient/settings.json"
+        if [[ -f "$km_lsp" ]]; then
+          echo "  - [EXISTS] $km_lsp$(cfg_perm_tag "$km_lsp") (LSP server overrides)"
+        else
+          echo "  * LSP Overrides: none (built-in defaults; servers come from PATH, e.g. mise shims)"
+        fi
+        km_sess="$kde_data/kate/sessions"
+        [[ -d "$km_sess" ]] && echo "  * Sessions: $(find "$km_sess" -maxdepth 1 -name '*.katesession' 2>/dev/null | wc -l | tr -d ' ') saved in $km_sess"
+        ;;
+      konsole)
+        ks_prof_name=$(ini_val "$kde_rc" "Desktop Entry" DefaultProfile)
+        ks_prof=""
+        [[ -n "$ks_prof_name" && -f "$kde_data/konsole/$ks_prof_name" ]] && ks_prof="$kde_data/konsole/$ks_prof_name"
+        if [[ -z "$ks_prof" ]]; then
+          echo "  * Default Profile: built-in (fixed 1000-line scrollback) [OK]"
+        else
+          echo "  - [EXISTS] $ks_prof$(cfg_perm_tag "$ks_prof") (default profile)"
+          ks_hm=$(ini_val "$ks_prof" Scrolling HistoryMode)
+          ks_hs=$(ini_val "$ks_prof" Scrolling HistorySize)
+          case "${ks_hm:-1}" in
+            2) echo "  * Scrollback: [WARNING] unlimited (grows without bound in temp files; set a fixed HistorySize such as 10000)" ;;
+            0) echo "  * Scrollback: [NOTE] disabled" ;;
+            *) echo "  * Scrollback: [OK] fixed ${ks_hs:-1000} lines" ;;
+          esac
+        fi
+        ;;
+    esac
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
+    case "$target" in
+      dolphin)
+        echo "  * Performance: Disable or scope Baloo on low RAM; no remote previews; static icon sizes"
+        echo "  * Configuration: Keep dolphinrc minimal (KConfig stores only non-defaults); per-folder view props via .directory"
+        echo "  * Security: Audit user service menus (they run commands); keep ~/.config files 0600" ;;
+      kate)
+        echo "  * Performance: Bound meta history (Days Meta Infos), disable unused plugins, keep large-file limits on"
+        echo "  * Configuration: LSP servers from PATH (mise shims) with lspclient/settings.json overrides; swap mode 2 keeps .swp out of git trees"
+        echo "  * Security: Do not trust .kateproject build commands from unknown repositories" ;;
+      konsole)
+        echo "  * Performance: Fixed scrollback (5000-10000 lines), GPU-light fonts, no blur behind on iGPU"
+        echo "  * Configuration: One default profile; shell integration via starship/zoxide in ~/.bashrc"
+        echo "  * Security: Disable 'allow running commands from links' for untrusted output; review SSH manager entries" ;;
+    esac
+    echo "====================================="
+    exit 0
+    ;;
+  ffmpeg|ffprobe)
+    echo "Category: Media Toolkit / FFmpeg"
+    ff_bin=$(command -v ffmpeg 2>/dev/null || echo "")
+    echo "Binary: ${ff_bin:-Not installed}"
+    if [[ -n "$ff_bin" ]]; then
+      echo "Version: $(first_clean_line_or unknown "$ff_bin" -hide_banner -version)"
+      ff_hw=$("$ff_bin" -hide_banner -hwaccels 2>/dev/null </dev/null | tail -n +2 | tr -s '[:space:]' ' ' || true)
+      ff_hw="${ff_hw# }"; ff_hw="${ff_hw% }"
+      echo "Hardware Acceleration Methods: ${ff_hw:-none}"
+    fi
+    echo "FFmpeg Findings:"
+    if is_windows; then
+      if [[ " ${ff_hw:-} " =~ \ (d3d11va|d3d12va|dxva2|cuda|qsv)\  ]]; then
+        echo "  * Hardware Decode: [OK] ${BASH_REMATCH[1]} available (use -hwaccel auto or d3d11va)"
+      elif [[ -n "$ff_bin" ]]; then
+        echo "  * Hardware Decode: [NOTE] no Windows hwaccel in this build (use a full gyan.dev/BtbN build)"
+      fi
+    else
+      render_node=""
+      for rn in /dev/dri/renderD*; do [[ -e "$rn" ]] && { render_node="$rn"; break; }; done
+      echo "  * DRM Render Node: ${render_node:-none found}"
+      va_name=$(env_val LIBVA_DRIVER_NAME)
+      echo "  * LIBVA_DRIVER_NAME: $(env_show LIBVA_DRIVER_NAME "[UNSET] (libva auto-selects)")"
+      if [[ -n "$va_name" ]]; then
+        va_found=""
+        va_dirs="${LIBVA_DRIVERS_PATH:-}:/usr/lib/dri:/usr/lib64/dri:/usr/lib/x86_64-linux-gnu/dri:/usr/lib/aarch64-linux-gnu/dri"
+        IFS=: read -r -a va_dir_arr <<< "$va_dirs"
+        for vd in "${va_dir_arr[@]}"; do
+          [[ -n "$vd" && -f "$vd/${va_name}_drv_video.so" ]] && { va_found="$vd/${va_name}_drv_video.so"; break; }
+        done
+        if [[ -n "$va_found" ]]; then
+          echo "  * VA-API Driver: [OK] $va_found"
+        else
+          echo "  * VA-API Driver: [WARNING] ${va_name}_drv_video.so not found (wrong LIBVA_DRIVER_NAME breaks hardware decode in ffmpeg, mpv and browsers)"
+        fi
+      fi
+      if [[ -n "${ff_hw:-}" && " $ff_hw " == *" vaapi "* ]]; then
+        if [[ -n "$render_node" ]]; then
+          echo "  * Hardware Decode: [OK] vaapi compiled in and $render_node present"
+        else
+          echo "  * Hardware Decode: [NOTE] vaapi compiled in but no render node (container, VM or missing GPU driver)"
+        fi
+      elif [[ -n "$ff_bin" ]]; then
+        echo "  * Hardware Decode: [NOTE] this ffmpeg build lists no vaapi hwaccel"
+      fi
+      if [[ -n "$render_node" ]] && command -v vainfo >/dev/null 2>&1; then
+        va_info=$(timeout 5 vainfo --display drm --device "$render_node" 2>&1 </dev/null | grep -m1 -i 'driver version' | sed 's/.*:[[:space:]]*//' || true)
+        echo "  * vainfo Driver: ${va_info:-unknown}"
+      fi
+    fi
+    ff_presets="$HOME/.ffmpeg"
+    [[ -d "$ff_presets" ]] && echo "  * User Presets: $ff_presets ($(find "$ff_presets" -maxdepth 1 -name '*.ffpreset' 2>/dev/null | wc -l | tr -d ' ') .ffpreset file(s))"
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
+    echo "  * Performance: -hwaccel vaapi (Linux) / d3d11va (Windows) for decode; -threads 0 lets ffmpeg size the pool; prefer -c copy when no re-encode is needed"
+    echo "  * Configuration: Set LIBVA_DRIVER_NAME only when auto-detection picks the wrong driver (i965 for Haswell and older Intel, iHD for Broadwell+)"
+    echo "  * Security: Process untrusted media with -protocol_whitelist file,pipe so playlists cannot fetch URLs; keep ffmpeg updated (demuxer CVEs)"
+    echo "====================================="
+    exit 0
+    ;;
+  zstd)
+    echo "Category: Compression / Zstandard (zstd)"
+    zs_bin=$(command -v zstd 2>/dev/null || echo "")
+    echo "Binary: ${zs_bin:-Not installed}"
+    [[ -n "$zs_bin" ]] && echo "Version: $(first_clean_line_or unknown "$zs_bin" --version)"
+    echo "Environment (read by the zstd CLI):"
+    echo "  * ZSTD_NBTHREADS: $(env_show ZSTD_NBTHREADS)"
+    echo "  * ZSTD_CLEVEL: $(env_show ZSTD_CLEVEL)"
+    echo "Zstd Findings:"
+    zs_thr=$(env_val ZSTD_NBTHREADS)
+    if [[ -z "$zs_thr" ]]; then
+      echo "  * Threads: [NOTE] unset (the CLI picks a small default; set ZSTD_NBTHREADS=$detected_threads or pass -T0 for large archives)"
+    elif [[ "$zs_thr" =~ ^[0-9]+$ ]]; then
+      if [[ "$zs_thr" -eq 0 || "$zs_thr" -le "$detected_threads" ]]; then
+        echo "  * Threads: [OK] $zs_thr (host has $detected_threads thread(s); 0 = all cores)"
+      else
+        echo "  * Threads: [WARNING] $zs_thr exceeds the $detected_threads hardware thread(s) (oversubscription; use $detected_threads or 0)"
+      fi
+    else
+      echo "  * Threads: [WARNING] '$zs_thr' is not a number (zstd ignores it)"
+    fi
+    zs_lvl=$(env_val ZSTD_CLEVEL)
+    if [[ -z "$zs_lvl" ]]; then
+      echo "  * Default Level: [OK] unset (zstd default 3)"
+    elif [[ "$zs_lvl" =~ ^-?[0-9]+$ ]] && (( zs_lvl <= 19 )); then
+      if (( zs_lvl > 12 )); then
+        echo "  * Default Level: [NOTE] $zs_lvl (slow for everyday use; tools that inherit ZSTD_CLEVEL become much slower)"
+      else
+        echo "  * Default Level: [OK] $zs_lvl"
+      fi
+    else
+      echo "  * Default Level: [WARNING] '$zs_lvl' is invalid or above 19 (levels 20-22 need --ultra; zstd ignores the variable)"
+    fi
+    if [[ -r /etc/makepkg.conf ]]; then
+      mk_zst=$(cat /etc/makepkg.conf /etc/makepkg.conf.d/*.conf "${XDG_CONFIG_HOME:-$HOME/.config}/pacman/makepkg.conf" 2>/dev/null | grep -E '^[[:space:]]*COMPRESSZST=' | tail -n 1 || true)
+      if [[ "$mk_zst" == *"-T0"* || "$mk_zst" == *"--threads=0"* ]]; then
+        echo "  * makepkg COMPRESSZST: [OK] multithreaded ($mk_zst)"
+      elif [[ -n "$mk_zst" ]]; then
+        echo "  * makepkg COMPRESSZST: [NOTE] $mk_zst (add -T0 so package compression uses every core)"
+      fi
+    fi
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
+    echo "  * Performance: ZSTD_NBTHREADS sized to the CPU (or -T0); --long=27 for large similar files; level 3 default, 19 only for archives"
+    echo "  * Configuration: Keep env defaults conservative: every tool that shells out to zstd (makepkg, tar --zstd, mkinitcpio) inherits them"
+    echo "  * Security: Verify downloaded .zst archives with checksums/signatures before extracting; zstd --test checks integrity"
+    echo "====================================="
+    exit 0
+    ;;
+  chrome|google-chrome|google-chrome-stable|chromium)
     echo "Category: Web Browser / Google Chrome"
     if is_windows; then
       browser_report_win chrome.exe "$local_app_data/Google/Chrome/User Data" 'HKLM:\SOFTWARE\Policies\Google\Chrome'
@@ -2711,7 +3208,21 @@ PY
     else
       browser_report_linux "$(command -v brave-browser || command -v brave || true)"
       browser_policy_linux /etc/brave/policies/managed
-      [[ -f "$HOME/.config/brave-flags.conf" ]] && echo "Launch Flags: [EXISTS] $HOME/.config/brave-flags.conf$(cfg_perm_tag "$HOME/.config/brave-flags.conf")"
+      brave_flags="${XDG_CONFIG_HOME:-$HOME/.config}/brave-flags.conf"
+      if [[ -f "$brave_flags" ]]; then
+        echo "Launch Flags: [EXISTS] $brave_flags$(cfg_perm_tag "$brave_flags")"
+        # The Arch launcher reads this file with mapfile and drops only whole-line comments: a trailing
+        # "# note" after a flag is passed to Brave as literal arguments.
+        bf_inline=$(grep -nE '^[[:space:]]*[^#[:space:]].*[[:space:]]#' "$brave_flags" 2>/dev/null || true)
+        if [[ -n "$bf_inline" ]]; then
+          echo "  * Inline Comments: [WARNING] trailing '#' comments are passed to Brave as arguments; move them to their own line:"
+          printf '%s\n' "$bf_inline" | sed "s|^|    $brave_flags:|"
+        else
+          echo "  * Inline Comments: [OK] none (only whole-line comments)"
+        fi
+        bf_dupes=$(grep -vE '^[[:space:]]*(#|$)' "$brave_flags" 2>/dev/null | sed -E 's/=.*//; s/[[:space:]]+$//' | sort | uniq -d | tr '\n' ' ' || true)
+        [[ -n "$bf_dupes" ]] && echo "  * Duplicate Flags: [WARNING] ${bf_dupes% } (later values override earlier ones; merge them)"
+      fi
     fi
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
     echo "  * Performance: Hardware acceleration on; enable Memory Saver; trim unused startup extensions"
@@ -2783,6 +3294,45 @@ PY
       if [[ -d "$ff_linux_dir" ]]; then
         ff_prof_count=$(find "$ff_linux_dir" -mindepth 1 -maxdepth 1 -type d -name '*.*' 2>/dev/null | wc -l | tr -d ' ' || true)
         echo "Profiles Directory: $ff_linux_dir ($ff_prof_count profile dir(s))"
+      fi
+    fi
+    # Preference files: LibreWolf's librewolf.overrides.cfg (~/.librewolf, %USERPROFILE%\.librewolf) and
+    # each profile's user.js. Quote the performance/privacy keys they set.
+    ff_pref_files=()
+    if [[ "$target" == "librewolf" ]]; then
+      for f in "$HOME/.librewolf/librewolf.overrides.cfg" "${XDG_CONFIG_HOME:-$HOME/.config}/librewolf/librewolf.overrides.cfg"; do
+        [[ -f "$f" ]] && ff_pref_files+=("$f")
+      done
+    fi
+    for ff_pdir in "${ff_linux_dir:-}" "${ff_win_profiles:-}"; do
+      [[ -n "$ff_pdir" && -d "$ff_pdir" ]] || continue
+      while IFS= read -r f; do
+        [[ -n "$f" ]] && ff_pref_files+=("$f")
+      done < <(find "$ff_pdir" -mindepth 2 -maxdepth 2 -name user.js -type f 2>/dev/null || true)
+    done
+    echo "Preference Files:"
+    if [[ ${#ff_pref_files[@]} -eq 0 ]]; then
+      if [[ "$target" == "librewolf" ]]; then
+        echo "  * Overrides: [NOT CONFIGURED] (Recommend: ~/.librewolf/librewolf.overrides.cfg for settings that survive updates)"
+      else
+        echo "  * user.js: [NOT CONFIGURED] (Recommend: a profile user.js for reproducible preferences)"
+      fi
+    else
+      ff_pref_re='media\.hardware-video-decoding|media\.ffmpeg\.vaapi|gfx\.webrender|layers\.acceleration|browser\.tabs\.unloadOnLowMemory|dom\.security\.https_only_mode|privacy\.resistFingerprinting|network\.trr\.mode|browser\.cache\.disk'
+      for f in "${ff_pref_files[@]}"; do
+        echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
+        grep -nE "^[[:space:]]*(user_)?(pref|defaultPref|lockPref)\([[:space:]]*[\"'](${ff_pref_re})" "$f" 2>/dev/null | sed "s|^|    $f:|" || true
+      done
+      ff_all=$(cat "${ff_pref_files[@]}" 2>/dev/null | grep -vE '^[[:space:]]*//' || true)
+      if is_windows; then
+        :
+      elif printf '%s' "$ff_all" | grep -qE "media\.hardware-video-decoding\.force-enabled[\"'][[:space:]]*,[[:space:]]*true|media\.ffmpeg\.vaapi\.enabled[\"'][[:space:]]*,[[:space:]]*true"; then
+        echo "  * Hardware Video Decoding: [OK] forced on in a preference file"
+      else
+        echo "  * Hardware Video Decoding: [NOTE] not forced (Recommend: media.hardware-video-decoding.force-enabled = true on VA-API capable GPUs)"
+      fi
+      if printf '%s' "$ff_all" | grep -qE "privacy\.resistFingerprinting[\"'][[:space:]]*,[[:space:]]*true"; then
+        echo "  * resistFingerprinting: [NOTE] enabled (breaks site time zones/dark mode; LibreWolf default, intended for privacy)"
       fi
     fi
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
@@ -2882,11 +3432,31 @@ PY
       fi
     else
       if [[ -r /etc/pacman.conf ]]; then
+        # Every SigLevel line counts (the global [options] one and any per-repository override), plus the
+        # Include'd repository files under /etc/pacman.d.
+        pac_conf_files=(/etc/pacman.conf)
+        while IFS= read -r inc; do
+          [[ -r "$inc" ]] && pac_conf_files+=("$inc")
+        done < <(grep -hE '^[[:space:]]*Include[[:space:]]*=' /etc/pacman.conf 2>/dev/null | sed 's/.*=[[:space:]]*//' | sort -u || true)
+        sig_all=$(grep -HnE '^[[:space:]]*SigLevel[[:space:]]*=' "${pac_conf_files[@]}" 2>/dev/null || true)
         sig_lvl=$(grep -E '^[[:space:]]*SigLevel[[:space:]]*=' /etc/pacman.conf 2>/dev/null | head -n 1 | sed 's/.*=[[:space:]]*//' || true)
-        if [[ "$sig_lvl" == *"Never"* ]]; then
-          echo "  * Pacman SigLevel (/etc/pacman.conf): $sig_lvl [WARNING] (Never disables GPG package verification)"
+        sig_weak=$(printf '%s\n' "$sig_all" | grep -E '=[^#]*\b(Never|TrustAll)\b' || true)
+        if [[ -n "$sig_weak" ]]; then
+          echo "  * Pacman SigLevel: [WARNING] Never/TrustAll weakens GPG package verification:"
+          printf '%s\n' "$sig_weak" | sed 's/^/    /'
         else
-          echo "  * Pacman SigLevel (/etc/pacman.conf): ${sig_lvl:-default} [OK]"
+          echo "  * Pacman SigLevel (/etc/pacman.conf): ${sig_lvl:-default (Required DatabaseOptional)} [OK] ($(printf '%s\n' "$sig_all" | grep -c . || true) SigLevel line(s) checked)"
+        fi
+        dl_user=$(grep -E '^[[:space:]]*DownloadUser[[:space:]]*=' /etc/pacman.conf 2>/dev/null | head -n 1 | sed 's/.*=[[:space:]]*//' || true)
+        if [[ -n "$dl_user" ]]; then
+          echo "  * Pacman DownloadUser: $dl_user [OK] (downloads run unprivileged)"
+        else
+          echo "  * Pacman DownloadUser: unset [WARNING] (Recommended: DownloadUser = alpm, pacman 7.0+)"
+        fi
+        if grep -qE '^[[:space:]]*DisableSandbox' /etc/pacman.conf 2>/dev/null; then
+          echo "  * Pacman Download Sandbox: [WARNING] DisableSandbox* is set (Landlock/seccomp download sandbox off)"
+        else
+          echo "  * Pacman Download Sandbox: [OK] not disabled"
         fi
       elif [[ -d /etc/apt ]]; then
         if grep -RqiE 'AllowUnauthenticated[[:space:]]+"true"' /etc/apt/apt.conf /etc/apt/apt.conf.d 2>/dev/null; then
@@ -2937,6 +3507,7 @@ case "$target" in
   kde|kde-plasma) binary_lookup="plasmashell" ;;
   baloo) binary_lookup="balooctl6" ;;
   pacman-contrib) binary_lookup="paccache" ;;
+  yay) binary_lookup="paru" ;;   # detect-targets.sh folds paru into yay: a paru-only host must still resolve
   fd) binary_lookup="fdfind" ;;
   btop) binary_lookup="btop4win" ;;
   bat) binary_lookup="batcat" ;;
@@ -2967,10 +3538,32 @@ fi
 case "$target" in
   python|python3)
     if ! python_ok "$bin_path"; then
-      echo "Status: NOT INSTALLED (the python command is only the Microsoft Store shortcut)"
-      echo "Binary Path: $bin_path"
-      echo "====================================="
-      exit 0
+      py_out=$("$bin_path" --version 2>&1 </dev/null || true)
+      if is_windows || [[ "$bin_path" == *WindowsApps* || "$py_out" == *"Microsoft Store"* ]]; then
+        echo "Status: NOT INSTALLED (the python command is only the Microsoft Store shortcut)"
+        echo "Binary Path: $bin_path"
+        echo "====================================="
+        exit 0
+      fi
+      # A broken stub or shim on Unix may shadow a working interpreter: try fallback names before giving up.
+      py_alt=""
+      for py_cand in python3 python /usr/bin/python3 /usr/local/bin/python3; do
+        py_cand_path=$(command -v -- "$py_cand" 2>/dev/null || true)
+        if [[ -n "$py_cand_path" && "$py_cand_path" != "$bin_path" ]] && python_ok "$py_cand_path"; then
+          py_alt="$py_cand_path"
+          break
+        fi
+      done
+      if [[ -n "$py_alt" ]]; then
+        echo "  * [WARNING] $bin_path does not run as Python (broken stub or shim); using $py_alt"
+        bin_path="$py_alt"
+      else
+        echo "Status: BROKEN ($bin_path --version did not report a Python version)"
+        echo "  * [WARNING] Output: $(printf '%s' "$py_out" | strip_ansi | head -n 2 | tr '\n' ' ')"
+        echo "Binary Path: $bin_path"
+        echo "====================================="
+        exit 0
+      fi
     fi
     ;;
 esac
@@ -2982,8 +3575,11 @@ version="unknown"
 if [[ "$target" == "sqlite3" ]]; then
   version=$(first_clean_line_or "unknown" "$bin_path" -batch -init /dev/null --version)
 else
-  for flag in "--version" "-V" "-v" "version"; do
-    if raw_ver=$("$bin_path" "$flag" 2>/dev/null); then
+  ver_flags=("--version" "-V" "-v" "version")
+  # ffmpeg/ffprobe only accept the single-dash -version (and -v takes an argument)
+  [[ "$target" == ffmpeg || "$target" == ffprobe ]] && ver_flags=("-version")
+  for flag in "${ver_flags[@]}"; do
+    if raw_ver=$("$bin_path" "$flag" 2>/dev/null </dev/null); then
       ver_out=$(printf '%s\n' "$raw_ver" | strip_ansi | awk 'NF && !found { out=$0; found=1 } END { if (found) printf "%s", out }')
       if [[ -n "$ver_out" ]]; then
         version="$ver_out"
@@ -3104,7 +3700,7 @@ case "$target" in
       for pf in "${PIP_CONFIG_FILE:-}" "${XDG_CONFIG_HOME:-$HOME/.config}/pip/pip.conf" "$roaming_app_data/pip/pip.ini"; do
         [[ -n "$pf" && -f "$pf" ]] && pip_cfg_found="$pf" && break
       done
-      pip_req_venv="${PIP_REQUIRE_VIRTUALENV:-}"
+      pip_req_venv=$(env_val PIP_REQUIRE_VIRTUALENV)
       if [[ -z "$pip_req_venv" && -n "$pip_cfg_found" ]]; then
         pip_req_venv=$(grep -iE '^[[:space:]]*require-virtualenv[[:space:]]*=' "$pip_cfg_found" 2>/dev/null | tail -n 1 | cut -d= -f2- | tr -d ' "' || true)
       fi
@@ -3116,7 +3712,7 @@ case "$target" in
     fi
     echo "  * Virtualenv active: ${VIRTUAL_ENV:-no}"
     echo "  * uv: $(command -v uv 2>/dev/null || echo 'not installed')"
-    echo "  * PYTHONSAFEPATH: ${PYTHONSAFEPATH:-unset}"
+    echo "  * PYTHONSAFEPATH: $(env_show PYTHONSAFEPATH unset)"
     py_hist="${PYTHON_HISTORY:-${XDG_STATE_HOME:-$HOME/.local/state}/python_history}"
     [[ ! -f "$py_hist" && -f "$HOME/.python_history" ]] && py_hist="$HOME/.python_history"
     if [[ -f "$py_hist" ]]; then
@@ -3244,6 +3840,8 @@ case "$target" in
       for ovf in "$ov_dir"/*; do
         [[ -r "$ovf" && -f "$ovf" ]] || continue
         [[ "$ovf" == "$fp_ov" ]] && continue
+        # backup copies (global.bak.<ts>, *.pre-restore-*) are not overrides flatpak applies
+        case "$ovf" in *.bak*|*.pre-restore-*|*~) continue ;; esac
         if grep -qE '^[[:space:]]*filesystems?=([^#]*;)?(host|host-os|host-etc|home|/)($|;|:rw)' "$ovf" 2>/dev/null; then
           echo "  * Override ($ovf): [WARNING] grants broad filesystem access (host/host-os/host-etc/home//)"
         fi
@@ -3289,7 +3887,7 @@ case "$target" in
     done
     if ! is_windows; then
       echo "  * User podman.socket: $(first_line_or inactive systemctl --user is-active podman.socket)"
-      echo "  * DOCKER_HOST: ${DOCKER_HOST:-[UNSET]}"
+      echo "  * DOCKER_HOST: $(env_show DOCKER_HOST)"
     fi
     ;;
   docker)
