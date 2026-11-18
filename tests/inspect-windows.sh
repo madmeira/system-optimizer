@@ -14,10 +14,10 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 targets="system security full kernel sysctl-security sandboxing package-audit storage memory cpu boot network firewall defender ssh execution-policy uac wsl powershell pwsh
-bash git winget windows-terminal powertoys chrome edge brave firefox librewolf python uv pi antigravity mise cargo topgrade neovim starship herdr gh mpv
-yt-dlp ripgrep fd eza zoxide bat fzf lazygit btop lazydocker docker podman syncthing sqlite3 rustdesk controld"
+bash git winget windows-terminal powertoys chrome edge brave firefox librewolf python uv pi antigravity mise cargo topgrade neovim starship herdr gh mpv ffmpeg
+yt-dlp ripgrep fd eza zoxide bat fzf lazygit btop lazydocker docker podman syncthing sqlite3 zstd rustdesk controld"
 
-domain_and_browser_targets=" system security full kernel sysctl-security sandboxing package-audit storage memory cpu boot network firewall defender ssh execution-policy uac wsl powershell chrome edge brave firefox librewolf "
+domain_and_browser_targets=" system security full kernel sysctl-security sandboxing package-audit storage memory cpu boot network firewall defender ssh execution-policy uac wsl powershell chrome edge brave firefox librewolf ffmpeg zstd "
 
 failed=0; count=0
 for t in $targets; do

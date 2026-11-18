@@ -255,6 +255,7 @@ if [[ "$cmd" == "--restore" ]]; then
     echo "Saved safety copy of existing file to: $pre_restore_bak"
   fi
 
+  restored_with_sudo=false
   if cp -p "$backup_file" "$dest_file" 2>/dev/null; then
     echo "Successfully restored $backup_file -> $dest_file"
   else
@@ -263,12 +264,21 @@ if [[ "$cmd" == "--restore" ]]; then
       exit 1
     }
     sudo cp -p "$backup_file" "$dest_file"
+    restored_with_sudo=true
     echo "Successfully restored with sudo: $backup_file -> $dest_file"
   fi
+  # The central backup is forced to 600, so cp -p carries 600 over: put the recorded mode back. A file
+  # restored with sudo is root-owned, so its mode must be set with sudo too (or /etc files stay 600).
   orig_perms=$(grep -E '^Permissions:' "$meta_file" 2>/dev/null | head -n 1 | cut -d: -f2- || true)
   orig_perms=$(trim "$orig_perms")
   if [[ "$orig_perms" =~ ^[0-7]{3,4}$ ]]; then
-    chmod "$orig_perms" "$dest_file" 2>/dev/null || true
+    if ! chmod "$orig_perms" "$dest_file" 2>/dev/null; then
+      if [[ "$restored_with_sudo" == true ]] && sudo chmod "$orig_perms" "$dest_file"; then
+        :
+      else
+        echo "Warning: could not restore original permissions $orig_perms on $dest_file" >&2
+      fi
+    fi
   fi
   exit 0
 fi
@@ -363,17 +373,20 @@ Permissions: $file_perms
 Description: $desc
 EOF
 
-# In-place backup if directory is writable and not a scanned/drop-in config directory
+# In-place backup if directory is writable and not a scanned/drop-in config directory. Directories a tool
+# scans as a whole (nvim runtime, *.d drop-ins, systemd, herdr, flatpak overrides, skills) would load a
+# stray copy or have it flagged by target-inspect.sh, so those get the central backup only.
 in_place_backup="${config_path}.bak.${timestamp}"
 in_place_created=false
 in_place_reason="Skipped (directory not user-writable)"
 config_dir=$(dirname "$config_path")
 if [[ "$skip_in_place" == true ]]; then
   in_place_reason="Skipped (--no-in-place)"
-elif [[ "$config_dir" =~ (/nvim(/|$)|\.d(/|$)|/systemd(/|$)) ]]; then
+elif [[ "$config_dir" =~ (/nvim(/|$)|\.d(/|$)|/systemd(/|$)|/herdr(/|$)|/flatpak/overrides(/|$)|/skills(/|$)) ]]; then
   in_place_reason="Skipped (scanned/drop-in config directory)"
 elif [[ -w "$config_dir" ]]; then
   if cp -p "$config_path" "$in_place_backup" 2>/dev/null; then
+    chmod 600 "$in_place_backup" 2>/dev/null || true
     in_place_created=true
   fi
 fi

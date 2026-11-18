@@ -1,6 +1,6 @@
 ---
 name: system-optimizer
-description: Audits, tunes, hardens, and speeds up Windows and Linux systems, shells, terminals, browsers, package managers, runtimes, and CLI tools across Performance, Configuration, and Security. Use when the user wants to inspect or optimize OS settings (storage/TRIM, memory/zram, CPU/power, network, boot), security posture (Defender/PUA, firewall, sysctl, SSH, ExecutionPolicy), Windows/Linux environments (winget, windows-terminal, wsl, pwsh, powertoys, pacman, yay, makepkg, paccache, flatpak, podman, docker, lazydocker, systemd, kde-plasma), browsers (brave, chrome, edge, firefox, librewolf), or developer tools (git, gh, lazygit, topgrade, mise, cargo, python, uv, neovim, ripgrep, fd, zoxide, eza, starship, bat, fzf, mpv, yt-dlp, btop, htop, syncthing, sqlite3, rustdesk, controld, pi, antigravity, bash, herdr). Run without arguments to probe hardware and present numbered tuning options.
+description: Audits, tunes, hardens, and speeds up Windows and Linux systems, shells, terminals, browsers, package managers, runtimes, and CLI tools across Performance, Configuration, and Security. Use when the user wants to inspect or optimize OS settings (storage/TRIM, memory/zram, CPU/power, network, boot), security posture (Defender/PUA, firewall, sysctl, SSH, ExecutionPolicy), Windows/Linux environments (winget, windows-terminal, wsl, pwsh, powertoys, pacman, yay, makepkg, paccache, flatpak, podman, docker, lazydocker, systemd, kde-plasma, dolphin, kate, konsole), browsers (brave, chrome, edge, firefox, librewolf, falkon), or developer tools (git, gh, lazygit, topgrade, mise, cargo, python, uv, neovim, ripgrep, fd, zoxide, eza, starship, bat, fzf, mpv, ffmpeg, zstd, yt-dlp, btop, htop, syncthing, sqlite3, rustdesk, controld, pi, antigravity, bash, herdr). Run without arguments to probe hardware and present numbered tuning options.
 license: MIT
 compatibility: Requires bash >= 4.0; PowerShell 5.1+ or pwsh on Windows
 ---
@@ -47,11 +47,11 @@ Script paths below (`scripts/...`, `references/...`) are relative to the skill f
 |---|---|
 | Domains | `system`, `security`, `storage`, `network`, `kernel`, `memory`, `cpu`, `boot`, `firewall`, `ssh`, `sandboxing`, `package-audit`, `full` |
 | Windows | `winget`, `windows-terminal`, `wsl`, `pwsh`, `powertoys`, `defender`, `execution-policy`, `uac` |
-| Linux | `pacman`, `yay`, `makepkg`, `paccache`, `flatpak`, `kde-plasma` |
-| Browsers | `brave`, `chrome`, `edge`, `firefox`, `librewolf` |
+| Linux | `pacman`, `yay`, `makepkg`, `paccache`, `flatpak`, `kde-plasma`, `dolphin`, `kate`, `konsole` |
+| Browsers | `brave`, `chrome`, `chromium`, `edge`, `firefox`, `librewolf`, `falkon` |
 | Runtimes & orchestration | `mise`, `topgrade`, `cargo`, `python`, `uv`, `podman`, `docker`, `lazydocker` |
-| Editor, shell & git | `neovim`, `starship`, `bat`, `fzf`, `ripgrep`, `fd`, `zoxide`, `eza`, `sqlite3`, `bash`, `git`, `gh`, `lazygit` |
-| Media, sync & remote | `mpv`, `yt-dlp`, `syncthing`, `rustdesk`, `controld` |
+| Editor, shell & git | `neovim`, `starship`, `bat`, `fzf`, `ripgrep`, `fd`, `zoxide`, `eza`, `zstd`, `sqlite3`, `bash`, `git`, `gh`, `lazygit` |
+| Media, sync & remote | `mpv`, `ffmpeg`, `yt-dlp`, `syncthing`, `rustdesk`, `controld` |
 | Agents | `pi`, `antigravity`, `herdr` |
 | Monitors | `htop`, `btop` |
 
