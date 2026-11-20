@@ -127,7 +127,7 @@ The skill is **100% generic** and contains **no hardcoded hardware values**. Eve
 
 ## Supported Targets
 
-`scripts/target-inspect.sh` and the optimization guide cover **71 targets** across system domains, OS platforms, browsers, and developer tools:
+`scripts/target-inspect.sh` and the optimization guide cover **72 targets** across system domains, OS platforms, browsers, and developer tools:
 
 | Category | Targets |
 |---|---|
@@ -139,7 +139,7 @@ The skill is **100% generic** and contains **no hardcoded hardware values**. Eve
 | **Editor, Shell & CLI** | `neovim`, `bash`, `starship`, `bat`, `fzf`, `ripgrep`, `fd`, `zoxide`, `eza`, `zstd`, `sqlite3` |
 | **Git & GitHub** | `git`, `gh`, `lazygit` |
 | **AI Coding Agents** | `pi`, `antigravity` (`agy`), `herdr` |
-| **Media, Sync & Remote** | `mpv`, `ffmpeg`, `yt-dlp`, `syncthing`, `rustdesk`, `controld` |
+| **Media, Sync & Remote** | `mpv`, `stremio`, `ffmpeg`, `yt-dlp`, `syncthing`, `rustdesk`, `controld` |
 | **System Monitors** | `btop`, `htop` |
 
 ## Cross-Platform & Hardware Scaling
@@ -169,6 +169,7 @@ The skill is **100% generic** and contains **no hardcoded hardware values**. Eve
 - **`gh` + `git` + `lazygit` + `topgrade`**: HTTPS `gh auth setup-git` / SSH workflow, `bat` pager, and Topgrade's native `github_cli_extensions` step.
 - **`herdr` + `pi` + `antigravity` + `mise`**: Non-interactive agent subshell `mise` shim inheritance, `herdr integration status` + `resume_agents_on_restore`, `herdr update --handoff`, and `0600` socket/auth hardening (`herdr.sock`, `auth.json`, `mcp-auth.json`, `oauth_creds.json`).
 - **`mpv` + `yt-dlp` + GPU**: Hardware-decoded streaming video (`vo=gpu-next`, `profile=high-quality`, zero-copy `hwdec=auto-safe`, `yt-dlp-ejs` + `-N 4`) with strict TLS certificate verification.
+- **`stremio` + `mpv` + GPU**: Embedded `libmpv` hardware decoding (`hwdec=auto-safe`, Flatpak `LIBVA_DRIVER_NAME` forwarding when needed), `server-settings.json` P2P/cache tuning, and loopback `127.0.0.1:11470` security.
 
 ## Standalone CLI Scripts
 
@@ -230,13 +231,13 @@ system-optimizer/
 │   ├── backup-config.sh              # Pre-modification backup, SHA-256 ledger & restore manager
 │   ├── remote-run.sh                 # Run one of these scripts on another host over SSH
 │   ├── host-diff.sh                  # Compare shell startup files & tool configs between two hosts (secrets redacted)
-│   ├── target-inspect.sh             # Per-target configuration & cross-tool synergy inspector (71 targets)
+│   ├── target-inspect.sh             # Per-target configuration & cross-tool synergy inspector (72 targets)
 │   └── tool-drift-check.sh           # Offline live CLI/schema introspection & config deprecation gate
 └── tests/
     ├── test-env.sh                   # Shared test-isolation environment helpers (mise trust/shim resolution)
     ├── backup-smoke.sh               # Backup, list, restore, and path-traversal safety tests
     ├── probe-fallback.sh             # Verifies probes report "unknown" when PowerShell is unavailable
-    ├── inspect-smoke.sh              # Runs all 71 targets in a clean environment + synergy assertions
+    ├── inspect-smoke.sh              # Runs all 72 targets in a clean environment + synergy assertions
     ├── drift-check-smoke.sh          # Verifies tool-drift-check.sh CLI, mock drift states & live JSON
     ├── inspect-windows.sh            # Smoke test for Windows-specific targets on Windows runners
     ├── json-escape.sh                # Validates JSON escaping for quotes, backslashes & control chars

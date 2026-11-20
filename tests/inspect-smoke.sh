@@ -21,8 +21,8 @@ mkdir -p "$WORK/home"
 targets="antigravity bash bat boot brave btop cargo chrome controld cpu defender docker edge execution-policy eza fd firefox firewall flatpak full fzf gh git herdr htop
 kde-plasma kernel lazydocker lazygit librewolf makepkg memory mise mpv neovim network paccache package-audit pacman pi podman powertoys pwsh python ripgrep rustdesk
 sandboxing security sqlite3 ssh starship storage syncthing sysctl-security system topgrade uac uv windows-terminal winget wsl yay yt-dlp zoxide
-chromium falkon dolphin kate konsole ffmpeg zstd"
-domain_and_browser_targets=" system security full kernel storage memory cpu boot network firewall ssh sysctl-security sandboxing package-audit execution-policy uac defender chrome chromium edge brave firefox librewolf falkon dolphin kate konsole ffmpeg zstd "
+chromium falkon dolphin kate konsole ffmpeg zstd stremio"
+domain_and_browser_targets=" system security full kernel storage memory cpu boot network firewall ssh sysctl-security sandboxing package-audit execution-policy uac defender chrome chromium edge brave firefox librewolf falkon dolphin kate konsole ffmpeg zstd stremio "
 failed=0; count=0
 for t in $targets; do
   count=$((count + 1))
@@ -475,4 +475,65 @@ chmod +x "$WORK/bin2/python3"
 py_out="$(env -i "${SO_TEST_ENV[@]}" PATH="$WORK/bin2:$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/scripts/target-inspect.sh" python3)"
 [[ "$py_out" == *"Status: INSTALLED"* && "$py_out" != *"Microsoft Store"* ]] || { echo "FAIL - python3 with a warning before 'Python 3.x' was not recognized" >&2; exit 1; }
 echo "ok   - python_ok accepts a version line after a runtime-manager warning"
+
+# stremio: Flatpak server-settings.json parsing, LIBVA_DRIVER_NAME override check, dir/file perm tags, and detection
+mkdir -p "$WORK/home/.var/app/com.stremio.Stremio/.stremio-server" "$WORK/home/.local/share/flatpak/overrides"
+chmod 755 "$WORK/home/.var/app/com.stremio.Stremio/.stremio-server"
+cat > "$WORK/home/.var/app/com.stremio.Stremio/.stremio-server/server-settings.json" <<'EOF'
+{
+    "serverVersion": "4.22.6",
+    "cacheSize": null,
+    "btMaxConnections": 500,
+    "btDownloadSpeedSoftLimit": 2621440,
+    "btDownloadSpeedHardLimit": 3670016,
+    "remoteHttps": "https://remote.example",
+    "localAddonEnabled": true,
+    "transcodeHardwareAccel": false
+}
+EOF
+chmod 644 "$WORK/home/.var/app/com.stremio.Stremio/.stremio-server/server-settings.json"
+printf 'export LIBVA_DRIVER_NAME=i965\n' > "$WORK/home/.bashrc"
+st_warn="$(env -i "${SO_TEST_ENV[@]}" PATH="$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/scripts/target-inspect.sh" stremio)"
+for expected in \
+  "cacheSize: [WARNING] unlimited (null)" \
+  "btMaxConnections: [WARNING] 500" \
+  "P2P Speed Limits: [NOTE] Default P2P speed cap" \
+  "transcodeHardwareAccel: [NOTE] disabled" \
+  "remoteHttps: [WARNING] remote HTTPS endpoint configured (https://remote.example)" \
+  "localAddonEnabled: [NOTE] enabled" \
+  "Flatpak LIBVA_DRIVER_NAME: [NOTE] Host sets LIBVA_DRIVER_NAME=i965"; do
+  [[ "$st_warn" == *"$expected"* ]] || { echo "FAIL - stremio warning check missing: $expected" >&2; exit 1; }
+done
+
+chmod 700 "$WORK/home/.var/app/com.stremio.Stremio/.stremio-server"
+cat > "$WORK/home/.var/app/com.stremio.Stremio/.stremio-server/server-settings.json" <<'EOF'
+{
+    "serverVersion": "4.22.6",
+    "cacheSize": 2147483648,
+    "btMaxConnections": 100,
+    "btDownloadSpeedSoftLimit": 0,
+    "btDownloadSpeedHardLimit": 0,
+    "remoteHttps": "",
+    "localAddonEnabled": false,
+    "transcodeHardwareAccel": true
+}
+EOF
+printf '[Environment]\nLIBVA_DRIVER_NAME=i965\n' > "$WORK/home/.local/share/flatpak/overrides/com.stremio.Stremio"
+st_ok="$(env -i "${SO_TEST_ENV[@]}" PATH="$PATH" HOME="$WORK/home" LANG=C bash "$ROOT/scripts/target-inspect.sh" stremio)"
+for expected in \
+  "(mode: 644, dir: 700 [OK])" \
+  "cacheSize: [OK] 2.00 GiB" \
+  "btMaxConnections: [OK] 100" \
+  "P2P Speed Limits: [OK]" \
+  "transcodeHardwareAccel: [OK] enabled" \
+  "remoteHttps: [OK] disabled" \
+  "localAddonEnabled: [OK] disabled" \
+  "Flatpak LIBVA_DRIVER_NAME: [OK] i965 forwarded in override"; do
+  [[ "$st_ok" == *"$expected"* ]] || { echo "FAIL - stremio healthy check missing: $expected" >&2; exit 1; }
+done
+st_det="$(env -i "${SO_TEST_ENV[@]}" PATH="$WORK/deb" HOME="$WORK/home" LANG=C "$WORK/deb/bash" "$ROOT/scripts/detect-targets.sh" --json)"
+[[ "$st_det" == *'"stremio"'* ]] || { echo "FAIL - detect-targets missed Flatpak stremio directory" >&2; exit 1; }
+rm -rf "$WORK/home/.var" "$WORK/home/.local/share/flatpak" "$WORK/home/.bashrc"
+echo "ok   - stremio detection, server-settings.json parsing, LIBVA override check, and perm tags verified"
+
 echo "inspect-smoke: $count targets passed"

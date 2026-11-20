@@ -224,7 +224,7 @@ echo "ok   - aliases (rg, nvim, ctrld, agy), antigravity MCP drift, mason-lspcon
 
 mkdir -p "$WORK/home/.config/mpv"
 printf 'vo=gpu-next\ntone-mapping-desaturate = 0.5\n' > "$WORK/home/.config/mpv/mpv.conf"
-media_json="$(run_isolated "$WORK/mockbin:$WORK/emptybin" "$DRIFT" --json mpv ffmpeg zstd falkon dolphin kate konsole chromium)"
+media_json="$(run_isolated "$WORK/mockbin:$WORK/emptybin" "$DRIFT" --json mpv ffmpeg zstd falkon dolphin kate konsole chromium stremio)"
 "$PY" - "$media_json" <<'PYEOF'
 import json, sys
 data = json.loads(sys.argv[1])
@@ -236,8 +236,8 @@ assert any("tone-mapping-desaturate" in f for f in by_name["mpv"]["findings"]), 
 assert by_name["ffmpeg"]["status"] == "verified" and by_name["ffmpeg"]["installed_version"] == "9.0.2", f"bad ffmpeg: {by_name['ffmpeg']}"
 assert by_name["zstd"]["status"] == "verified" and by_name["zstd"]["installed_version"] == "1.5.7", f"bad zstd: {by_name['zstd']}"
 PYEOF
-media_txt="$(run_isolated "$WORK/mockbin:$WORK/emptybin" "$DRIFT" ffmpeg zstd falkon dolphin kate konsole chromium)"
-[[ "$media_txt" == *"Skipped OS/GUI domain targets (no standalone CLI schema): falkon dolphin kate konsole chromium"* ]] || {
+media_txt="$(run_isolated "$WORK/mockbin:$WORK/emptybin" "$DRIFT" ffmpeg zstd falkon dolphin kate konsole chromium stremio)"
+[[ "$media_txt" == *"Skipped OS/GUI domain targets (no standalone CLI schema): falkon dolphin kate konsole chromium stremio"* ]] || {
   echo "FAIL - tool-drift-check did not skip GUI targets cleanly: $media_txt" >&2
   exit 1
 }

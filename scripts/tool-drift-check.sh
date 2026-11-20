@@ -93,13 +93,14 @@ resolve_alias() {
     msedge|microsoft-edge) echo "edge" ;;
     brave-browser|brave-bin) echo "brave" ;;
     ffprobe) echo "ffmpeg" ;;
+    stremio-linux-shell|stremio-shell|stremio-shell-ng|stremio-enhanced|com.stremio.Stremio) echo "stremio" ;;
     *) echo "$1" ;;
   esac
 }
 
 is_non_cli_target() {
   case "$1" in
-    system|security|full|kernel|sysctl|sysctl-security|storage|disk|filesystem|memory|swap|zram|cpu|governor|power|boot|systemd|startup|firewall|ufw|nftables|firewalld|defender|ssh|sshd|execution-policy|uac|network|net|sandboxing|systemd-security|package-audit|pkg-audit|supply-chain|bash|windows-terminal|wt|makepkg|kde|kde-plasma|baloo|winget|powertoys|chrome|edge|brave|firefox|librewolf|falkon|dolphin|kate|konsole)
+    system|security|full|kernel|sysctl|sysctl-security|storage|disk|filesystem|memory|swap|zram|cpu|governor|power|boot|systemd|startup|firewall|ufw|nftables|firewalld|defender|ssh|sshd|execution-policy|uac|network|net|sandboxing|systemd-security|package-audit|pkg-audit|supply-chain|bash|windows-terminal|wt|makepkg|kde|kde-plasma|baloo|winget|powertoys|chrome|edge|brave|firefox|librewolf|falkon|dolphin|kate|konsole|stremio)
       return 0
       ;;
     *)
