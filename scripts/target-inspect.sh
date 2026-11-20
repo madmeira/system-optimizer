@@ -40,7 +40,7 @@ Developer Tools & Runtimes:
   bat, batcat, fzf, sqlite3
 
 Media, Sync, Containers, Monitors & OS Utilities:
-  mpv, ffmpeg, zstd, yt-dlp, syncthing, podman, docker, lazydocker, flatpak, pacman, yay,
+  mpv, stremio, ffmpeg, zstd, yt-dlp, syncthing, podman, docker, lazydocker, flatpak, pacman, yay,
   paru, makepkg, paccache, pacman-contrib, btop, htop, btop4win, rustdesk,
   controld, ctrld, kde, kde-plasma, baloo, winget, powertoys
 
@@ -1612,6 +1612,270 @@ PY
     echo "  * Performance: Stream web video directly to mpv via yt-dlp; use $vo_choice, $hwdec_choice, profile=high-quality"
     echo "  * Configuration: Use tone-mapping=auto and target-colorspace-hint=auto (or =yes on HDR displays); bind ytdl-format to 1080p/best"
     echo "  * Security: Enforce TLS certificate verification (never pass no-check-certificates), restrict untrusted lua scripts"
+    echo "====================================="
+    exit 0
+    ;;
+  stremio|stremio-linux-shell|stremio-shell|stremio-shell-ng|com.stremio.Stremio)
+    echo "Category: Streaming Media Center / Stremio"
+    st_fp_info=""
+    st_fp_ver=""
+    st_fp_inst=""
+    st_bin=""
+    st_exe=""
+    st_has_data=false
+
+    if is_windows; then
+      for cand in \
+        "$local_app_data/Programs/LNV/Stremio-5/stremio-shell-ng.exe" \
+        "$local_app_data/Programs/LNV/Stremio/stremio.exe"; do
+        if [[ -f "$cand" ]]; then
+          st_exe="$cand"
+          break
+        fi
+      done
+      if [[ -z "$st_exe" ]]; then
+        st_exe=$(command -v stremio-shell-ng 2>/dev/null || command -v stremio 2>/dev/null || echo "")
+      fi
+      if [[ -n "$st_exe" ]]; then
+        echo "Status: INSTALLED"
+        echo "Executable: $st_exe"
+        if [[ -f "$st_exe" ]]; then
+          st_ver=$(SO_EXE="$st_exe" run_ps '(Get-Item -LiteralPath $env:SO_EXE).VersionInfo.ProductVersion' 2>/dev/null || true)
+          echo "Version: ${st_ver:-unknown}"
+        else
+          echo "Version: unknown"
+        fi
+      elif [[ -d "$local_app_data/Programs/LNV/Stremio-5" || -d "$local_app_data/Programs/LNV/Stremio" ]]; then
+        echo "Status: INSTALLED (directory found; main executable not matched)"
+      elif [[ -f "$roaming_app_data/stremio/stremio-server/server-settings.json" || -d "$roaming_app_data/stremio" ]]; then
+        st_has_data=true
+        echo "Status: user data found, executable not located"
+      else
+        echo "Status: NOT INSTALLED"
+      fi
+    else
+      st_bin=$(command -v stremio 2>/dev/null || command -v stremio-linux-shell 2>/dev/null || echo "")
+      if command -v flatpak >/dev/null 2>&1; then
+        st_fp_info=$(flatpak info com.stremio.Stremio 2>/dev/null || true)
+        if [[ -n "$st_fp_info" ]]; then
+          st_fp_ver=$(printf '%s\n' "$st_fp_info" | awk -F: '/^[[:space:]]*Version:/ { sub(/^[[:space:]]+/, "", $2); print $2; exit }')
+          st_fp_inst=$(printf '%s\n' "$st_fp_info" | awk -F: '/^[[:space:]]*Installation:/ { sub(/^[[:space:]]+/, "", $2); print $2; exit }')
+        fi
+      fi
+      [[ -d "$HOME/.var/app/com.stremio.Stremio" || -d "$HOME/.stremio-server" ]] && st_has_data=true
+
+      if [[ -n "$st_bin" || -n "$st_fp_info" ]]; then
+        echo "Status: INSTALLED"
+        [[ -n "$st_bin" ]] && echo "Native Binary: $st_bin ($(first_clean_line_or "unknown" "$st_bin" --version))"
+        if [[ -n "$st_fp_info" ]]; then
+          echo "Flatpak Package: com.stremio.Stremio (Version: ${st_fp_ver:-unknown}, Installation: ${st_fp_inst:-unknown})"
+        fi
+      elif [[ "$st_has_data" == true ]]; then
+        echo "Status: user data found, binary not located"
+      else
+        echo "Status: NOT INSTALLED"
+      fi
+    fi
+
+    echo "Discovered Streaming Server Configuration Files:"
+    st_srv_cfg=""
+    st_srv_candidates=()
+    if is_windows; then
+      st_srv_candidates=(
+        "$roaming_app_data/stremio/stremio-server/server-settings.json"
+        "$local_app_data/Smart Code ltd/Stremio/server-settings.json"
+      )
+    else
+      st_srv_candidates=(
+        "$HOME/.var/app/com.stremio.Stremio/.stremio-server/server-settings.json"
+        "$HOME/.var/app/com.stremio.Stremio/data/.stremio-server/server-settings.json"
+        "$HOME/.stremio-server/server-settings.json"
+        "${XDG_DATA_HOME:-$HOME/.local/share}/Smart Code ltd/Stremio/server-settings.json"
+      )
+    fi
+    for f in "${st_srv_candidates[@]}"; do
+      if [[ -f "$f" ]]; then
+        echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
+        [[ -z "$st_srv_cfg" ]] && st_srv_cfg="$f"
+      fi
+    done
+
+    echo "Streaming Server Findings:"
+    if [[ -z "$st_srv_cfg" ]]; then
+      echo "  * Server Settings: [NOT CONFIGURED] (created on first launch; quit Stremio completely before editing)"
+    elif [[ ! -r "$st_srv_cfg" ]]; then
+      echo "  * Server Settings: [NOT READABLE] $st_srv_cfg"
+    else
+      st_json=$(cat "$st_srv_cfg" 2>/dev/null || true)
+      st_srv_ver=$(ps_json_str "$st_json" "serverVersion" "")
+      [[ -n "$st_srv_ver" && "$st_srv_ver" != "unknown" ]] && echo "  * Server Version: $st_srv_ver"
+
+      st_cache_root=$(ps_json_str "$st_json" "cacheRoot" "")
+      [[ -n "$st_cache_root" && "$st_cache_root" != "unknown" ]] && echo "  * Cache Root: $st_cache_root"
+      st_cache_dir="$(dirname "$st_srv_cfg")/stremio-cache"
+      if [[ ! -d "$st_cache_dir" && -n "$st_cache_root" && -d "$st_cache_root/stremio-cache" ]]; then
+        st_cache_dir="$st_cache_root/stremio-cache"
+      fi
+      if [[ -d "$st_cache_dir" ]] && command -v du >/dev/null 2>&1; then
+        st_cache_du=$(du -sh "$st_cache_dir" 2>/dev/null | awk '{print $1}' || echo "unknown")
+        echo "  * Active Cache Usage ($st_cache_dir): $st_cache_du"
+      fi
+
+      if grep -qE '"cacheSize"[[:space:]]*:[[:space:]]*null' <<< "$st_json"; then
+        echo "  * cacheSize: [WARNING] unlimited (null) — can fill smaller SSDs; set a bounded cap (e.g. 2 GiB on <=256 GB disks, 5-10 GiB on larger SSDs)"
+      else
+        st_cache_size=$(ps_json_num "$st_json" "cacheSize" "unset")
+        if [[ "$st_cache_size" == "0" ]]; then
+          echo "  * cacheSize: [NOTE] disabled (0 bytes — fine for debrid/HTTP streams, can buffer on P2P torrents)"
+        elif [[ "$st_cache_size" =~ ^[0-9]+$ ]]; then
+          st_cache_gib=$(LC_ALL=C awk -v b="$st_cache_size" 'BEGIN { printf "%.2f", b / 1073741824 }')
+          echo "  * cacheSize: [OK] ${st_cache_gib} GiB ($st_cache_size bytes)"
+        else
+          echo "  * cacheSize: $st_cache_size"
+        fi
+      fi
+
+      st_bt_conn=$(ps_json_num "$st_json" "btMaxConnections" "unset")
+      if [[ "$st_bt_conn" =~ ^-?[0-9]+$ ]]; then
+        if (( st_bt_conn <= 0 || st_bt_conn > 300 )); then
+          echo "  * btMaxConnections: [WARNING] $st_bt_conn (excessive connections can exhaust consumer router NAT tables; 55-200 is typical)"
+        else
+          echo "  * btMaxConnections: [OK] $st_bt_conn (default 55; 100-200 helps P2P ramp-up on fast links)"
+        fi
+      fi
+
+      st_bt_soft=$(ps_json_num "$st_json" "btDownloadSpeedSoftLimit" "unset")
+      st_bt_hard=$(ps_json_num "$st_json" "btDownloadSpeedHardLimit" "unset")
+      if [[ "$st_bt_hard" =~ ^[0-9]+$ ]]; then
+        st_soft_mb=$(LC_ALL=C awk -v b="${st_bt_soft:-0}" 'BEGIN { if (b ~ /^[0-9]+$/) printf "%.2f", b / 1048576; else printf "?" }')
+        st_hard_mb=$(LC_ALL=C awk -v b="$st_bt_hard" 'BEGIN { printf "%.2f", b / 1048576 }')
+        if (( st_bt_hard > 0 && st_bt_hard <= 4194304 )); then
+          echo "  * P2P Speed Limits: [NOTE] Default P2P speed cap (${st_soft_mb}/${st_hard_mb} MiB/s) can bottleneck 4K HDR P2P streams (raise Torrent Profile to Fast/Ultra Fast if using P2P)"
+        else
+          echo "  * P2P Speed Limits: [OK] soft=${st_soft_mb} MiB/s, hard=${st_hard_mb} MiB/s (0 = uncapped)"
+        fi
+      fi
+
+      st_hw_transcode=$(ps_json_bool "$st_json" "transcodeHardwareAccel" "unknown")
+      case "$st_hw_transcode" in
+        true) echo "  * transcodeHardwareAccel: [OK] enabled (GPU hardware transcoding when transcoding is needed)" ;;
+        false) echo "  * transcodeHardwareAccel: [NOTE] disabled (CPU software fallback if transcoding is triggered; enable when GPU supports VA-API/NVENC/D3D11VA)" ;;
+      esac
+
+      st_remote_https=$(ps_json_str "$st_json" "remoteHttps" "none")
+      if [[ -n "$st_remote_https" && "$st_remote_https" != "none" ]]; then
+        echo "  * remoteHttps: [WARNING] remote HTTPS endpoint configured ($st_remote_https); ensure TLS, firewall rules, and VPN/LAN restrictions protect port 12470"
+      else
+        echo "  * remoteHttps: [OK] disabled (local streaming server only)"
+      fi
+
+      st_local_addon=$(ps_json_bool "$st_json" "localAddonEnabled" "unknown")
+      case "$st_local_addon" in
+        true) echo "  * localAddonEnabled: [NOTE] enabled (local media files indexed via local addon)" ;;
+        false) echo "  * localAddonEnabled: [OK] disabled" ;;
+      esac
+
+      st_proxy_streams=$(ps_json_bool "$st_json" "proxyStreamsEnabled" "unknown")
+      [[ "$st_proxy_streams" != "unknown" ]] && echo "  * proxyStreamsEnabled: $st_proxy_streams"
+    fi
+
+    echo "Embedded libmpv & Hardware Decoding Synergy:"
+    if is_windows; then
+      st_win_mpv="$local_app_data/Programs/LNV/Stremio-5/portable_config/mpv.conf"
+      if [[ -f "$st_win_mpv" ]]; then
+        echo "  - [EXISTS] $st_win_mpv (Stremio 5 portable libmpv config)"
+        grep -E '^[[:space:]]*(vo|hwdec|gpu-api|profile)[[:space:]]*=' "$st_win_mpv" 2>/dev/null | sed 's/^/    /' || true
+      else
+        echo "  * Stremio 5 portable_config/mpv.conf: not present (uses built-in defaults; add portable_config/mpv.conf only if overriding libmpv properties)"
+      fi
+      [[ -f "$roaming_app_data/mpv/mpv.conf" ]] && echo "  - [EXISTS] $roaming_app_data/mpv/mpv.conf (standalone mpv config)"
+    else
+      st_mpv_loc=""
+      st_kf="$HOME/.var/app/com.stremio.Stremio/config/glib-2.0/settings/keyfile"
+      if [[ -f "$st_kf" ]]; then
+        st_mpv_loc=$(ini_val "$st_kf" "com/stremio/stremio" "mpv-config-location" || true)
+        st_mpv_loc="${st_mpv_loc#\'}"; st_mpv_loc="${st_mpv_loc%\'}"
+        st_mpv_loc="${st_mpv_loc#\"}"; st_mpv_loc="${st_mpv_loc%\"}"
+      elif command -v gsettings >/dev/null 2>&1; then
+        st_gs=$(gsettings get com.stremio.Stremio mpv-config-location 2>/dev/null || true)
+        st_gs="${st_gs#\'}"; st_gs="${st_gs%\'}"
+        [[ -n "$st_gs" ]] && st_mpv_loc="$st_gs"
+      fi
+      if [[ -n "$st_mpv_loc" ]]; then
+        if [[ -f "$st_mpv_loc" ]]; then
+          echo "  * mpv-config-location: [CONFIGURED] $st_mpv_loc (verify vo=libmpv is kept intact)"
+        else
+          echo "  * mpv-config-location: [WARNING] points to missing file '$st_mpv_loc'"
+        fi
+      else
+        echo "  * mpv-config-location: [NOTE] built-in libmpv defaults (vo=libmpv, hwdec=auto-safe); custom mpv.conf can be linked via mpv-config-location (keep vo=libmpv intact)"
+      fi
+      for f in "$HOME/.config/mpv/mpv.conf" "$HOME/.var/app/com.stremio.Stremio/config/mpv/mpv.conf"; do
+        [[ -f "$f" ]] && echo "  - [EXISTS] $f$(cfg_perm_tag "$f")"
+      done
+
+      st_render=""
+      for rn in /dev/dri/renderD*; do
+        [[ -e "$rn" ]] && { st_render="$rn"; break; }
+      done
+      if [[ -n "$st_render" ]]; then
+        echo "  * DRM Render Node: [OK] $st_render (available for VA-API/Vulkan hardware decode)"
+      else
+        echo "  * DRM Render Node: [NOTE] none found under /dev/dri/renderD* (hardware decode unavailable in this environment)"
+      fi
+
+      if [[ -n "$st_fp_info" || -d "$HOME/.var/app/com.stremio.Stremio" ]]; then
+        st_fp_ov="$HOME/.local/share/flatpak/overrides/com.stremio.Stremio"
+        if [[ -f "$st_fp_ov" ]]; then
+          echo "  - [EXISTS] $st_fp_ov$(cfg_perm_tag "$st_fp_ov")"
+          if grep -qE '^[[:space:]]*filesystems?=([^#]*;)?(host|host-os|host-etc|home|/)($|;|:rw)' "$st_fp_ov" 2>/dev/null; then
+            echo "  * Flatpak Override: [WARNING] grants broad filesystem access (host/home) to com.stremio.Stremio"
+          fi
+        fi
+        st_va_name=$(env_val LIBVA_DRIVER_NAME)
+        if [[ -n "$st_va_name" ]]; then
+          if [[ -f "$st_fp_ov" ]] && grep -qE "^[[:space:]]*LIBVA_DRIVER_NAME=${st_va_name}([[:space:]]|$)" "$st_fp_ov" 2>/dev/null; then
+            echo "  * Flatpak LIBVA_DRIVER_NAME: [OK] $st_va_name forwarded in override"
+          else
+            echo "  * Flatpak LIBVA_DRIVER_NAME: [NOTE] Host sets LIBVA_DRIVER_NAME=$st_va_name, which Flatpak does not inherit automatically (forward with: flatpak override --user --env=LIBVA_DRIVER_NAME=$st_va_name com.stremio.Stremio if VA-API decode fails)"
+          fi
+        fi
+      fi
+    fi
+
+    echo "Streaming Server Port Security (11470 / 12470):"
+    st_listeners=""
+    if is_windows; then
+      if command -v netstat >/dev/null 2>&1; then
+        st_listeners=$(netstat -ano -p tcp 2>/dev/null | awk 'toupper($0) ~ /LISTENING/ && $2 ~ /:(11470|12470)$/ {print $2}' | sort -u || true)
+      fi
+    elif command -v ss >/dev/null 2>&1; then
+      st_listeners=$(ss -tlnH 2>/dev/null | awk '$4 ~ /:(11470|12470)$/ {print $4}' | sort -u || true)
+    fi
+    if [[ -n "$st_listeners" ]]; then
+      st_wild=""
+      st_loop=""
+      while IFS= read -r st_ep; do
+        [[ -n "$st_ep" ]] || continue
+        if [[ "$st_ep" =~ ^(0\.0\.0\.0|\*|\[::\]): ]]; then
+          st_wild+="$st_ep "
+        else
+          st_loop+="$st_ep "
+        fi
+      done <<< "$st_listeners"
+      if [[ -n "$st_wild" ]]; then
+        echo "  * Port Exposure: [SECURITY WARNING] Streaming server listening on all interfaces (${st_wild% }); restrict to 127.0.0.1 or firewall ports 11470/12470"
+      else
+        echo "  * Port Exposure: [OK] listening on loopback only (${st_loop% })"
+      fi
+    else
+      echo "  * Port Exposure: [OK] streaming server not currently listening (starts on demand with Stremio)"
+    fi
+
+    echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
+    echo "  * Performance: Keep hardware-accelerated decoding enabled (hwdec=auto-safe in embedded libmpv; forward LIBVA_DRIVER_NAME in Flatpak override on legacy Intel iGPUs), size cacheSize to disk/RAM tier (2 GiB small-SSD/low-RAM, 5-10 GiB larger SSDs), raise Torrent Profile (btDownloadSpeed*Limit, btMaxConnections 55-200) if 4K P2P streams buffer, and enable transcodeHardwareAccel where GPU supports it"
+    echo "  * Configuration: Quit Stremio and its server process before editing server-settings.json (otherwise overwritten on exit); when linking a custom mpv.conf (mpv-config-location on Linux / portable_config/mpv.conf on Windows Stremio 5), keep vo=libmpv intact"
+    echo "  * Security: Keep streaming server loopback-only (127.0.0.1:11470, remoteHttps: \"\" unless behind authenticated HTTPS/VPN), keep .stremio-server mode 0700 (or server-settings.json 0600), audit third-party community addons, and avoid broad Flatpak filesystems=host overrides"
     echo "====================================="
     exit 0
     ;;

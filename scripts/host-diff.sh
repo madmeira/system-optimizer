@@ -19,7 +19,8 @@ cfg_files=(.gitconfig .config/git/config .config/starship.toml \
            .sqliterc .pi/agent/settings.json \
            .gemini/antigravity-cli/settings.json .gemini/config/skills.json \
            .config/herdr/config.toml .config/fzf/fzfrc .config/eza/theme.yml .cargo/config.toml \
-           .config/brave-flags.conf .librewolf/librewolf.overrides.cfg)
+           .config/brave-flags.conf .librewolf/librewolf.overrides.cfg \
+           .stremio-server/server-settings.json .var/app/com.stremio.Stremio/.stremio-server/server-settings.json)
 
 # Best-effort redaction, so review the output before sharing it: values after KEY/TOKEN/SECRET/PASSWORD names,
 # user:password@ inside URLs, and common token shapes (sk-, ghp_, AIza, xox*). Names that only look like

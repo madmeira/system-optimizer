@@ -47,7 +47,7 @@ if is_windows; then
   dev_cli_candidates=(
     "pwsh" "powershell" "powertoys" "pi" "antigravity" "agy" "bash" "topgrade" "git"
     "neovim" "nvim" "starship" "bat" "fzf" "ripgrep" "rg" "fd" "eza" "lsd" "lazygit" "lazydocker"
-    "ffmpeg" "mpv" "yt-dlp" "btop" "btop4win" "syncthing" "rustdesk" "controld" "ctrld" "zoxide" "sqlite3" "herdr" "gh"
+    "ffmpeg" "mpv" "stremio" "yt-dlp" "btop" "btop4win" "syncthing" "rustdesk" "controld" "ctrld" "zoxide" "sqlite3" "herdr" "gh"
   )
 else
   # Linux Package Managers
@@ -79,7 +79,7 @@ else
   dev_cli_candidates=(
     "pi" "antigravity" "agy" "bash" "topgrade" "git" "neovim" "nvim" "starship" "bat" "batcat" "fzf" "ripgrep" "rg" "fd" "fdfind"
     "eza" "lsd" "zoxide" "yazi" "ranger" "broot" "delta" "lazygit" "lazydocker"
-    "ffmpeg" "mpv" "yt-dlp" "btop" "htop" "syncthing" "sqlite3" "zstd" "pigz"
+    "ffmpeg" "mpv" "stremio" "stremio-linux-shell" "yt-dlp" "btop" "htop" "syncthing" "sqlite3" "zstd" "pigz"
     "rustdesk" "controld" "ctrld" "herdr" "gh"
   )
 fi
@@ -97,6 +97,7 @@ canonical_name() {
     paru) echo "yay" ;;
     powershell) echo "pwsh" ;;
     ffprobe) echo "ffmpeg" ;;
+    stremio-linux-shell|stremio-shell|stremio-shell-ng|stremio-enhanced|com.stremio.Stremio) echo "stremio" ;;
     plasmashell|kwin_wayland|kwin_x11) echo "kde-plasma" ;;
     mise-en-place|rtx) echo "mise" ;;
     github-cli|gh) echo "gh" ;;
@@ -123,11 +124,28 @@ is_target_present() {
       command -v agy >/dev/null 2>&1 && return 0
       [[ -x "$HOME/.local/bin/agy" || -d "$HOME/.gemini/antigravity-cli" ]] && return 0
       ;;
+    stremio|stremio-linux-shell)
+      command -v stremio >/dev/null 2>&1 && return 0
+      command -v stremio-linux-shell >/dev/null 2>&1 && return 0
+      if ! is_windows; then
+        [[ -d "$HOME/.var/app/com.stremio.Stremio" || -f "$HOME/.stremio-server/server-settings.json" ]] && return 0
+        if command -v flatpak >/dev/null 2>&1 && flatpak info com.stremio.Stremio >/dev/null 2>&1; then
+          return 0
+        fi
+      fi
+      ;;
   esac
   if is_windows; then
     case "$t" in
       antigravity|agy)
         [[ -d "$local_app_data/Programs/Antigravity" ]] && return 0
+        ;;
+      stremio)
+        [[ -x "$local_app_data/Programs/LNV/Stremio-5/stremio-shell-ng.exe" \
+           || -x "$local_app_data/Programs/LNV/Stremio/stremio.exe" \
+           || -d "$local_app_data/Programs/LNV/Stremio-5" \
+           || -d "$local_app_data/Programs/LNV/Stremio" \
+           || -f "$roaming_app_data/stremio/stremio-server/server-settings.json" ]] && return 0
         ;;
       windows-terminal|wt)
         if command -v wt >/dev/null 2>&1; then

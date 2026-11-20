@@ -220,6 +220,43 @@ for dom in system security; do
 done
 ok "chrome, edge, brave, firefox, system, and security are inspected natively without package-search fallthrough"
 
+# Windows stremio: uninstalled skips winget fallthrough; installed Stremio-5 + server-settings.json is detected and parsed
+run_probe target-inspect.sh stremio > "$WORK/stremio8a.txt"
+grep -q '^Status: NOT INSTALLED' "$WORK/stremio8a.txt" || fail "uninstalled stremio on Windows is not reported as NOT INSTALLED"
+if grep -q 'NOT FOUND IN PATH\|Winget package search' "$WORK/stremio8a.txt"; then fail "stremio fell into package search"; fi
+no_cr "$WORK/stremio8a.txt" "stremio-uninstalled"
+
+mkdir -p "$WORK/appdata/Local/Programs/LNV/Stremio-5/portable_config" "$WORK/appdata/Roaming/stremio/stremio-server"
+: > "$WORK/appdata/Local/Programs/LNV/Stremio-5/stremio-shell-ng.exe"
+chmod +x "$WORK/appdata/Local/Programs/LNV/Stremio-5/stremio-shell-ng.exe"
+printf 'hwdec=auto-safe\n' > "$WORK/appdata/Local/Programs/LNV/Stremio-5/portable_config/mpv.conf"
+cat > "$WORK/appdata/Roaming/stremio/stremio-server/server-settings.json" <<'EOF'
+{
+  "serverVersion": "4.22.6",
+  "cacheSize": 5368709120,
+  "btMaxConnections": 120,
+  "btDownloadSpeedSoftLimit": 0,
+  "btDownloadSpeedHardLimit": 0,
+  "remoteHttps": "",
+  "transcodeHardwareAccel": true
+}
+EOF
+run_probe detect-targets.sh --json > "$WORK/det_stremio8.json"
+"$PY" - "$WORK/det_stremio8.json" <<'EOF' || fail "stremio not detected on Windows"
+import json, sys
+d = json.load(open(sys.argv[1]))
+assert "stremio" in d.get("developer_and_cli_tools", []) and "stremio" in d.get("full_targets", [])
+EOF
+run_probe target-inspect.sh stremio > "$WORK/stremio8b.txt"
+grep -q '^Status: INSTALLED' "$WORK/stremio8b.txt" || fail "installed Windows Stremio-5 not reported as INSTALLED"
+grep -q 'cacheSize: \[OK\] 5.00 GiB' "$WORK/stremio8b.txt" || fail "Windows stremio cacheSize not parsed"
+grep -q 'btMaxConnections: \[OK\] 120' "$WORK/stremio8b.txt" || fail "Windows stremio btMaxConnections not parsed"
+grep -q 'transcodeHardwareAccel: \[OK\] enabled' "$WORK/stremio8b.txt" || fail "Windows stremio transcodeHardwareAccel not parsed"
+grep -q 'portable_config/mpv.conf' "$WORK/stremio8b.txt" || fail "Windows stremio portable_config/mpv.conf not reported"
+no_cr "$WORK/stremio8b.txt" "stremio-installed"
+rm -rf "$WORK/appdata/Local/Programs" "$WORK/appdata/Roaming/stremio"
+ok "stremio on Windows handles uninstalled, Stremio-5 detection, and server-settings.json"
+
 export PS_STUB_OUT=$'Running\r\n'
 run_probe target-inspect.sh ssh > "$WORK/ssh8.txt"
 if grep -q '/etc/ssh/sshd_config' "$WORK/ssh8.txt"; then fail "ssh on Windows lists the Git Bash /etc/ssh/sshd_config"; fi
