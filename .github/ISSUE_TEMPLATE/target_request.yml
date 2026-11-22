@@ -1,0 +1,48 @@
+name: Target Request
+description: Propose support for a new OS domain, runtime, browser, or developer tool
+title: "feat(target): add <target-name> support"
+labels: ["enhancement", "new-target"]
+body:
+  - type: input
+    id: target_name
+    attributes:
+      label: Target Name
+      placeholder: "e.g., ghostty, helix, docker-compose"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: platforms
+    attributes:
+      label: Supported Platforms
+      options:
+        - label: Linux
+        - label: Windows 11 / 10
+    validations:
+      required: true
+
+  - type: textarea
+    id: detection
+    attributes:
+      label: Detection & Configuration Paths
+      description: Binaries, Flatpak/WinGet IDs, environment variables, and standard config paths on Linux/Windows.
+    validations:
+      required: true
+
+  - type: textarea
+    id: triad
+    attributes:
+      label: Proposed Optimization Triad Checks
+      description: |
+        Summarize candidate checks across:
+        - Performance (threads, GPU, caching, startup)
+        - Configuration (upstream defaults, schema flags, synergies)
+        - Security (permissions, TLS/supply-chain, attack surface)
+    validations:
+      required: true
+
+  - type: textarea
+    id: references
+    attributes:
+      label: Upstream Documentation Links
+      description: Links to official documentation, CLI flags, or schema references.

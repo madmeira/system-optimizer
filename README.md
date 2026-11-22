@@ -218,8 +218,17 @@ system-optimizer/
 ├── SKILL.md                          # Primary agent skill specification & 6-phase workflow
 ├── README.md                         # Project overview, usage & architecture documentation
 ├── LICENSE                           # MIT License
+├── .gitattributes                    # Enforces LF line endings on text and shell scripts
 ├── .gitignore                        # Git exclusion rules
-├── .github/workflows/ci.yml          # Ubuntu + Windows CI (ShellCheck, JSON schema & smoke tests)
+├── .github/
+│   ├── CODE_OF_CONDUCT.md            # Contributor Covenant v2.1
+│   ├── CONTRIBUTING.md               # Development workflow, verification & new-target checklist
+│   ├── PULL_REQUEST_TEMPLATE.md      # PR summary & verification checklist
+│   ├── SECURITY.md                   # Private vulnerability reporting & Safety Contract scope
+│   ├── dependabot.yml                # Weekly GitHub Actions dependency updates
+│   ├── release.yml                   # Auto-generated release notes categories
+│   ├── ISSUE_TEMPLATE/               # Structured bug report & target request forms
+│   └── workflows/ci.yml              # Ubuntu + Windows CI (actionlint, ShellCheck, JSON & smoke tests)
 ├── references/
 │   └── optimization-guide.md         # Deep-dive target templates, Triad checklists & synergy recipes
 ├── scripts/
@@ -241,6 +250,7 @@ system-optimizer/
     ├── drift-check-smoke.sh          # Verifies tool-drift-check.sh CLI, mock drift states & live JSON
     ├── inspect-windows.sh            # Smoke test for Windows-specific targets on Windows runners
     ├── json-escape.sh                # Validates JSON escaping for quotes, backslashes & control chars
+    ├── repo-consistency.sh           # Validates SKILL.md frontmatter, script modes & target inventory sync
     └── windows-baseline.sh           # Manual helper to run all probes on a Windows host (Git Bash)
 ```
 
@@ -254,10 +264,11 @@ bash tests/probe-fallback.sh
 bash tests/json-escape.sh
 bash tests/inspect-smoke.sh
 bash tests/drift-check-smoke.sh
+bash tests/repo-consistency.sh
 bash tests/inspect-windows.sh   # Runs on Windows (Git Bash)
 ```
 
-GitHub Actions (`.github/workflows/ci.yml`) runs on both `ubuntu-latest` and `windows-latest`, validating Bash syntax (`bash -n`), `shellcheck`, valid `--json` output across all probes with Python's `json.tool`, and all smoke tests.
+GitHub Actions (`.github/workflows/ci.yml`) runs on both `ubuntu-latest` and `windows-latest`, validating workflow definitions (`actionlint`), Bash syntax (`bash -n`), `shellcheck`, valid `--json` output across all probes with Python's `json.tool`, metadata/target sync (`tests/repo-consistency.sh`), and all smoke tests.
 
 ## License
 
