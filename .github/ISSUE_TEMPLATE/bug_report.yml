@@ -1,0 +1,65 @@
+name: Bug Report
+description: Report incorrect probe output, config inspection issues, or script failures
+title: "fix(scope): "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please complete the fields below. **Redact any tokens, keys, passwords, or private hostnames** before pasting command output.
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Linux (Arch / Manjaro / EndeavourOS)
+        - Linux (Debian / Ubuntu)
+        - Linux (Fedora / RHEL)
+        - Linux (Other)
+        - Windows 11
+        - Windows 10
+    validations:
+      required: true
+
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Invocation Method
+      options:
+        - Pi (/skill:system-optimizer)
+        - Antigravity (agy / IDE / 2.0)
+        - Claude Code (/system-optimizer)
+        - Codex
+        - Standalone CLI scripts (scripts/*.sh)
+    validations:
+      required: true
+
+  - type: input
+    id: target
+    attributes:
+      label: Affected Target(s) or Script(s)
+      placeholder: "e.g., mpv, neovim, scripts/hardware-probe.sh"
+    validations:
+      required: true
+
+  - type: input
+    id: versions
+    attributes:
+      label: Bash / PowerShell / Tool Version
+      placeholder: "e.g., GNU bash 5.2.37, pwsh 7.5.0, mpv 0.42.0"
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What Happened?
+      description: Describe the bug, expected behavior, and actual behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Relevant Command Output (Secrets Redacted)
+      description: Paste output from `./scripts/target-inspect.sh <target>`, `--json` probes, or CI logs.
+      render: text

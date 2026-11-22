@@ -5,12 +5,22 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  schedule:
+    - cron: '0 6 * * 1'
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   validate:
     name: Validate Scripts & Schema
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -18,7 +28,23 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Lint Workflows with actionlint
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          ver="1.7.12"
+          sha256="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ver}/actionlint_${ver}_linux_amd64.tar.gz" -o "$tmp/actionlint.tar.gz"
+          printf '%s  %s\n' "$sha256" "$tmp/actionlint.tar.gz" | sha256sum -c -
+          tar -xzf "$tmp/actionlint.tar.gz" -C "$tmp" actionlint
+          "$tmp/actionlint" -color
 
       - name: Validate Bash Script Syntax
         shell: bash
@@ -48,7 +74,7 @@ jobs:
         run: |
           for p in hardware-probe system-probe detect-targets security-audit tool-drift-check; do
             echo "== $p --json"
-            ./scripts/$p.sh --json | "$PY" -m json.tool > /dev/null
+            "./scripts/$p.sh" --json | "$PY" -m json.tool > /dev/null
           done
 
       - name: Backup / Restore Smoke Test
@@ -74,3 +100,7 @@ jobs:
       - name: Dynamic Tool Drift & Schema Introspection Smoke Test
         shell: bash
         run: bash tests/drift-check-smoke.sh
+
+      - name: Repository & Skill Metadata Consistency Test
+        shell: bash
+        run: bash tests/repo-consistency.sh
