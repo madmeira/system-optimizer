@@ -236,6 +236,15 @@ assert any("tone-mapping-desaturate" in f for f in by_name["mpv"]["findings"]), 
 assert by_name["ffmpeg"]["status"] == "verified" and by_name["ffmpeg"]["installed_version"] == "9.0.2", f"bad ffmpeg: {by_name['ffmpeg']}"
 assert by_name["zstd"]["status"] == "verified" and by_name["zstd"]["installed_version"] == "1.5.7", f"bad zstd: {by_name['zstd']}"
 PYEOF
+printf 'vo=gpu\ntone-mapping=bt.2446a\n' > "$WORK/home/.config/mpv/mpv.conf"
+gpu_tm_json="$(run_isolated "$WORK/mockbin:$WORK/emptybin" "$DRIFT" --json mpv)"
+"$PY" - "$gpu_tm_json" <<'PYEOF'
+import json, sys
+data = json.loads(sys.argv[1])
+by_name = {t["target"]: t for t in data["targets"]}
+assert by_name["mpv"]["status"] == "deprecated_config", f"expected mpv deprecated_config for vo=gpu+bt.2446a, got {by_name['mpv']}"
+assert any("vo=gpu-next-only tone-mapping" in f for f in by_name["mpv"]["findings"]), f"missing vo=gpu tone-mapping finding: {by_name['mpv']}"
+PYEOF
 media_txt="$(run_isolated "$WORK/mockbin:$WORK/emptybin" "$DRIFT" ffmpeg zstd falkon dolphin kate konsole chromium stremio)"
 [[ "$media_txt" == *"Skipped OS/GUI domain targets (no standalone CLI schema): falkon dolphin kate konsole chromium stremio"* ]] || {
   echo "FAIL - tool-drift-check did not skip GUI targets cleanly: $media_txt" >&2

@@ -105,6 +105,7 @@ disabled = true
 EOF
 cat > "$WORK/home/.config/mpv/mpv.conf" <<'EOF'
 vo=gpu
+tone-mapping=bt.2446a
 ytdl-raw-options=no-check-certificates=
 EOF
 touch "$WORK/home/.pi/agent/sessions/recent.jsonl"
@@ -115,6 +116,7 @@ for expected in \
   "=== Target Inspection: starship ===" \
   "[WARNING] Redundant Language Tokens in 'format': \$nodejs \$rust" \
   "=== Target Inspection: mpv ===" \
+  "[MISCONFIGURED] tone-mapping uses a vo=gpu-next-only curve with vo=gpu" \
   "[SECURITY WARNING] 'no-check-certificates' found" \
   "=== Target Inspection: pi ===" \
   "Saved Sessions: 2 session files" \

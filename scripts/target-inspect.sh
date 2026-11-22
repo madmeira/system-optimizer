@@ -1565,7 +1565,7 @@ PY
 
     if [[ -n "$mpv_cfg" ]]; then
       echo "Key Parameters in $mpv_cfg:"
-      grep -E '^[[:space:]]*(vo|gpu-api|gpu-context|hwdec|profile|hdr-compute-peak|target-colorspace-hint(-mode)?|interpolation|scale|ytdl-format|tone-mapping)[[:space:]]*=' "$mpv_cfg" 2>/dev/null | while read -r line; do
+      grep -E '^[[:space:]]*(vo|gpu-api|gpu-context|hwdec|hwdec-codecs|profile|hdr-compute-peak|target-colorspace-hint(-mode)?|interpolation|scale|ytdl-format|tone-mapping|script-opts(-append)?)[[:space:]]*=' "$mpv_cfg" 2>/dev/null | while read -r line; do
         echo "  * $line"
       done || true
       if grep -qiE '^[[:space:]]*profile[[:space:]]*=[[:space:]]*gpu-hq([[:space:]]|$|#)' "$mpv_cfg" 2>/dev/null; then
@@ -1573,6 +1573,10 @@ PY
       fi
       if grep -qE '^[[:space:]]*tone-mapping-desaturate(-exponent)?[[:space:]]*=' "$mpv_cfg" 2>/dev/null; then
         echo "  * [DEPRECATED] tone-mapping-desaturate in $mpv_cfg was removed in mpv 0.42 (delete it; gpu-next tone mapping covers it)"
+      fi
+      if grep -qiE '^[[:space:]]*vo[[:space:]]*=[[:space:]]*gpu([[:space:]#]|$)' "$mpv_cfg" 2>/dev/null && \
+         grep -qiE '^[[:space:]]*tone-mapping[[:space:]]*=[[:space:]]*(bt\.2446a|spline|st2094-40|st2094-10)([[:space:]#]|$)' "$mpv_cfg" 2>/dev/null; then
+        echo "  * [MISCONFIGURED] tone-mapping uses a vo=gpu-next-only curve with vo=gpu in $mpv_cfg (use tone-mapping=auto or bt.2390)"
       fi
       if grep -qiE '^[[:space:]]*hwdec[[:space:]]*=[[:space:]]*[a-z0-9]+-copy([[:space:],]|$)' "$mpv_cfg" 2>/dev/null; then
         echo "  * [NOTE] Copyback hwdec (*-copy) forces GPU->RAM->GPU PCIe transfers; prefer zero-copy hwdec=auto-safe unless using CPU video filters"
@@ -1594,13 +1598,24 @@ PY
     detected_gpu="$(get_detected_gpu)"
     hwdec_choice="hwdec=auto-safe (zero-copy default)"
     vo_choice="vo=gpu-next, gpu-api=vulkan (Linux) or d3d11/vulkan (Windows)"
+    profile_choice="profile=high-quality"
     if [[ "$detected_gpu" =~ (NVIDIA|GeForce|RTX|GTX) ]]; then
       hwdec_choice="hwdec=auto-safe (or nvdec,vulkan,auto zero-copy on NVIDIA)"
     elif [[ "$detected_gpu" =~ (AMD|Radeon) ]]; then
       hwdec_choice="hwdec=auto-safe (or vaapi,vulkan,auto on Linux / d3d11va,vulkan,auto on Windows AMD)"
     elif [[ "$detected_gpu" =~ (Haswell|Ivy[[:space:]]Bridge|Sandy[[:space:]]Bridge|HD[[:space:]]Graphics[[:space:]]4[0-9]{3}) ]]; then
-      hwdec_choice="hwdec=auto-safe (Legacy Intel iGPU VA-API)"
+      if ! is_windows; then
+        hwdec_choice="hwdec=vaapi + hwdec-codecs=h264,mpeg2video,vc1 (Legacy Intel VA-API; avoid auto-safe probing CUDA/VDPAU/VP9)"
+        if [[ -n "$mpv_cfg" ]] && \
+           grep -qiE '^[[:space:]]*hwdec[[:space:]]*=[[:space:]]*auto(-safe)?([[:space:]#]|$)' "$mpv_cfg" 2>/dev/null && \
+           ! grep -qiE '^[[:space:]]*hwdec-codecs[[:space:]]*=' "$mpv_cfg" 2>/dev/null; then
+          echo "  * [WARNING] Legacy Intel iGPU uses hwdec=auto/auto-safe without hwdec-codecs whitelist in $mpv_cfg (probes CUDA/VDPAU/unsupported codecs; prefer hwdec=vaapi + hwdec-codecs=h264,mpeg2video,vc1)"
+        fi
+      else
+        hwdec_choice="hwdec=d3d11va + hwdec-codecs=h264,mpeg2video,vc1 (Legacy Intel iGPU)"
+      fi
       vo_choice="vo=gpu, gpu-api=opengl (Conservative pipeline for legacy Intel iGPU)"
+      profile_choice="profile=fast"
     elif [[ "$detected_gpu" =~ (Intel) ]]; then
       hwdec_choice="hwdec=auto-safe (or vaapi,vulkan,auto on Linux / d3d11va,vulkan,auto on Windows Intel)"
     fi
@@ -1609,8 +1624,8 @@ PY
     echo "  * Browser Bypass: Direct mpv streaming bypasses heavy Chromium/browser CPU and RAM consumption"
 
     echo "Recommendations (advice only; the findings are the tagged lines and quoted file lines above):"
-    echo "  * Performance: Stream web video directly to mpv via yt-dlp; use $vo_choice, $hwdec_choice, profile=high-quality"
-    echo "  * Configuration: Use tone-mapping=auto and target-colorspace-hint=auto (or =yes on HDR displays); bind ytdl-format to 1080p/best"
+    echo "  * Performance: Stream web video directly to mpv via yt-dlp; use $vo_choice, $hwdec_choice, $profile_choice"
+    echo "  * Configuration: Use tone-mapping=auto and target-colorspace-hint=auto (or =yes on HDR displays); bind ytdl-format to 1080p/best and set script-opts-append=ytdl_hook-all_formats=no when pinning codecs on mpv 0.42+"
     echo "  * Security: Enforce TLS certificate verification (never pass no-check-certificates), restrict untrusted lua scripts"
     echo "====================================="
     exit 0
