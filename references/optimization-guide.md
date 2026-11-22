@@ -50,7 +50,7 @@ This reference guide provides engineering heuristics, hardening standards, upstr
 - **Linux (VA-API & Vulkan)**:
   - Intel: `intel-media-driver` or `i965` driver.
   - AMD: `radeonsi` Mesa driver.
-  - Video Players (`mpv`): `vo=gpu-next`, `gpu-api=vulkan`, `profile=high-quality`, zero-copy `hwdec=auto-safe` (`vaapi,vulkan,auto` / `nvdec,vulkan,auto`) on modern GPUs; reserve `vo=gpu` + `gpu-api=opengl` strictly for legacy Intel Gen7/Haswell iGPUs.
+  - Video Players (`mpv`): `vo=gpu-next`, `gpu-api=vulkan`, `profile=high-quality`, zero-copy `hwdec=auto-safe` (`vaapi,vulkan,auto` / `nvdec,vulkan,auto`) on modern GPUs; reserve `vo=gpu` + `gpu-api=opengl` + `hwdec=vaapi` with `hwdec-codecs` matching `vainfo` (e.g. `h264,mpeg2video,vc1`) strictly for legacy Intel Gen7/Haswell iGPUs.
 
 ---
 
@@ -69,7 +69,7 @@ The `system-optimizer` skill dynamically derives configuration parameters direct
 | **GPU Architecture** | **NVIDIA Discrete GPU (RTX / GTX)** | • `mpv`: `vo=gpu-next`, `gpu-api=d3d11` (Windows) or `vulkan` (Linux), `profile=high-quality`, zero-copy `hwdec=auto-safe` (or `nvdec,vulkan,auto`; avoid `nvdec-copy` unless CPU filters are active)<br>• `rustdesk`: NVENC hardware video encode (H.264/AV1)<br>• Terminal: Atlas GPU rasterization (default in Windows Terminal 1.18+)<br>• Windows: Hardware-Accelerated GPU Scheduling (HAGS) enabled |
 | | **AMD Radeon** | • `mpv`: `vo=gpu-next`, `hwdec=auto-safe` (`d3d11va,vulkan,auto` on Windows; `vaapi,vulkan,auto` with `radeonsi` on Linux)<br>• `rustdesk`: AMF hardware video encode |
 | | **Intel Arc / Iris Xe** | • `mpv`: `vo=gpu-next`, `hwdec=auto-safe` (`d3d11va,vulkan,auto` on Windows; `vaapi,vulkan,auto` with `intel-media-driver` on Linux)<br>• `rustdesk`: QSV hardware video encode |
-| | **Legacy / Low-Power iGPU** | • `mpv`: `vo=gpu`, `gpu-api=opengl` (for Gen7/Haswell), `profile=fast`, disabled heavy debanding<br>• Terminal: Disable translucent acrylic / blur effects to eliminate redraw lag |
+| | **Legacy / Low-Power iGPU** | • `mpv`: `vo=gpu`, `gpu-api=opengl` (for Gen7/Haswell), `profile=fast`, `hwdec=vaapi` + `hwdec-codecs=h264,mpeg2video,vc1` (per `vainfo`, avoiding CUDA/VDPAU/VP9 probes), `tone-mapping=auto`, `script-opts-append=ytdl_hook-all_formats=no` when pinning `ytdl-format`, disabled heavy debanding<br>• Terminal: Disable translucent acrylic / blur effects to eliminate redraw lag |
 | **Storage Media** | **NVMe / SATA SSD** | • Enforce TRIM: `fsutil DisableDeleteNotify = 0` / `fstrim.timer`<br>• Secondary Windows drives: Disable 8.3 short names (`fsutil 8dot3name set <drive> 1`)<br>• WSL: Avoid `sparseVhd=true` (ext4 corruption risk)<br>• Git: Enable `core.untrackedCache = true` (`feature.manyFiles = true`), plus `core.fscache = true` on **Windows only** |
 | | **Rotational HDD** | • Bound concurrent directory walking if I/O saturates; avoid aggressive parallel indexing |
 | **Display Capabilities** | **HDR Display Mode Active** | • `mpv`: Set `target-colorspace-hint=yes` for native HDR passthrough to Windows DWM / Wayland |
@@ -914,9 +914,9 @@ The integration between Neovim and Mise establishes a unified, reproducible deve
 - **Triad Tuning**:
   - *Performance*:
     - Discrete GPU / modern iGPU: `vo=gpu-next` (default in `mpv 0.41+`), `gpu-api=d3d11` (Windows) or `gpu-api=vulkan` (Linux), `profile=high-quality` (replaces legacy alias `gpu-hq`), and zero-copy **`hwdec=auto-safe`** (or `nvdec,vulkan,auto` / `vaapi,vulkan,auto` / `d3d11va,vulkan,auto` — avoid `nvdec-copy` unless CPU-side video filters require GPU→RAM copyback).
-    - Legacy Intel iGPU (Haswell / Ivy Bridge / HD Graphics 4xxx): conservative `vo=gpu`, `gpu-api=opengl`, `profile=fast`, and `hwdec=auto-safe`.
+    - Legacy Intel iGPU (Haswell / Ivy Bridge / HD Graphics 4xxx): conservative `vo=gpu`, `gpu-api=opengl`, `profile=fast`, and `hwdec=vaapi` + `hwdec-codecs=h264,mpeg2video,vc1` (matching `vainfo` on Linux instead of `auto-safe` to avoid CUDA/VDPAU/VP9 probe errors before clean software decode fallback).
     - `interpolation=yes`, `video-sync=display-resample`: Smooth motion on high-refresh displays.
-  - *Configuration*: Keep `tone-mapping=auto` (`hdr-compute-peak=auto`, libplacebo spline/dynamic ST.2094 under `vo=gpu-next`) and `target-colorspace-hint=auto` (set `target-colorspace-hint=yes` only when HDR display mode is active so SDR panels do not get washed-out PQ signals); remove `tone-mapping-desaturate` / `tone-mapping-desaturate-exponent` if present (removed in `mpv 0.42`; libplacebo tone mapping handles desaturation); bound `ytdl-format` to `1080p/best`.
+  - *Configuration*: Keep `tone-mapping=auto` (`hdr-compute-peak=auto`, libplacebo spline/dynamic ST.2094 under `vo=gpu-next`, resolving to `bt.2390` under `vo=gpu` — never pair `bt.2446a`, `spline`, `st2094-40`, or `st2094-10` with `vo=gpu`) and `target-colorspace-hint=auto` (set `target-colorspace-hint=yes` only when HDR display mode is active so SDR panels do not get washed-out PQ signals); remove `tone-mapping-desaturate` / `tone-mapping-desaturate-exponent` if present (removed in `mpv 0.42`; libplacebo tone mapping handles desaturation); bound `ytdl-format` to `1080p/best` and add `script-opts-append=ytdl_hook-all_formats=no` when pinning codecs via `ytdl-format` on `mpv 0.42+`.
   - *Security*: Enforce TLS certificate verification (never pass `no-check-certificates` in `ytdl-raw-options`); restrict untrusted Lua scripts; enforce `0600` on `mpv.conf`.
 
 ### Streaming Media Center (`stremio`)

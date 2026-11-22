@@ -736,6 +736,11 @@ probe_target() {
           deprecated_cfg=true
           findings+=("$mpv_cfg sets 'tone-mapping-desaturate', removed in mpv 0.42 (delete it; gpu-next tone mapping covers it)")
         fi
+        if uncommented_match "$mpv_cfg" '^[[:space:]]*vo[[:space:]]*=[[:space:]]*gpu([[:space:]#]|$)' && \
+           uncommented_match "$mpv_cfg" '^[[:space:]]*tone-mapping[[:space:]]*=[[:space:]]*(bt\.2446a|spline|st2094-40|st2094-10)([[:space:]#]|$)'; then
+          deprecated_cfg=true
+          findings+=("$mpv_cfg sets a vo=gpu-next-only tone-mapping curve with vo=gpu (use tone-mapping=auto or bt.2390)")
+        fi
       fi
       ;;
     yt-dlp)
